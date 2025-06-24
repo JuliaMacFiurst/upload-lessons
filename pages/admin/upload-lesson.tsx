@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, DragEvent } from 'react';
+import Link from 'next/link';
 import {
   DndContext,
   closestCenter,
@@ -338,18 +339,20 @@ const UploadLesson = () => {
     return (
       <div style={{ padding: '2rem', textAlign: 'center' }}>
         <p>Сессия истекла или вы не авторизованы.</p>
-        <a href="/login" style={{
-          display: 'inline-block',
-          marginTop: '1rem',
-          padding: '0.6rem 1.2rem',
-          backgroundColor: '#ffadad',
-          color: 'white',
-          textDecoration: 'none',
-          borderRadius: '8px',
-          fontWeight: 'bold'
-        }}>
-          Перейти к входу
-        </a>
+        <Link href="/login" legacyBehavior>
+          <a style={{
+            display: 'inline-block',
+            marginTop: '1rem',
+            padding: '0.6rem 1.2rem',
+            backgroundColor: '#ffadad',
+            color: 'white',
+            textDecoration: 'none',
+            borderRadius: '8px',
+            fontWeight: 'bold'
+          }}>
+            Перейти к входу
+          </a>
+        </Link>
       </div>
     );
   }
