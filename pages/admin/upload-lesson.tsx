@@ -41,8 +41,7 @@ type SortableStepProps = {
   error: { frank?: boolean; image?: boolean };
 };
 
-const SortableStep: React.FC<SortableStepProps> = React.memo(
-  ({ index, step, onChangeFrank, onChangeImage, onDelete, error }) => {
+const Component = ({ index, step, onChangeFrank, onChangeImage, onDelete, error }: SortableStepProps) => {
     return (
       <div className="step-block">
         <label className="form-label">Текст Фрэнка:</label>
@@ -72,8 +71,10 @@ const SortableStep: React.FC<SortableStepProps> = React.memo(
         </button>
       </div>
     );
-  }
-);
+};
+
+const SortableStep: React.FC<SortableStepProps> = React.memo(Component);
+SortableStep.displayName = 'SortableStep';
 
 
 const CATEGORIES = [
@@ -107,7 +108,7 @@ const LessonSchema = z.object({
   ).min(1, 'Нужно хотя бы одно изображение')
 });
 
-export default function UploadLesson() {
+const UploadLesson = () => {
   const router = useRouter();
   const session = useSession();
   const supabaseClient = useSupabaseClient();
@@ -469,3 +470,5 @@ export default function UploadLesson() {
     </div>
   );
 }
+
+export default UploadLesson;
