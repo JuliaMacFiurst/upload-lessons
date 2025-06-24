@@ -1,6 +1,4 @@
 import { useState, useEffect, useRef, DragEvent } from 'react';
-import { useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
 import {
   DndContext,
   closestCenter,
@@ -13,16 +11,70 @@ import {
   SortableContext,
   verticalListSortingStrategy
 } from '@dnd-kit/sortable';
-import { createClient } from '@supabase/supabase-js';
+import type { DragEndEvent } from '@dnd-kit/core';
 import slugify from 'slugify';
 import { z } from 'zod';
 import { useRouter } from 'next/router';
 import { useSession, useSupabaseClient } from '@supabase/auth-helpers-react';
+import React from 'react';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+function Spinner() {
+  return (
+    <svg className="spinner" viewBox="0 0 50 50">
+      <circle
+        className="path"
+        cx="25"
+        cy="25"
+        r="20"
+        fill="none"
+        strokeWidth="5"
+      />
+    </svg>
+  );
+}
+type SortableStepProps = {
+  index: number;
+  step: { frank: string; image: File | null };
+  onChangeFrank: (val: string) => void;
+  onChangeImage: (file: File | null) => void;
+  onDelete: () => void;
+  error: { frank?: boolean; image?: boolean };
+};
+
+const SortableStep: React.FC<SortableStepProps> = React.memo(
+  ({ index, step, onChangeFrank, onChangeImage, onDelete, error }) => {
+    return (
+      <div className="step-block">
+        <label className="form-label">Текст Фрэнка:</label>
+        <input
+          value={step.frank}
+          onChange={e => onChangeFrank(e.target.value)}
+          className={`form-input ${error.frank ? 'error-border' : ''}`}
+        />
+        <label className="form-label">Картинка ({String(index + 1).padStart(2, '0')}.png):</label>
+        <input
+          type="file"
+          accept="image/png"
+          onChange={e => onChangeImage(e.target.files?.[0] || null)}
+          className={`form-input ${error.image ? 'error-border' : ''}`}
+        />
+        {step.image && (
+          <img
+            src={URL.createObjectURL(step.image)}
+            alt={`Шаг ${index + 1}`}
+            className="step-image"
+          />
+        )}
+        <button type="button" className="btn btn-danger" onClick={() => {
+          if (confirm(`Удалить шаг ${index + 1}?`)) onDelete();
+        }}>
+          ❌ Удалить шаг
+        </button>
+      </div>
+    );
+  }
 );
+
 
 const CATEGORIES = [
   { name: 'Мультяшные персонажи', slug: 'cartoon-characters' },
@@ -58,19 +110,24 @@ const LessonSchema = z.object({
 export default function UploadLesson() {
   const router = useRouter();
   const session = useSession();
+  const supabaseClient = useSupabaseClient();
+
+  const [shareUrl, setShareUrl] = useState<string | null>(null);
 
   useEffect(() => {
     if (!session) {
       router.replace('/login');
     }
-  }, [session]);
+  }, [session, router]);
 
   const [category, setCategory] = useState('animals');
   const [title, setTitle] = useState('');
   const [slug, setSlug] = useState('');
   const [previewFile, setPreviewFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [steps, setSteps] = useState<{ frank: string; image: File | null }[]>([{ frank: '', image: null }]);
+  const [steps, setSteps] = useState<{ id: string; frank: string; image: File | null }[]>([
+    { id: crypto.randomUUID(), frank: '', image: null }
+  ]);
   const [loading, setLoading] = useState(false);
   const [errors, setErrors] = useState<{ title?: boolean; slug?: boolean; previewFile?: boolean; steps: boolean[] }>({ title: false, slug: false, previewFile: false, steps: [] });
 
@@ -86,11 +143,11 @@ export default function UploadLesson() {
     })
   );
 
-  const handleDragEnd = (event: any) => {
+  const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
-    if (active.id !== over?.id) {
-      const oldIndex = active.id;
-      const newIndex = over.id;
+    const oldIndex = steps.findIndex(s => s.id === active.id);
+    const newIndex = steps.findIndex(s => s.id === over?.id);
+    if (oldIndex !== -1 && newIndex !== -1) {
       setSteps((items) => arrayMove(items, oldIndex, newIndex));
     }
   };
@@ -121,7 +178,7 @@ export default function UploadLesson() {
           if (emptyIndex !== -1) {
             newSteps[emptyIndex].image = file;
           } else {
-            newSteps.push({ frank: '', image: file });
+            newSteps.push({ id: crypto.randomUUID(), frank: '', image: file });
           }
         });
         setSteps(newSteps);
@@ -140,16 +197,16 @@ export default function UploadLesson() {
 
     const current = dropRef.current;
     if (current) {
-      current.addEventListener('dragover', handleDragOver as any);
-      current.addEventListener('drop', handleDrop as any);
-      current.addEventListener('dragleave', handleDragLeave as any);
+      current.addEventListener('dragover', handleDragOver as unknown as EventListener);
+      current.addEventListener('drop', handleDrop as unknown as EventListener);
+      current.addEventListener('dragleave', handleDragLeave as unknown as EventListener);
     }
 
     return () => {
       if (current) {
-        current.removeEventListener('dragover', handleDragOver as any);
-        current.removeEventListener('drop', handleDrop as any);
-        current.removeEventListener('dragleave', handleDragLeave as any);
+        current.removeEventListener('dragover', handleDragOver as unknown as EventListener);
+        current.removeEventListener('drop', handleDrop as unknown as EventListener);
+        current.removeEventListener('dragleave', handleDragLeave as unknown as EventListener);
       }
     };
   }, [steps]);
@@ -159,16 +216,22 @@ export default function UploadLesson() {
   }, [title]);
 
   const uploadFile = async (path: string, file: File) => {
-    const { error } = await supabase.storage.from('lessons').upload(path, file, {
+    const sessionRes = await supabaseClient.auth.getSession();
+    console.log('session for upload:', sessionRes.data.session);
+
+    const { error } = await supabaseClient.storage.from('lessons').upload(path, file, {
       cacheControl: '3600',
-      upsert: true
+      upsert: false
     });
-    if (error) throw error;
+    if (error) {
+      console.error('Ошибка при загрузке файла:', path, error.message);
+      throw error;
+    }
   };
 
   const handleSubmit = async () => {
     try {
-      const validated = LessonSchema.parse({
+      LessonSchema.parse({
         title,
         slug,
         previewFile,
@@ -197,7 +260,8 @@ export default function UploadLesson() {
     setLoading(true);
     try {
       const folderPath = `${category}/${slug}`;
-      await uploadFile(`${folderPath}/preview.png`, new File([previewFile!], 'preview.png', { type: previewFile!.type }));
+      console.log('Uploading previewFile:', previewFile);
+      await uploadFile(`${folderPath}/preview.png`, new File([previewFile!], 'preview.png', { type: 'image/png' }));
 
       const stepData = await Promise.all(
         steps.map(async (step, index) => {
@@ -213,7 +277,7 @@ export default function UploadLesson() {
         })
       );
 
-      const { error } = await supabase.from('lessons').insert([
+      const { error } = await supabaseClient.from('lessons').insert([
         {
           title,
           slug,
@@ -225,7 +289,7 @@ export default function UploadLesson() {
       ]);
       if (error) throw error;
       alert('Урок успешно загружен!');
-      setTitle(''); setSlug(''); setPreviewFile(null); setPreviewUrl(null); setSteps([{ frank: '', image: null }]);
+      setTitle(''); setSlug(''); setPreviewFile(null); setPreviewUrl(null); setSteps([{ id: crypto.randomUUID(), frank: '', image: null }]);
       setErrors({ title: false, slug: false, previewFile: false, steps: [] });
     } catch (err: unknown) {
       if (err instanceof Error) {
@@ -252,7 +316,8 @@ export default function UploadLesson() {
     ];
 
     steps.forEach((step, i) => {
-      rows.push([`step${i + 1}`, step.frank, step.image?.name || '']);
+      const stepFileName = `${String(i + 1).padStart(2, '0')}.png`;
+      rows.push([`step${i + 1}`, step.frank, step.image ? stepFileName : '']);
     });
 
     const csvContent = rows.map(e => e.join(',')).join('\n');
@@ -264,138 +329,143 @@ export default function UploadLesson() {
     link.setAttribute('download', `${slug}-lesson.csv`);
     document.body.appendChild(link);
     link.click();
+    setShareUrl(url);
     document.body.removeChild(link);
   };
 
-  if (!session) return null;
+  if (!session) {
+    return (
+      <div style={{ padding: '2rem', textAlign: 'center' }}>
+        <p>Сессия истекла или вы не авторизованы.</p>
+        <a href="/login" style={{
+          display: 'inline-block',
+          marginTop: '1rem',
+          padding: '0.6rem 1.2rem',
+          backgroundColor: '#ffadad',
+          color: 'white',
+          textDecoration: 'none',
+          borderRadius: '8px',
+          fontWeight: 'bold'
+        }}>
+          Перейти к входу
+        </a>
+      </div>
+    );
+  }
   return (
-    <div
-      className="container"
-      ref={dropRef}
-      style={{
-        border: isDragging ? '3px dashed #aaa' : undefined,
-        backgroundColor: isDragging ? '#f9f9f9' : undefined,
-        transition: 'all 0.2s ease'
-      }}
-    >
-      <h1>Загрузка нового урока</h1>
-
-      <label>Категория</label>
-      <select value={category} onChange={e => setCategory(e.target.value)}>
-        {CATEGORIES.map(cat => (
-          <option key={cat.slug} value={cat.slug}>
-            {cat.name}
-          </option>
-        ))}
-      </select>
-
-      <label>Название урока</label>
-      <input
-        value={title}
-        onChange={e => setTitle(e.target.value)}
-        style={errors.title ? { border: '1px solid red' } : {}}
-      />
-
-      <label>Slug (на английском)</label>
-      <input
-        value={slug}
-        onChange={e => setSlug(e.target.value)}
-        style={errors.slug ? { border: '1px solid red' } : {}}
-      />
-
-      <label>Preview.png</label>
-      <input
-        type="file"
-        accept="image/png"
-        onChange={e => {
-          const file = e.target.files?.[0] || null;
-          setPreviewFile(file);
-          if (file) {
-            setPreviewUrl(URL.createObjectURL(file));
-          } else {
-            setPreviewUrl(null);
-          }
+    <div className="upload-page">
+      <div
+        className="container upload-container form-container"
+        ref={dropRef}
+        data-dragging={isDragging ? 'true' : 'false'}
+      >
+        <button
+        onClick={async () => {
+          await supabaseClient.auth.signOut();
+          router.push('/login');
         }}
-        style={errors.previewFile ? { border: '1px solid red' } : {}}
-      />
-      {previewUrl && (
-        <img src={previewUrl} alt="Preview" style={{ maxWidth: '200px', marginTop: '10px' }} />
-      )}
-
-      <h2>Шаги</h2>
-      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-        <SortableContext items={steps.map((_, i) => i)} strategy={verticalListSortingStrategy}>
-          {steps.map((step, i) => {
-            const { attributes, listeners, setNodeRef, transform, transition } = useSortable({ id: i });
-            const style = {
-              transform: CSS.Transform.toString(transform),
-              transition
-            };
-            return (
-              <div
-                key={i}
-                ref={setNodeRef}
-                style={style}
-                {...attributes}
-                {...listeners}
-              >
-                <label>Текст Фрэнка:</label>
-                <input
-                  value={step.frank}
-                  onChange={e => {
-                    const copy = [...steps];
-                    copy[i].frank = e.target.value;
-                    setSteps(copy);
-                  }}
-                  style={errors.steps[i] && !step.frank ? { border: '1px solid red' } : {}}
-                />
-                <label>Картинка ({String(i + 1).padStart(2, '0')}.png):</label>
-                <input
-                  type="file"
-                  accept="image/png"
-                  onChange={e => {
-                    const copy = [...steps];
-                    copy[i].image = e.target.files?.[0] || null;
-                    setSteps(copy);
-                  }}
-                  style={errors.steps[i] && !step.image ? { border: '1px solid red' } : {}}
-                />
-                {step.image && (
-                  <img
-                    src={URL.createObjectURL(step.image)}
-                    alt={`Шаг ${i + 1}`}
-                    style={{ maxWidth: '150px', marginTop: '5px', display: 'block' }}
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (confirm(`Удалить шаг ${i + 1}?`)) {
-                      const newSteps = [...steps];
-                      newSteps.splice(i, 1);
-                      setSteps(newSteps);
-                    }
-                  }}
-                >
-                  ❌ Удалить шаг
-                </button>
-              </div>
-            );
-          })}
-        </SortableContext>
-      </DndContext>
-
-      <button onClick={() => setSteps([...steps, { frank: '', image: null }])}>
-        + Добавить шаг
+        className="btn btn-logout"
+      >
+        Выйти
       </button>
+        <h1 className="page-title">Загрузка нового урока</h1>
+      <div className="form-container">
+        <label className="form-label">Категория</label>
+        <select value={category} onChange={e => setCategory(e.target.value)} className="form-select">
+          {CATEGORIES.map(cat => (
+            <option key={cat.slug} value={cat.slug}>
+              {cat.name}
+            </option>
+          ))}
+        </select>
 
-      <br />
-      <button onClick={handleSubmit} disabled={loading}>
-        {loading ? 'Загрузка...' : 'Сохранить урок'}
-      </button>
-      <button onClick={handleExportCSV}>
-        📄 Экспортировать в CSV
-      </button>
+        <label className="form-label">Название урока</label>
+        <input
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          className={`form-input ${errors.title ? 'error-border' : ''}`}
+        />
+
+        <label className="form-label">Slug (на английском)</label>
+        <input
+          value={slug}
+          onChange={e => setSlug(e.target.value)}
+          className={`form-input ${errors.slug ? 'error-border' : ''}`}
+        />
+
+        <label className="form-label">Preview.png</label>
+        <input
+          type="file"
+          accept="image/png"
+          onChange={e => {
+            const file = e.target.files?.[0] || null;
+            setPreviewFile(file);
+            if (file) {
+              setPreviewUrl(URL.createObjectURL(file));
+            } else {
+              setPreviewUrl(null);
+            }
+          }}
+          className={`form-input ${errors.previewFile ? 'error-border' : ''}`}
+        />
+        {previewUrl && (
+          <img src={previewUrl} alt="Preview" className="preview-image" />
+        )}
+        <h2 className="steps-title">Шаги</h2>
+        <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+          <SortableContext items={steps.map((s) => s.id)} strategy={verticalListSortingStrategy}>
+            {steps.map((step, i) => (
+              <SortableStep
+                key={step.id}
+                index={i}
+                step={step}
+                onChangeFrank={(val) => {
+                  const copy = [...steps];
+                  copy[i].frank = val;
+                  setSteps(copy);
+                }}
+                onChangeImage={(file) => {
+                  const copy = [...steps];
+                  copy[i].image = file;
+                  setSteps(copy);
+                }}
+                onDelete={() => {
+                  const newSteps = [...steps];
+                  newSteps.splice(i, 1);
+                  setSteps(newSteps);
+                }}
+                error={{
+                  frank: errors.steps[i] && !step.frank,
+                  image: errors.steps[i] && !step.image
+                }}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+</div>
+        <button onClick={() => setSteps([...steps, { id: crypto.randomUUID(), frank: '', image: null }])} className="btn btn-secondary">
+          + Добавить шаг
+        </button>
+
+        <br />
+        <button onClick={handleSubmit} disabled={loading} className="btn btn-primary">
+          {loading ? <Spinner /> : 'Сохранить урок'}
+        </button>
+        <button onClick={handleExportCSV} className="btn btn-primary">
+          📄 Экспортировать в CSV
+        </button>
+        {shareUrl && (
+          <div style={{ marginTop: '10px' }}>
+            <p>CSV-файл готов!</p>
+            <button onClick={() => {
+              navigator.clipboard.writeText(shareUrl);
+              alert('Ссылка скопирована в буфер обмена!');
+            }} className="btn btn-primary">
+              📎 Поделиться ссылкой на файл
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

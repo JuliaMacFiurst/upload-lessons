@@ -29,15 +29,3 @@ input, select, button, textarea {
   border-radius: 4px;
   font-size: 1rem;
 }
-
-button {
-  background-color: #4CAF50;
-  color: white;
-  cursor: pointer;
-  border: none;
-  transition: background 0.2s;
-}
-
-button:hover {
-  background-color: #45a049;
-}
