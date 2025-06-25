@@ -274,7 +274,7 @@ const UploadLesson = () => {
           await uploadFile(stepPath, renamedStepFile);
           return {
             frank: step.frank,
-            image: `steps/${stepFileName}`
+            image: `${folderPath}/steps/${stepFileName}`
           };
         })
       );
@@ -285,7 +285,7 @@ const UploadLesson = () => {
           slug,
           category: CATEGORIES.find(c => c.slug === category)?.name || '',
           category_slug: category,
-          preview: `preview.png`,
+          preview: `${folderPath}/preview.png`,
           steps: stepData
         }
       ]);
