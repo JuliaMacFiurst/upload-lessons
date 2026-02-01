@@ -1,6 +1,7 @@
 import type { AppProps } from 'next/app'
 import '../styles/globals.css'
 import '../styles/upload-lesson.css';
+import '../styles/upload-video.css';
 import { SessionContextProvider } from '@supabase/auth-helpers-react'
 import { createPagesBrowserClient } from '@supabase/auth-helpers-nextjs'
 import { useState } from 'react'

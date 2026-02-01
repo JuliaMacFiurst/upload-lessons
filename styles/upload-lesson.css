@@ -10,9 +10,23 @@ body {
   position: relative;
 }
 
+.admin-top-bar {
+  display: flex;
+  flex-direction: column;
+  padding: 2rem;
+  gap: 12px;
+}
+
+.admin-top-bar__row {
+  display: flex;
+}
+
+.admin-top-bar__row--right {
+  justify-content: flex-end;
+}
+
 .btn-logout {
-  top: 1rem;
-  left: 1rem;
+  align-self: flex-end;
   background-color: #ffadad;
   border: none;
   padding: 0.6rem 1.2rem;
@@ -35,6 +49,7 @@ body {
   text-align: center;
   font-size: 2.2rem;
   background: linear-gradient(90deg, #ffa69e, #faf3dd, #b8f2e6);
+  background-clip: text;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
   margin-bottom: 2rem;

@@ -1,0 +1,145 @@
+
+/* ===============================
+   Upload Video — scoped styles
+   =============================== */
+
+.upload-video {
+  max-width: 720px;
+  margin: 40px auto;
+  padding: 32px;
+  background: #ffffff;
+  border-radius: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.06);
+}
+
+/* ---------- Title ---------- */
+
+.upload-video__title {
+  text-align: center;
+  font-size: 30px;
+  margin-bottom: 28px;
+  color: #2b2b2b;
+  letter-spacing: 0.3px;
+}
+
+/* ---------- Form layout ---------- */
+
+.upload-video__form {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+/* ---------- Labels ---------- */
+
+.upload-video__label {
+  display: flex;
+  flex-direction: column;
+  font-size: 14px;
+  color: #4b5563;
+  gap: 6px;
+}
+
+/* ---------- Inputs & selects ---------- */
+
+.upload-video__input {
+  background: #fdf7ff;
+  border: 1.5px solid #e9d5ff;
+  border-radius: 14px;
+  padding: 10px 12px;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.upload-video__input::placeholder {
+  color: #b8a7d9;
+}
+
+.upload-video__input:focus {
+  outline: none;
+  border-color: #c084fc;
+  background: #ffffff;
+  box-shadow: 0 0 0 3px rgba(192, 132, 252, 0.25);
+}
+
+.upload-video__input--rtl {
+  direction: rtl;
+}
+
+/* ---------- Parsed YouTube block ---------- */
+
+.upload-video__parsed {
+  margin-top: 12px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: #f0fdf4;
+  border: 1.5px solid #86efac;
+  color: #166534;
+  font-size: 14px;
+}
+
+/* ---------- Divider ---------- */
+
+.upload-video__divider {
+  margin: 28px 0;
+  border: none;
+  border-top: 1px dashed #e5e7eb;
+}
+
+/* ---------- Buttons ---------- */
+
+.upload-video__button {
+  border-radius: 999px;
+  padding: 10px 20px;
+  font-size: 14px;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s ease;
+  align-self: flex-start;
+}
+
+/* Parse YouTube — secondary */
+
+.upload-video__button--secondary {
+  background: #f3e8ff;
+  color: #7c3aed;
+}
+
+.upload-video__button--secondary:hover {
+  background: #e9d5ff;
+  transform: translateY(-1px);
+}
+
+/* Parse done / active state */
+
+.upload-video__button--secondary.is-active {
+  background: #dcfce7;
+  color: #166534;
+}
+
+/* Save — primary */
+
+.upload-video__button--primary {
+  background: linear-gradient(135deg, #c084fc, #818cf8);
+  color: white;
+}
+
+.upload-video__button--primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(129, 140, 248, 0.35);
+}
+
+/* Save success */
+
+.upload-video__button--primary.is-success {
+  background: linear-gradient(135deg, #34d399, #22c55e);
+}
+
+/* Disabled */
+
+.upload-video__button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+  box-shadow: none;
+}

@@ -13,7 +13,7 @@ export default function Login() {
     if (session) {
       router.replace('/admin/upload-lesson');
     }
-  }, [session]);
+  }, [session, router]);
 
   if (session) return null;
 
