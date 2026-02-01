@@ -23,6 +23,8 @@ const CATEGORY_OPTIONS = [
   { key: "art", label: "🎨 art" },
   { key: "music", label: "🎵 music" },
   { key: "human", label: "🧠 human" },
+  { key: "technology", label: "💻 technology" },
+  { key: "math", label: "🔢 math" },
 ] as const;
 
 export default function UploadVideoPage() {
