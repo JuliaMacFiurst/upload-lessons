@@ -45,6 +45,7 @@ export default function UploadVideoPage() {
   const [titleRu, setTitleRu] = useState("");
   const [titleHe, setTitleHe] = useState("");
   const [titleEn, setTitleEn] = useState("");
+  const [tagsInput, setTagsInput] = useState("");
 
   const [sourceChannel, setSourceChannel] = useState("");
   const [durationLabel, setDurationLabel] = useState("");
@@ -172,6 +173,16 @@ export default function UploadVideoPage() {
       }
     }
 
+    const parsedTags = tagsInput
+      .split(",")
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (parsedTags.length < 4 || parsedTags.length > 6) {
+      setError("Tags must contain between 4 and 6 items");
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
     setSuccess(null);
@@ -188,6 +199,7 @@ export default function UploadVideoPage() {
     const videoId = [categoryKey, parsed.youtubeId, format].join("-");
 
     const payload = {
+      tags: parsedTags,
       id: videoId,
       format,
       category_key: categoryKey,
@@ -293,6 +305,18 @@ export default function UploadVideoPage() {
                 value={titleEn}
                 onChange={(e) => setTitleEn(e.target.value)}
                 className="upload-video__input"
+              />
+            </label>
+
+            <label className="upload-video__label">
+              Tags (comma separated, 4–6)
+              <textarea
+                value={tagsInput}
+                onChange={(e) => setTagsInput(e.target.value)}
+                placeholder="animals, deer, nature, observation"
+                className="upload-video__input"
+                rows={3}
+                style={{ resize: "vertical" }}
               />
             </label>
           </div>
