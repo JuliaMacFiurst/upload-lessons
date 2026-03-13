@@ -1,0 +1,405 @@
+.admin-translations-page {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 24px;
+  font-family:
+    "Trebuchet MS",
+    "Avenir Next",
+    "Segoe UI",
+    sans-serif;
+  background:
+    radial-gradient(circle at 0% 0%, #fff7ec 0, transparent 42%),
+    radial-gradient(circle at 100% 0%, #f3fbff 0, transparent 40%),
+    #fffdf8;
+  min-height: 100vh;
+}
+
+.admin-translations-title {
+  margin: 8px 0 20px;
+  font-size: 32px;
+  color: #38555f;
+  letter-spacing: 0.02em;
+}
+
+.translations-panel {
+  background: #ffffffcc;
+  border: 1px solid #f0dfd1;
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 7px 24px rgba(89, 67, 43, 0.08);
+  margin-bottom: 18px;
+}
+
+.translations-title {
+  margin: 0 0 14px;
+  font-size: 20px;
+  color: #415c66;
+}
+
+.translations-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.translations-grid--4 {
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+}
+
+.translations-grid--summary {
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+}
+
+.translations-grid--3 {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.translations-card {
+  border-radius: 14px;
+  padding: 14px;
+  background: linear-gradient(140deg, #fff2ec 0%, #fffbf8 100%);
+  border: 1px solid #fbe2d5;
+}
+
+.translations-card__label {
+  font-size: 13px;
+  color: #a17f6a;
+}
+
+.translations-card__value {
+  font-size: 28px;
+  font-weight: 700;
+  color: #634a3d;
+}
+
+.translations-info {
+  border-radius: 14px;
+  border: 1px solid #ddeef0;
+  background: linear-gradient(160deg, #f5fdff 0%, #ffffff 100%);
+  padding: 14px;
+}
+
+.translations-info__label {
+  color: #5f7a82;
+  font-size: 13px;
+}
+
+.translations-info__value {
+  font-size: 24px;
+  margin-top: 6px;
+  color: #2f4a52;
+  font-weight: 700;
+}
+
+.translations-hint {
+  margin-top: 10px;
+  font-size: 13px;
+  color: #64767f;
+}
+
+.translations-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.translations-row--gap {
+  gap: 12px;
+}
+
+.translations-label {
+  font-size: 14px;
+  color: #496069;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 220px;
+}
+
+.translations-input {
+  border: 1px solid #d7e5ea;
+  border-radius: 10px;
+  height: 38px;
+  padding: 0 10px;
+  background: #fff;
+}
+
+.translations-input--small {
+  width: 100px;
+}
+
+.translations-radio-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.translations-radio {
+  border: 1px solid #e8e5dc;
+  border-radius: 12px;
+  padding: 10px;
+  background: #fff;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: #4b555e;
+}
+
+.translations-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #53666f;
+}
+
+.translations-button {
+  border: 0;
+  border-radius: 12px;
+  height: 40px;
+  padding: 0 14px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.translations-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.translations-button--primary {
+  color: #fff;
+  background: linear-gradient(130deg, #ff8b7a 0%, #ffb296 100%);
+}
+
+.translations-button--secondary {
+  color: #47606a;
+  background: linear-gradient(130deg, #e7f4fb 0%, #f7fbff 100%);
+  border: 1px solid #d4e8f2;
+}
+
+.translations-collapse {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #ecdccf;
+  border-radius: 12px;
+  height: 44px;
+  background: #fff8ef;
+  color: #4f6068;
+  font-weight: 700;
+  padding: 0 12px;
+  cursor: pointer;
+}
+
+.translations-untranslated {
+  margin-top: 12px;
+}
+
+.translations-list {
+  border: 1px solid #eee0d3;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.translations-list__header,
+.translations-list__row {
+  display: grid;
+  grid-template-columns: 56px 1.4fr 120px 120px 320px;
+  gap: 12px;
+  padding: 10px 12px;
+  align-items: center;
+}
+
+.translations-list__header {
+  background: #fff5ea;
+  font-size: 13px;
+  color: #7d6d61;
+  font-weight: 700;
+}
+
+.translations-list__row {
+  border-top: 1px solid #f4e8dc;
+  background: #fff;
+}
+
+.translations-list__actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.translations-selected-bar {
+  margin-top: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.translations-preview {
+  margin-top: 12px;
+  border: 1px solid #eadfd5;
+  border-radius: 12px;
+  padding: 10px;
+  font-size: 12px;
+  background: #fffdfa;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.translations-mock-banner {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border-radius: 999px;
+  padding: 8px 12px;
+  margin-bottom: 14px;
+  background: #fff5d7;
+  border: 1px solid #f1d896;
+  color: #7d5a25;
+  font-weight: 700;
+}
+
+.translations-mock-banner span {
+  font-weight: 500;
+}
+
+.translations-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #56666c;
+}
+
+.translations-progress {
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  background: #f1e9df;
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.translations-progress__bar {
+  height: 100%;
+  background: linear-gradient(120deg, #7bdab7 0%, #9fe6d4 100%);
+  transition: width 0.25s ease;
+}
+
+.translations-pill {
+  border-radius: 999px;
+  background: #f7f1e8;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: #5f696d;
+  text-align: center;
+}
+
+.translations-logs {
+  border-radius: 12px;
+  border: 1px solid #f0e3d7;
+  background: #fffdfa;
+  padding: 10px;
+  max-height: 260px;
+  overflow: auto;
+  font-family: "SF Mono", Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.translations-log-line {
+  padding: 5px 0;
+  border-bottom: 1px dashed #f3e9df;
+  color: #5e666a;
+}
+
+.translations-empty {
+  color: #839196;
+}
+
+.translations-alert {
+  border-radius: 12px;
+  padding: 10px 12px;
+  margin-top: 12px;
+  font-weight: 600;
+}
+
+.translations-alert--error {
+  background: #fff0ef;
+  border: 1px solid #ffc9c5;
+  color: #aa3d3d;
+}
+
+.translations-alert--success {
+  background: #effff6;
+  border: 1px solid #c8f0d9;
+  color: #2f7c53;
+}
+
+.translations-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(56, 44, 36, 0.42);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 20px;
+}
+
+.translations-modal {
+  width: min(500px, 100%);
+  border-radius: 16px;
+  background: #fffaf4;
+  border: 1px solid #f5dfcc;
+  padding: 18px;
+  box-shadow: 0 14px 34px rgba(66, 42, 30, 0.18);
+}
+
+.translations-modal__title {
+  margin: 0 0 8px;
+  color: #3c5158;
+}
+
+.translations-modal__text {
+  margin: 0 0 10px;
+  color: #5c6a70;
+}
+
+.translations-modal__list {
+  margin: 0 0 16px;
+  padding-left: 18px;
+  color: #5b6368;
+}
+
+.translations-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+@media (max-width: 640px) {
+  .admin-translations-page {
+    padding: 16px;
+  }
+
+  .admin-translations-title {
+    font-size: 27px;
+  }
+
+  .translations-progress-meta {
+    flex-direction: column;
+  }
+
+  .translations-list__header,
+  .translations-list__row {
+    grid-template-columns: 1fr;
+  }
+
+  .translations-list__actions {
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+}

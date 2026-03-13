@@ -9,6 +9,7 @@ export function AdminTabs() {
   const tabs = [
     { href: "/admin/upload-lesson", label: "Upload lesson" },
     { href: "/admin/upload-video", label: "Upload video" },
+    { href: "/admin/translations", label: "Translations" },
   ];
 
   return (
