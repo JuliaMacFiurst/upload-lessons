@@ -12,6 +12,20 @@ import type {
   BookTestInput,
 } from "../../../lib/books/types";
 
+type BookCompletionOverview = {
+  id: string;
+  title: string;
+  author: string | null;
+  filled_blocks: number;
+  total_blocks: number;
+  progress_percent: number;
+};
+
+type BookMissingSectionRow = {
+  section: string;
+  is_filled: boolean;
+};
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   const data = (await response.json()) as T & { error?: string };
@@ -57,6 +71,41 @@ function helperLabel(label: string, tooltip: string, help: string) {
   );
 }
 
+function saveButtonClass(state: Record<string, "saved" | "dirty">, key: string) {
+  return state[key] === "saved" ? "books-button books-button--success" : "books-button books-button--primary";
+}
+
+function saveButtonLabel(state: Record<string, "saved" | "dirty">, key: string) {
+  return state[key] === "saved" ? "✔ Сохранено" : "Сохранить";
+}
+
+function progressColor(percent: number) {
+  if (percent < 40) {
+    return "#d9534f";
+  }
+  if (percent <= 70) {
+    return "#f0ad4e";
+  }
+  return "#4caf50";
+}
+
+function sectionLabel(section: string) {
+  const labels: Record<string, string> = {
+    meta: "Данные книги",
+    categories: "Категории",
+    plot: "Сюжет",
+    main_idea: "Главная идея",
+    author_message: "Что хотел сказать автор",
+    ending_meaning: "Смысл финала",
+    twenty_seconds: "Книга за 20 секунд",
+    characters: "Персонажи",
+    philosophy: "Философия книги",
+    conflicts: "Конфликты",
+    tests: "Тест",
+  };
+  return labels[section] ?? section;
+}
+
 export default function BookEditorPage() {
   const router = useRouter();
   const supabase = createClientComponentClient();
@@ -65,9 +114,13 @@ export default function BookEditorPage() {
   const [loading, setLoading] = useState(true);
   const [bookId, setBookId] = useState("");
   const [editor, setEditor] = useState<BookEditorResponse | null>(null);
+  const [progress, setProgress] = useState<BookCompletionOverview | null>(null);
+  const [missingSections, setMissingSections] = useState<BookMissingSectionRow[]>([]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [saveState, setSaveState] = useState<Record<string, "saved" | "dirty">>({});
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -93,8 +146,15 @@ export default function BookEditorPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchJson<BookEditorResponse>(`/api/admin/books/${bookId}`);
+      const [data, status] = await Promise.all([
+        fetchJson<BookEditorResponse>(`/api/admin/books/${bookId}`),
+        fetchJson<{ progress: BookCompletionOverview; sections: BookMissingSectionRow[] }>(
+          `/api/admin/books/${bookId}/status`,
+        ),
+      ]);
       setEditor(data);
+      setProgress(status.progress);
+      setMissingSections(status.sections);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
     } finally {
@@ -114,6 +174,41 @@ export default function BookEditorPage() {
     setError(null);
   };
 
+  const refreshStatus = useCallback(async () => {
+    if (!bookId) {
+      return;
+    }
+    const status = await fetchJson<{ progress: BookCompletionOverview; sections: BookMissingSectionRow[] }>(
+      `/api/admin/books/${bookId}/status`,
+    );
+    setProgress(status.progress);
+    setMissingSections(status.sections);
+  }, [bookId]);
+
+  const markDirty = (key: string) => {
+    setSaveState((current) => ({ ...current, [key]: "dirty" }));
+  };
+
+  const markSaved = (key: string) => {
+    setSaveState((current) => ({ ...current, [key]: "saved" }));
+  };
+
+  const toggleSection = (key: string) => {
+    setCollapsedSections((current) => ({ ...current, [key]: !(current[key] ?? false) }));
+  };
+
+  const collapseSection = (key: string) => {
+    setCollapsedSections((current) => ({ ...current, [key]: true }));
+  };
+
+  const sectionStatus = (key: string) => {
+    if (key === "meta") {
+      return Boolean(editor?.book.title.trim() && editor.book.description?.trim());
+    }
+    const row = missingSections.find((item) => item.section === key);
+    return row?.is_filled ?? false;
+  };
+
   const updateBook = <K extends keyof BookEditorResponse["book"]>(key: K, value: BookEditorResponse["book"][K]) => {
     setEditor((current) =>
       current
@@ -126,6 +221,7 @@ export default function BookEditorPage() {
           }
         : current,
     );
+    markDirty("meta");
   };
 
   const updateExplanation = (index: number, explanation: BookExplanationInput) => {
@@ -137,10 +233,12 @@ export default function BookEditorPage() {
       explanations[index] = explanation;
       return { ...current, explanations };
     });
+    markDirty(explanation.mode_slug);
   };
 
   const updateTests = (tests: BookTestInput[]) => {
     setEditor((current) => (current ? { ...current, tests } : current));
+    markDirty("tests");
   };
 
   const saveMeta = async () => {
@@ -157,6 +255,9 @@ export default function BookEditorPage() {
       });
       updateBook("title", data.book.title);
       setEditor((current) => (current ? { ...current, book: data.book } : current));
+      markSaved("meta");
+      collapseSection("meta");
+      await refreshStatus();
       showSuccess("Данные книги сохранены.");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -178,6 +279,9 @@ export default function BookEditorPage() {
         body: JSON.stringify({ categoryIds: editor.categoryIds }),
       });
       setEditor((current) => (current ? { ...current, categoryIds: data.categoryIds } : current));
+      markSaved("categories");
+      collapseSection("categories");
+      await refreshStatus();
       showSuccess("Категории сохранены.");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -230,6 +334,9 @@ export default function BookEditorPage() {
         },
       );
       updateExplanation(index, data.explanation);
+      markSaved(explanation.mode_slug);
+      collapseSection(explanation.mode_slug);
+      await refreshStatus();
       showSuccess(`Блок «${explanation.mode_name}» сохранён.`);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -290,6 +397,10 @@ export default function BookEditorPage() {
       const tests = [...editor.tests];
       tests[index] = data.test;
       updateTests(tests);
+      markSaved(`test:${index}`);
+      markSaved("tests");
+      collapseSection(`test:${index}`);
+      await refreshStatus();
       showSuccess(`Тест ${index + 1} сохранён.`);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -316,6 +427,7 @@ export default function BookEditorPage() {
         body: JSON.stringify({ testId: target.id }),
       });
       updateTests(editor.tests.filter((_, itemIndex) => itemIndex !== index));
+      await refreshStatus();
       showSuccess(`Тест ${index + 1} удалён.`);
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -362,443 +474,537 @@ export default function BookEditorPage() {
       {error && <div className="books-alert books-alert--error">{error}</div>}
       {success && <div className="books-alert books-alert--success">{success}</div>}
 
-      <section className="books-panel">
-        <div className="books-section-head">
-          <div>
-            <h2 className="books-panel__title">Данные книги</h2>
-            <p className="books-section-help">Заполните основные поля книги и сохраните только этот блок.</p>
+      {progress ? (
+        <section className="books-panel">
+          <div className="books-section-head">
+            <div>
+              <h2 className="books-panel__title">Статус книги</h2>
+              <p className="books-section-help">
+                {progress.filled_blocks} / {progress.total_blocks} разделов заполнено
+              </p>
+            </div>
+            <strong>{progress.progress_percent}%</strong>
           </div>
-          <button
-            type="button"
-            className="books-button books-button--primary"
-            disabled={busyKey === "meta"}
-            onClick={() => {
-              void saveMeta();
-            }}
-          >
-            {busyKey === "meta" ? "Сохранение..." : "Сохранить"}
-          </button>
-        </div>
-
-        <div className="books-grid books-grid--2">
-          <label className="books-field">
-            {helperLabel("Название", "Введите название книги так, как оно должно отображаться в CMS.", "Обязательное поле. Используйте финальный вариант названия.")}
-            <input
-              className="books-input"
-              value={editor.book.title}
-              placeholder="Маленький принц"
-              onChange={(event) => {
-                const nextTitle = event.target.value;
-                updateBook("title", nextTitle);
-                if (!editor.book.slug || editor.book.slug === toSlug(editor.book.title)) {
-                  updateBook("slug", toSlug(nextTitle));
-                }
+          <div className="book-progress">
+            <div
+              className="book-progress__bar"
+              style={{
+                width: `${progress.progress_percent}%`,
+                background: `linear-gradient(90deg, ${progressColor(progress.progress_percent)}, ${progressColor(progress.progress_percent)})`,
               }}
             />
-          </label>
-
-          <label className="books-field">
-            {helperLabel("Slug", "URL-адрес в нижнем регистре, только буквы, цифры и дефисы.", "Формат: malenkiy-princ")}
-            <input
-              className="books-input"
-              value={editor.book.slug}
-              placeholder="malenkiy-princ"
-              onChange={(event) => updateBook("slug", toSlug(event.target.value))}
-            />
-          </label>
-
-          <label className="books-field">
-            {helperLabel("Автор", "Укажите основного автора книги.", "Необязательное поле. Пример: Антуан де Сент-Экзюпери.")}
-            <input
-              className="books-input"
-              value={editor.book.author ?? ""}
-              placeholder="Антуан де Сент-Экзюпери"
-              onChange={(event) => updateBook("author", event.target.value)}
-            />
-          </label>
-
-          <label className="books-field">
-            {helperLabel("Год", "Год публикации книги.", "Необязательное числовое поле. Пример: 1943.")}
-            <input
-              className="books-input"
-              type="number"
-              value={editor.book.year ?? ""}
-              placeholder="1943"
-              onChange={(event) => updateBook("year", event.target.value ? Number(event.target.value) : null)}
-            />
-          </label>
-
-          <label className="books-field books-field--wide">
-            {helperLabel("Описание", "Короткое объяснение книги для ребёнка.", "Напишите 1–2 простых предложения о книге.")}
-            <textarea
-              className="books-input books-input--textarea"
-              value={editor.book.description ?? ""}
-              placeholder="Короткое описание книги для детей."
-              onChange={(event) => updateBook("description", event.target.value)}
-            />
-          </label>
-
-          <label className="books-field">
-            {helperLabel("Ключевые слова", "Ключевые темы книги через запятую.", "Формат: дружба, смелость, путешествие")}
-            <input
-              className="books-input"
-              value={editor.book.keywords.join(", ")}
-              placeholder="дружба, смелость, путешествие"
-              onChange={(event) =>
-                updateBook(
-                  "keywords",
-                  event.target.value.split(",").map((item) => item.trim()).filter(Boolean),
-                )
-              }
-            />
-          </label>
-
-          <label className="books-field">
-            {helperLabel("Возраст", "Рекомендуемая возрастная группа.", "Пример: 6-8 или 8-10.")}
-            <input
-              className="books-input"
-              value={editor.book.age_group ?? ""}
-              placeholder="6-8"
-              onChange={(event) => updateBook("age_group", event.target.value)}
-            />
-          </label>
-
-          <label className="books-field">
-            {helperLabel("Время чтения", "Примерное время чтения в минутах.", "Целое число минут. Пример: 12.")}
-            <input
-              className="books-input"
-              type="number"
-              value={editor.book.reading_time ?? ""}
-              placeholder="12"
-              onChange={(event) =>
-                updateBook("reading_time", event.target.value ? Number(event.target.value) : null)
-              }
-            />
-          </label>
-
-          <label className="books-checkbox">
-            <input
-              type="checkbox"
-              checked={editor.book.is_published}
-              onChange={(event) => updateBook("is_published", event.target.checked)}
-            />
-            <span>
-              <strong>Опубликовано</strong>
-              <small>Включайте публикацию только после проверки метаданных и учебных материалов.</small>
-            </span>
-          </label>
-        </div>
-      </section>
-
-      <section className="books-panel">
-        <div className="books-section-head">
-          <div>
-            <h2 className="books-panel__title">Категории</h2>
-            <p className="books-section-help">Выберите категории книги и сохраните только этот блок.</p>
           </div>
-          <button
-            type="button"
-            className="books-button books-button--primary"
-            disabled={busyKey === "categories"}
-            onClick={() => {
-              void saveCategories();
-            }}
-          >
-            {busyKey === "categories" ? "Сохранение..." : "Сохранить"}
-          </button>
-        </div>
-
-        <div className="books-checkbox-grid">
-          {editor.categories.map((category) => {
-            const checked = editor.categoryIds.includes(category.id);
-            return (
-              <label className="books-checkbox" key={category.id}>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={(event) =>
-                    setEditor((current) => {
-                      if (!current) {
-                        return current;
-                      }
-                      return {
-                        ...current,
-                        categoryIds: event.target.checked
-                          ? [...current.categoryIds, category.id]
-                          : current.categoryIds.filter((item) => item !== category.id),
-                      };
-                    })
-                  }
-                />
-                <span>
-                  <strong>{category.name}</strong>
-                  <small>{category.slug}</small>
+          <div className="book-section-status-list">
+            {missingSections.map((item) => (
+              <div className="book-section-status" key={item.section}>
+                <span className={item.is_filled ? "book-section-status__ok" : "book-section-status__warning"}>
+                  {item.is_filled ? "✔" : "⚠"}
                 </span>
-              </label>
-            );
-          })}
-        </div>
-      </section>
+                <span>{sectionLabel(item.section)}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="books-panel">
-        <div className="books-section-head">
-          <div>
-            <h2 className="books-panel__title">Объяснения</h2>
-            <p className="books-section-help">Каждый блок можно сгенерировать и сохранить отдельно.</p>
-          </div>
-        </div>
+        <button type="button" className="books-collapse" onClick={() => toggleSection("meta")}>
+          <span>{collapsedSections.meta ? "▶" : "▼"}</span>
+          <span>
+            Данные книги {sectionStatus("meta") ? "✔" : "⚠ не заполнено"}
+          </span>
+        </button>
 
-        {editor.explanations.map((explanation, explanationIndex) => (
-          <div className="books-subpanel" key={explanation.mode_id}>
+        {!collapsedSections.meta && (
+          <>
             <div className="books-section-head">
               <div>
-                <h3 className="books-subpanel__title">{explanation.mode_name}</h3>
-                <p className="books-section-help">Короткие слайды, объясняющие книгу детям простым языком.</p>
+                <h2 className="books-panel__title">Данные книги</h2>
+                <p className="books-section-help">Заполните основные поля книги и сохраните только этот блок.</p>
               </div>
-              <label className="books-checkbox books-checkbox--inline">
-                <input
-                  type="checkbox"
-                  checked={explanation.is_published}
-                  onChange={(event) =>
-                    updateExplanation(explanationIndex, {
-                      ...explanation,
-                      is_published: event.target.checked,
-                    })
-                  }
-                />
-                <span>
-                  <strong>Опубликовано</strong>
-                  <small>Управляет публикацией только этого объяснения.</small>
-                </span>
-              </label>
-            </div>
-
-            {explanation.slides.map((slide, slideIndex) => (
-              <label className="books-field" key={`${explanation.mode_id}-${slideIndex}`}>
-                {helperLabel(
-                  `Слайд ${slideIndex + 1}`,
-                  "Напишите короткое предложение для ребёнка.",
-                  "Короткая понятная фраза о книге. Без длинных академических формулировок.",
-                )}
-                <textarea
-                  className="books-input books-input--textarea books-input--small-textarea"
-                  value={slide.text}
-                  placeholder="Короткая фраза для объяснения."
-                  onChange={(event) => {
-                    const slides = explanation.slides.map((item, index) =>
-                      index === slideIndex ? { text: event.target.value } : item,
-                    );
-                    updateExplanation(explanationIndex, { ...explanation, slides });
-                  }}
-                />
-              </label>
-            ))}
-
-            <div className="books-actions books-actions--compact">
               <button
                 type="button"
-                className="books-button books-button--secondary"
-                disabled={busyKey === `generate-explanation:${explanation.mode_id}`}
+                className={saveButtonClass(saveState, "meta")}
+                disabled={busyKey === "meta"}
                 onClick={() => {
-                  void generateExplanation(explanationIndex);
+                  void saveMeta();
                 }}
               >
-                {busyKey === `generate-explanation:${explanation.mode_id}` ? "Генерация..." : "Сгенерировать"}
-              </button>
-              <button
-                type="button"
-                className="books-button books-button--ghost"
-                onClick={() =>
-                  updateExplanation(explanationIndex, {
-                    ...explanation,
-                    slides: [...explanation.slides, { text: "" }],
-                  })
-                }
-              >
-                Добавить слайд
-              </button>
-              <button
-                type="button"
-                className="books-button books-button--primary"
-                disabled={busyKey === `save-explanation:${explanation.mode_id}`}
-                onClick={() => {
-                  void saveExplanation(explanationIndex);
-                }}
-              >
-                {busyKey === `save-explanation:${explanation.mode_id}` ? "Сохранение..." : "Сохранить"}
-              </button>
-            </div>
-          </div>
-        ))}
-      </section>
-
-      <section className="books-panel">
-        <div className="books-section-head">
-          <div>
-            <h2 className="books-panel__title">Тесты</h2>
-            <p className="books-section-help">Каждый тест можно редактировать, генерировать и сохранять отдельно.</p>
-          </div>
-          <button
-            type="button"
-            className="books-button books-button--secondary"
-            onClick={() => updateTests([...editor.tests, emptyTest(editor.tests.length)])}
-          >
-            Добавить тест
-          </button>
-        </div>
-
-        {editor.tests.map((test, testIndex) => (
-          <div className="books-subpanel" key={test.id ?? `test-${testIndex}`}>
-            <div className="books-section-head">
-              <h3 className="books-subpanel__title">Тест {testIndex + 1}</h3>
-              <button
-                type="button"
-                className="books-button books-button--ghost"
-                disabled={busyKey === `delete-test:${testIndex}`}
-                onClick={() => {
-                  void deleteTest(testIndex);
-                }}
-              >
-                {busyKey === `delete-test:${testIndex}` ? "Удаление..." : "Удалить"}
+                {busyKey === "meta" ? "Сохранение..." : saveButtonLabel(saveState, "meta")}
               </button>
             </div>
 
             <div className="books-grid books-grid--2">
               <label className="books-field">
-                {helperLabel("Название теста", "Короткое название блока теста.", "Пример: Тест по сюжету.")}
+                {helperLabel("Название", "Введите название книги так, как оно должно отображаться в CMS.", "Обязательное поле. Используйте финальный вариант названия.")}
                 <input
                   className="books-input"
-                  value={test.title}
-                  placeholder="Тест по сюжету"
+                  value={editor.book.title}
+                  placeholder="Маленький принц"
                   onChange={(event) => {
-                    const tests = [...editor.tests];
-                    tests[testIndex] = { ...test, title: event.target.value };
-                    updateTests(tests);
+                    const nextTitle = event.target.value;
+                    updateBook("title", nextTitle);
+                    if (!editor.book.slug || editor.book.slug === toSlug(editor.book.title)) {
+                      updateBook("slug", toSlug(nextTitle));
+                    }
                   }}
                 />
               </label>
 
               <label className="books-field">
-                {helperLabel("Описание", "Короткая инструкция для ребёнка.", "Необязательное поле. Одно короткое предложение.")}
+                {helperLabel("Slug", "URL-адрес в нижнем регистре, только буквы, цифры и дефисы.", "Формат: malenkiy-princ")}
                 <input
                   className="books-input"
-                  value={test.description ?? ""}
-                  placeholder="Ответь на вопросы по книге"
-                  onChange={(event) => {
-                    const tests = [...editor.tests];
-                    tests[testIndex] = { ...test, description: event.target.value };
-                    updateTests(tests);
-                  }}
+                  value={editor.book.slug}
+                  placeholder="malenkiy-princ"
+                  onChange={(event) => updateBook("slug", toSlug(event.target.value))}
                 />
               </label>
+
+              <label className="books-field">
+                {helperLabel("Автор", "Укажите основного автора книги.", "Необязательное поле. Пример: Антуан де Сент-Экзюпери.")}
+                <input
+                  className="books-input"
+                  value={editor.book.author ?? ""}
+                  placeholder="Антуан де Сент-Экзюпери"
+                  onChange={(event) => updateBook("author", event.target.value)}
+                />
+              </label>
+
+              <label className="books-field">
+                {helperLabel("Год", "Год публикации книги.", "Необязательное числовое поле. Пример: 1943.")}
+                <input
+                  className="books-input"
+                  type="number"
+                  value={editor.book.year ?? ""}
+                  placeholder="1943"
+                  onChange={(event) => updateBook("year", event.target.value ? Number(event.target.value) : null)}
+                />
+              </label>
+
+              <label className="books-field books-field--wide">
+                {helperLabel("Описание", "Короткое объяснение книги для ребёнка.", "Напишите 1–2 простых предложения о книге.")}
+                <textarea
+                  className="books-input books-input--textarea"
+                  value={editor.book.description ?? ""}
+                  placeholder="Короткое описание книги для детей."
+                  onChange={(event) => updateBook("description", event.target.value)}
+                />
+              </label>
+
+              <label className="books-field">
+                {helperLabel("Ключевые слова", "Ключевые темы книги через запятую.", "Формат: дружба, смелость, путешествие")}
+                <input
+                  className="books-input"
+                  value={editor.book.keywords.join(", ")}
+                  placeholder="дружба, смелость, путешествие"
+                  onChange={(event) =>
+                    updateBook(
+                      "keywords",
+                      event.target.value.split(",").map((item) => item.trim()).filter(Boolean),
+                    )
+                  }
+                />
+              </label>
+
+              <label className="books-field">
+                {helperLabel("Возраст", "Рекомендуемая возрастная группа.", "Пример: 6-8 или 8-10.")}
+                <input
+                  className="books-input"
+                  value={editor.book.age_group ?? ""}
+                  placeholder="6-8"
+                  onChange={(event) => updateBook("age_group", event.target.value)}
+                />
+              </label>
+
+              <label className="books-field">
+                {helperLabel("Время чтения", "Примерное время чтения в минутах.", "Целое число минут. Пример: 12.")}
+                <input
+                  className="books-input"
+                  type="number"
+                  value={editor.book.reading_time ?? ""}
+                  placeholder="12"
+                  onChange={(event) =>
+                    updateBook("reading_time", event.target.value ? Number(event.target.value) : null)
+                  }
+                />
+              </label>
+
+              <label className="books-checkbox">
+                <input
+                  type="checkbox"
+                  checked={editor.book.is_published}
+                  onChange={(event) => updateBook("is_published", event.target.checked)}
+                />
+                <span>
+                  <strong>Опубликовано</strong>
+                  <small>Включайте публикацию только после проверки метаданных и учебных материалов.</small>
+                </span>
+              </label>
+            </div>
+          </>
+        )}
+      </section>
+
+      <section className="books-panel">
+        <button type="button" className="books-collapse" onClick={() => toggleSection("categories")}>
+          <span>{collapsedSections.categories ? "▶" : "▼"}</span>
+          <span>
+            Категории {sectionStatus("categories") ? "✔" : "⚠ не заполнено"}
+          </span>
+        </button>
+
+        {!collapsedSections.categories && (
+          <>
+            <div className="books-section-head">
+              <div>
+                <h2 className="books-panel__title">Категории</h2>
+                <p className="books-section-help">Выберите категории книги и сохраните только этот блок.</p>
+              </div>
+              <button
+                type="button"
+                className={saveButtonClass(saveState, "categories")}
+                disabled={busyKey === "categories"}
+                onClick={() => {
+                  void saveCategories();
+                }}
+              >
+                {busyKey === "categories" ? "Сохранение..." : saveButtonLabel(saveState, "categories")}
+              </button>
             </div>
 
-            {test.quiz.map((question, questionIndex) => (
-              <div className="books-question" key={`${testIndex}-${questionIndex}`}>
-                <label className="books-field">
-                  {helperLabel(
-                    `Вопрос ${questionIndex + 1}`,
-                    "Введите вопрос по книге.",
-                    "Короткий и понятный вопрос для ребёнка.",
-                  )}
+            <div className="books-checkbox-grid">
+              {editor.categories.map((category) => {
+                const checked = editor.categoryIds.includes(category.id);
+                return (
+                  <label className="books-checkbox" key={category.id}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(event) =>
+                        setEditor((current) => {
+                          if (!current) {
+                            return current;
+                          }
+                          markDirty("categories");
+                          return {
+                            ...current,
+                            categoryIds: event.target.checked
+                              ? [...current.categoryIds, category.id]
+                              : current.categoryIds.filter((item) => item !== category.id),
+                          };
+                        })
+                      }
+                    />
+                    <span>
+                      <strong>{category.name}</strong>
+                      <small>{category.slug}</small>
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </section>
+
+      {editor.explanations.map((explanation, explanationIndex) => (
+        <section className="books-panel" key={explanation.mode_id}>
+          <button type="button" className="books-collapse" onClick={() => toggleSection(explanation.mode_slug)}>
+            <span>{collapsedSections[explanation.mode_slug] ? "▶" : "▼"}</span>
+            <span>
+              {explanation.mode_name} {sectionStatus(explanation.mode_slug) ? "✔" : "⚠ не заполнено"}
+            </span>
+          </button>
+
+          {!collapsedSections[explanation.mode_slug] && (
+            <div className="books-subpanel">
+              <div className="books-section-head">
+                <div>
+                  <h3 className="books-subpanel__title">{explanation.mode_name}</h3>
+                  <p className="books-section-help">Короткие слайды, объясняющие книгу детям простым языком.</p>
+                </div>
+                <label className="books-checkbox books-checkbox--inline">
                   <input
-                    className="books-input"
-                    value={question.question}
-                    placeholder="Кто главный герой книги?"
+                    type="checkbox"
+                    checked={explanation.is_published}
+                    onChange={(event) =>
+                      updateExplanation(explanationIndex, {
+                        ...explanation,
+                        is_published: event.target.checked,
+                      })
+                    }
+                  />
+                  <span>
+                    <strong>Опубликовано</strong>
+                    <small>Управляет публикацией только этого объяснения.</small>
+                  </span>
+                </label>
+              </div>
+
+              {explanation.slides.map((slide, slideIndex) => (
+                <label className="books-field" key={`${explanation.mode_id}-${slideIndex}`}>
+                  {helperLabel(
+                    `Слайд ${slideIndex + 1}`,
+                    "Напишите короткое предложение для ребёнка.",
+                    "Короткая понятная фраза о книге. Без длинных академических формулировок.",
+                  )}
+                  <textarea
+                    className="books-input books-input--textarea books-input--small-textarea"
+                    value={slide.text}
+                    placeholder="Короткая фраза для объяснения."
                     onChange={(event) => {
-                      const tests = [...editor.tests];
-                      const quiz = [...test.quiz];
-                      quiz[questionIndex] = { ...question, question: event.target.value };
-                      tests[testIndex] = { ...test, quiz };
-                      updateTests(tests);
+                      const slides = explanation.slides.map((item, index) =>
+                        index === slideIndex ? { text: event.target.value } : item,
+                      );
+                      updateExplanation(explanationIndex, { ...explanation, slides });
                     }}
                   />
                 </label>
+              ))}
 
-                <div className="books-grid books-grid--2">
-                  {question.options.map((option, optionIndex) => (
-                    <label className="books-field" key={`${questionIndex}-${optionIndex}`}>
-                      {helperLabel(
-                        `Ответ ${optionIndex + 1}`,
-                        "Введите вариант ответа.",
-                        "Используйте 3–4 варианта ответа.",
-                      )}
-                      <input
-                        className="books-input"
-                        value={option}
-                        placeholder="Вариант ответа"
-                        onChange={(event) => {
-                          const tests = [...editor.tests];
-                          const quiz = [...test.quiz];
-                          const options = [...question.options];
-                          options[optionIndex] = event.target.value;
-                          quiz[questionIndex] = { ...question, options };
-                          tests[testIndex] = { ...test, quiz };
-                          updateTests(tests);
-                        }}
-                      />
-                    </label>
-                  ))}
-                </div>
-
-                <label className="books-field">
-                  {helperLabel("Правильный ответ", "Выберите правильный вариант.", "Выберите номер правильного ответа из списка.")}
-                  <select
-                    className="books-input"
-                    value={question.correctAnswerIndex}
-                    onChange={(event) => {
-                      const tests = [...editor.tests];
-                      const quiz = [...test.quiz];
-                      quiz[questionIndex] = { ...question, correctAnswerIndex: Number(event.target.value) };
-                      tests[testIndex] = { ...test, quiz };
-                      updateTests(tests);
-                    }}
-                  >
-                    {question.options.map((_, optionIndex) => (
-                      <option key={optionIndex} value={optionIndex}>
-                        Вариант {optionIndex + 1}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+              <div className="books-actions books-actions--compact">
+                <button
+                  type="button"
+                  className="books-button books-button--secondary"
+                  disabled={busyKey === `generate-explanation:${explanation.mode_id}`}
+                  onClick={() => {
+                    void generateExplanation(explanationIndex);
+                  }}
+                >
+                  {busyKey === `generate-explanation:${explanation.mode_id}` ? "Генерация..." : "Сгенерировать"}
+                </button>
+                <button
+                  type="button"
+                  className="books-button books-button--ghost"
+                  onClick={() =>
+                    updateExplanation(explanationIndex, {
+                      ...explanation,
+                      slides: [...explanation.slides, { text: "" }],
+                    })
+                  }
+                >
+                  Добавить слайд
+                </button>
+                <button
+                  type="button"
+                  className={saveButtonClass(saveState, explanation.mode_slug)}
+                  disabled={busyKey === `save-explanation:${explanation.mode_id}`}
+                  onClick={() => {
+                    void saveExplanation(explanationIndex);
+                  }}
+                >
+                  {busyKey === `save-explanation:${explanation.mode_id}`
+                    ? "Сохранение..."
+                    : saveButtonLabel(saveState, explanation.mode_slug)}
+                </button>
               </div>
-            ))}
+            </div>
+          )}
+        </section>
+      ))}
 
-            <div className="books-actions books-actions--compact">
+      <section className="books-panel">
+        <button type="button" className="books-collapse" onClick={() => toggleSection("tests")}>
+          <span>{collapsedSections.tests ? "▶" : "▼"}</span>
+          <span>
+            Тесты {sectionStatus("tests") ? "✔" : "⚠ не заполнено"}
+          </span>
+        </button>
+
+        {!collapsedSections.tests && (
+          <>
+            <div className="books-section-head">
+              <div>
+                <h2 className="books-panel__title">Тесты</h2>
+                <p className="books-section-help">Каждый тест можно редактировать, генерировать и сохранять отдельно.</p>
+              </div>
               <button
                 type="button"
                 className="books-button books-button--secondary"
-                disabled={busyKey === `generate-test:${testIndex}`}
                 onClick={() => {
-                  void generateTest(testIndex);
+                  updateTests([...editor.tests, emptyTest(editor.tests.length)]);
+                  markDirty(`test:${editor.tests.length}`);
+                  setCollapsedSections((current) => ({ ...current, tests: false, [`test:${editor.tests.length}`]: false }));
                 }}
               >
-                {busyKey === `generate-test:${testIndex}` ? "Генерация..." : "Сгенерировать"}
-              </button>
-              <button
-                type="button"
-                className="books-button books-button--ghost"
-                onClick={() => {
-                  const tests = [...editor.tests];
-                  tests[testIndex] = { ...test, quiz: [...test.quiz, emptyQuestion()] };
-                  updateTests(tests);
-                }}
-              >
-                Добавить вопрос
-              </button>
-              <button
-                type="button"
-                className="books-button books-button--primary"
-                disabled={busyKey === `save-test:${testIndex}`}
-                onClick={() => {
-                  void saveTest(testIndex);
-                }}
-              >
-                {busyKey === `save-test:${testIndex}` ? "Сохранение..." : "Сохранить"}
+                Добавить тест
               </button>
             </div>
-          </div>
-        ))}
+
+            {editor.tests.map((test, testIndex) => (
+              <div className="books-subpanel" key={test.id ?? `test-${testIndex}`}>
+                <button type="button" className="books-collapse" onClick={() => toggleSection(`test:${testIndex}`)}>
+                  <span>{collapsedSections[`test:${testIndex}`] ? "▶" : "▼"}</span>
+                  <span>
+                    Тест {testIndex + 1} {saveState[`test:${testIndex}`] === "saved" ? "✔" : ""}
+                  </span>
+                </button>
+
+                {!collapsedSections[`test:${testIndex}`] && (
+                  <>
+                    <div className="books-section-head">
+                      <h3 className="books-subpanel__title">Тест {testIndex + 1}</h3>
+                      <button
+                        type="button"
+                        className="books-button books-button--ghost"
+                        disabled={busyKey === `delete-test:${testIndex}`}
+                        onClick={() => {
+                          void deleteTest(testIndex);
+                        }}
+                      >
+                        {busyKey === `delete-test:${testIndex}` ? "Удаление..." : "Удалить"}
+                      </button>
+                    </div>
+
+                    <div className="books-grid books-grid--2">
+                      <label className="books-field">
+                        {helperLabel("Название теста", "Короткое название блока теста.", "Пример: Тест по сюжету.")}
+                        <input
+                          className="books-input"
+                          value={test.title}
+                          placeholder="Тест по сюжету"
+                          onChange={(event) => {
+                            const tests = [...editor.tests];
+                            tests[testIndex] = { ...test, title: event.target.value };
+                            updateTests(tests);
+                            markDirty(`test:${testIndex}`);
+                          }}
+                        />
+                      </label>
+
+                      <label className="books-field">
+                        {helperLabel("Описание", "Короткая инструкция для ребёнка.", "Необязательное поле. Одно короткое предложение.")}
+                        <input
+                          className="books-input"
+                          value={test.description ?? ""}
+                          placeholder="Ответь на вопросы по книге"
+                          onChange={(event) => {
+                            const tests = [...editor.tests];
+                            tests[testIndex] = { ...test, description: event.target.value };
+                            updateTests(tests);
+                            markDirty(`test:${testIndex}`);
+                          }}
+                        />
+                      </label>
+                    </div>
+
+                    {test.quiz.map((question, questionIndex) => (
+                      <div className="books-question" key={`${testIndex}-${questionIndex}`}>
+                        <label className="books-field">
+                          {helperLabel(
+                            `Вопрос ${questionIndex + 1}`,
+                            "Введите вопрос по книге.",
+                            "Короткий и понятный вопрос для ребёнка.",
+                          )}
+                          <input
+                            className="books-input"
+                            value={question.question}
+                            placeholder="Кто главный герой книги?"
+                            onChange={(event) => {
+                              const tests = [...editor.tests];
+                              const quiz = [...test.quiz];
+                              quiz[questionIndex] = { ...question, question: event.target.value };
+                              tests[testIndex] = { ...test, quiz };
+                              updateTests(tests);
+                              markDirty(`test:${testIndex}`);
+                            }}
+                          />
+                        </label>
+
+                        <div className="books-grid books-grid--2">
+                          {question.options.map((option, optionIndex) => (
+                            <label className="books-field" key={`${questionIndex}-${optionIndex}`}>
+                              {helperLabel(
+                                `Ответ ${optionIndex + 1}`,
+                                "Введите вариант ответа.",
+                                "Используйте 3–4 варианта ответа.",
+                              )}
+                              <input
+                                className="books-input"
+                                value={option}
+                                placeholder="Вариант ответа"
+                                onChange={(event) => {
+                                  const tests = [...editor.tests];
+                                  const quiz = [...test.quiz];
+                                  const options = [...question.options];
+                                  options[optionIndex] = event.target.value;
+                                  quiz[questionIndex] = { ...question, options };
+                                  tests[testIndex] = { ...test, quiz };
+                                  updateTests(tests);
+                                  markDirty(`test:${testIndex}`);
+                                }}
+                              />
+                            </label>
+                          ))}
+                        </div>
+
+                        <label className="books-field">
+                          {helperLabel("Правильный ответ", "Выберите правильный вариант.", "Выберите номер правильного ответа из списка.")}
+                          <select
+                            className="books-input"
+                            value={question.correctAnswerIndex}
+                            onChange={(event) => {
+                              const tests = [...editor.tests];
+                              const quiz = [...test.quiz];
+                              quiz[questionIndex] = { ...question, correctAnswerIndex: Number(event.target.value) };
+                              tests[testIndex] = { ...test, quiz };
+                              updateTests(tests);
+                              markDirty(`test:${testIndex}`);
+                            }}
+                          >
+                            {question.options.map((_, optionIndex) => (
+                              <option key={optionIndex} value={optionIndex}>
+                                Вариант {optionIndex + 1}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                    ))}
+
+                    <div className="books-actions books-actions--compact">
+                      <button
+                        type="button"
+                        className="books-button books-button--secondary"
+                        disabled={busyKey === `generate-test:${testIndex}`}
+                        onClick={() => {
+                          void generateTest(testIndex);
+                        }}
+                      >
+                        {busyKey === `generate-test:${testIndex}` ? "Генерация..." : "Сгенерировать"}
+                      </button>
+                      <button
+                        type="button"
+                        className="books-button books-button--ghost"
+                        onClick={() => {
+                          const tests = [...editor.tests];
+                          tests[testIndex] = { ...test, quiz: [...test.quiz, emptyQuestion()] };
+                          updateTests(tests);
+                          markDirty(`test:${testIndex}`);
+                        }}
+                      >
+                        Добавить вопрос
+                      </button>
+                      <button
+                        type="button"
+                        className={saveButtonClass(saveState, `test:${testIndex}`)}
+                        disabled={busyKey === `save-test:${testIndex}`}
+                        onClick={() => {
+                          void saveTest(testIndex);
+                        }}
+                      >
+                        {busyKey === `save-test:${testIndex}`
+                          ? "Сохранение..."
+                          : saveButtonLabel(saveState, `test:${testIndex}`)}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </>
+        )}
       </section>
     </div>
   );

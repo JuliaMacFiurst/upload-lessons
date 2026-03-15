@@ -219,6 +219,21 @@
   color: #1f7a38;
 }
 
+.books-collapse {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  font-size: 1rem;
+  font-weight: 700;
+  color: #23384d;
+  cursor: pointer;
+}
+
 .books-alert {
   padding: 14px 16px;
   border-radius: 12px;
@@ -284,6 +299,119 @@
   text-decoration: none;
 }
 
+.book-progress {
+  width: 100%;
+  height: 8px;
+  background: #eee;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.book-progress__bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4caf50, #8bc34a);
+  transition: width 0.2s ease;
+}
+
+.book-section-status-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+}
+
+.book-section-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #f4f7fb;
+  color: #405164;
+  font-weight: 600;
+}
+
+.book-section-status__ok {
+  color: #1f7a38;
+}
+
+.book-section-status__warning {
+  color: #d9822b;
+}
+
+.story-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.story-overview-card {
+  border: 1px solid #d8e0ea;
+  border-radius: 18px;
+  padding: 18px;
+  background: #fbfdff;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.story-overview-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.story-overview-step {
+  display: grid;
+  grid-template-columns: 80px 1fr auto;
+  gap: 10px;
+  align-items: center;
+  font-size: 0.95rem;
+}
+
+.story-overview-step__role {
+  font-weight: 700;
+  color: #23425e;
+}
+
+.story-overview-step__count {
+  color: #4c5c6f;
+}
+
+.story-overview-step__warning {
+  color: #d9822b;
+  font-weight: 600;
+}
+
+.story-overview-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.story-overview-progress__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #556578;
+  font-size: 0.92rem;
+}
+
+.story-progress {
+  width: 100%;
+  height: 8px;
+  background: #eee;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.story-progress__bar {
+  height: 100%;
+  background: linear-gradient(90deg, #4caf50, #8bc34a);
+  transition: width 0.2s ease;
+}
+
 @media (max-width: 980px) {
   .books-admin-page {
     padding: 20px;
@@ -298,7 +426,8 @@
   .books-grid--3,
   .books-checkbox-grid,
   .books-table__head,
-  .books-table__row {
+  .books-table__row,
+  .story-overview-step {
     grid-template-columns: 1fr;
   }
 }

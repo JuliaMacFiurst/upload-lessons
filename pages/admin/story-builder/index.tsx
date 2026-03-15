@@ -12,6 +12,7 @@ import type {
   StoryBuilderResponse,
   StoryBuilderTemplate,
   StoryFragmentInput,
+  StoryTemplateOverviewRow,
   StoryRoleKey,
   StoryTwistInput,
 } from "../../../lib/books/types";
@@ -40,6 +41,15 @@ const ROLE_QUESTIONS_RU: Record<StoryRoleKey, string> = {
   problem: "Какая проблема появляется в пути?",
   solution: "Как капибара решает проблему?",
   ending: "Чем заканчивается история?",
+};
+
+type StoryTemplateStats = {
+  id: string;
+  name: string;
+  description: string | null;
+  keywords: string[] | null;
+  age_group: string | null;
+  steps: Record<StoryRoleKey, number>;
 };
 
 function helperLabel(label: string, tooltip: string, help: string) {
@@ -157,6 +167,62 @@ function buildInitialCollapsedFragments(templates: StoryBuilderTemplate[]) {
   return next;
 }
 
+function groupOverviewRows(rows: StoryTemplateOverviewRow[]): StoryTemplateStats[] {
+  const grouped = new Map<string, StoryTemplateStats>();
+
+  rows.forEach((row) => {
+    const current =
+      grouped.get(row.id) ??
+      {
+        id: row.id,
+        name: row.name,
+        description: row.description,
+        keywords: row.keywords,
+        age_group: row.age_group,
+        steps: {
+          intro: 0,
+          journey: 0,
+          problem: 0,
+          solution: 0,
+          ending: 0,
+        },
+      };
+
+    current.steps[row.step_key] = row.choices_count;
+    grouped.set(row.id, current);
+  });
+
+  return Array.from(grouped.values()).sort((left, right) => left.name.localeCompare(right.name, "ru"));
+}
+
+function totalVariants(stats: StoryTemplateStats) {
+  return STORY_ROLE_KEYS.reduce((sum, role) => sum + (stats.steps[role] ?? 0), 0);
+}
+
+function completionPercent(stats: StoryTemplateStats) {
+  return Math.round(Math.min(totalVariants(stats) / 15, 1) * 100);
+}
+
+function progressTone(percent: number) {
+  if (percent < 40) {
+    return "#d9534f";
+  }
+  if (percent <= 70) {
+    return "#f0ad4e";
+  }
+  return "#4caf50";
+}
+
+function variantsLabel(count: number) {
+  if (count % 10 === 1 && count % 100 !== 11) {
+    return "вариант";
+  }
+  if ([2, 3, 4].includes(count % 10) && ![12, 13, 14].includes(count % 100)) {
+    return "варианта";
+  }
+  return "вариантов";
+}
+
 function fragmentStateKey(templateIndex: number, role: StoryRoleKey, fragmentIndex: number) {
   return `fragment:${templateIndex}:${role}:${fragmentIndex}`;
 }
@@ -173,10 +239,12 @@ export default function StoryBuilderPage() {
   const router = useRouter();
   const supabase = createClientComponentClient();
   const fragmentRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const templateEditorRefs = useRef<Record<string, HTMLElement | null>>({});
 
   const [sessionChecked, setSessionChecked] = useState(false);
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<StoryBuilderTemplate[]>([]);
+  const [overviewStats, setOverviewStats] = useState<StoryTemplateStats[]>([]);
   const [twists, setTwists] = useState<StoryBuilderResponse["twists"]>([]);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -188,6 +256,11 @@ export default function StoryBuilderPage() {
   const [collapsedChoices, setCollapsedChoices] = useState<Record<string, boolean>>({});
   const [collapsedFragments, setCollapsedFragments] = useState<Record<string, boolean>>({});
   const [pendingScrollKey, setPendingScrollKey] = useState<string | null>(null);
+
+  const loadOverview = useCallback(async () => {
+    const overview = await fetchJson<{ rows: StoryTemplateOverviewRow[] }>("/api/admin/story-builder/overview");
+    setOverviewStats(groupOverviewRows(overview.rows));
+  }, []);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -203,8 +276,12 @@ export default function StoryBuilderPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchJson<StoryBuilderResponse>("/api/admin/story-builder");
+      const [data, overview] = await Promise.all([
+        fetchJson<StoryBuilderResponse>("/api/admin/story-builder"),
+        fetchJson<{ rows: StoryTemplateOverviewRow[] }>("/api/admin/story-builder/overview"),
+      ]);
       setTemplates(data.templates);
+      setOverviewStats(groupOverviewRows(overview.rows));
       setTwists(data.twists);
       setCollapsedSteps(buildInitialCollapsedSteps(data.templates));
       setCollapsedChoices(buildInitialCollapsedChoices(data.templates));
@@ -240,6 +317,14 @@ export default function StoryBuilderPage() {
   const showSuccess = (message: string) => {
     setSuccess(message);
     setError(null);
+  };
+
+  const scrollToTemplateEditor = (templateId: string) => {
+    const element = templateEditorRefs.current[templateId];
+    if (!element) {
+      return;
+    }
+    element.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const showSaveError = (message: string) => {
@@ -309,6 +394,7 @@ export default function StoryBuilderPage() {
         name: data.template.name,
       });
       markSaved(`template:${templateIndex}`);
+      await loadOverview();
       showSuccess("Шаблон истории сохранён.");
     } catch (fetchError) {
       showSaveError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -476,6 +562,7 @@ export default function StoryBuilderPage() {
         markSaved(choiceStateKey(templateIndex, stepIndex, choiceIndex));
       });
       setCollapsedSteps((current) => ({ ...current, [stepSaveKey]: true }));
+      await loadOverview();
       showSuccess(`Шаг ${role} и все связанные данные сохранены.`);
     } catch (fetchError) {
       showSaveError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -809,8 +896,91 @@ export default function StoryBuilderPage() {
       {error && <div className="books-alert books-alert--error">{error}</div>}
       {success && <div className="books-alert books-alert--success">{success}</div>}
 
+      <section className="books-panel">
+        <div className="books-section-head">
+          <div>
+            <h2 className="books-panel__title">Конструкторы историй</h2>
+            <p className="books-section-help">
+              Сводка по готовности шаблонов: сразу видно, где не хватает вариантов для шагов.
+            </p>
+          </div>
+        </div>
+
+        {overviewStats.length === 0 ? (
+          <div className="books-section-help">Сохранённые конструкторы ещё не найдены.</div>
+        ) : (
+          <div className="story-overview-grid">
+            {overviewStats.map((stats) => {
+              const percent = completionPercent(stats);
+              const total = totalVariants(stats);
+
+              return (
+                <article className="story-overview-card" key={stats.id}>
+                  <div className="books-section-head">
+                    <div>
+                      <h3 className="books-subpanel__title">{stats.name}</h3>
+                      <p className="books-section-help">
+                        {stats.keywords?.length ? stats.keywords.join(", ") : "Без ключевых слов"}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      className="books-button books-button--secondary"
+                      onClick={() => scrollToTemplateEditor(stats.id)}
+                    >
+                      Редактировать
+                    </button>
+                  </div>
+
+                  <div className="story-overview-steps">
+                    {STORY_ROLE_KEYS.map((role) => {
+                      const count = stats.steps[role] ?? 0;
+                      return (
+                        <div className="story-overview-step" key={`${stats.id}:${role}`}>
+                          <span className="story-overview-step__role">{role}</span>
+                          <span className="story-overview-step__count">
+                            {count} {variantsLabel(count)}
+                          </span>
+                          {count < 3 ? <span className="story-overview-step__warning">⚠ мало вариантов</span> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="story-overview-progress">
+                    <div className="story-overview-progress__meta">
+                      <span>Заполненность</span>
+                      <span>
+                        {percent}% · {total}/15
+                      </span>
+                    </div>
+                    <div className="story-progress">
+                      <div
+                        className="story-progress__bar"
+                        style={{
+                          width: `${percent}%`,
+                          background: `linear-gradient(90deg, ${progressTone(percent)}, ${progressTone(percent)})`,
+                        }}
+                      />
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
       {templates.map((template, templateIndex) => (
-        <section className="books-panel" key={template.id ?? `template-${templateIndex}`}>
+        <section
+          className="books-panel"
+          key={template.id ?? `template-${templateIndex}`}
+          ref={(element) => {
+            if (template.id) {
+              templateEditorRefs.current[template.id] = element;
+            }
+          }}
+        >
           <div className="books-section-head">
             <div>
               <h2 className="books-panel__title">Шаблон истории</h2>

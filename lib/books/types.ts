@@ -185,3 +185,13 @@ export type StoryBuilderResponse = {
   templates: StoryBuilderTemplate[];
   twists: StoryTwistInput[];
 };
+
+export type StoryTemplateOverviewRow = {
+  id: string;
+  name: string;
+  description: string | null;
+  keywords: string[] | null;
+  age_group: string | null;
+  step_key: StoryRoleKey;
+  choices_count: number;
+};
