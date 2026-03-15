@@ -7,9 +7,11 @@ export function AdminTabs() {
   const router = useRouter();
 
   const tabs = [
-    { href: "/admin/upload-lesson", label: "Upload lesson" },
-    { href: "/admin/upload-video", label: "Upload video" },
-    { href: "/admin/translations", label: "Translations" },
+    { href: "/admin/upload-lesson", label: "Уроки" },
+    { href: "/admin/upload-video", label: "Видео" },
+    { href: "/admin/translations", label: "Переводы" },
+    { href: "/admin/books", label: "Книги" },
+    { href: "/admin/story-builder", label: "Истории" },
   ];
 
   return (
@@ -22,7 +24,10 @@ export function AdminTabs() {
       }}
     >
       {tabs.map((tab) => {
-        const isActive = router.pathname === tab.href;
+        const isActive =
+          router.pathname === tab.href ||
+          (tab.href === "/admin/books" && router.pathname.startsWith("/admin/books")) ||
+          (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder"));
 
         return (
           <Link key={tab.href} href={tab.href} legacyBehavior>
