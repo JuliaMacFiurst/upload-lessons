@@ -263,7 +263,7 @@
 .books-table__head,
 .books-table__row {
   display: grid;
-  grid-template-columns: 2fr 1.2fr 0.7fr 0.9fr 0.9fr;
+  grid-template-columns: 1.8fr 1.1fr 1.1fr 1.2fr 1fr 0.8fr;
   gap: 16px;
   padding: 14px 16px;
 }
@@ -288,15 +288,82 @@
   color: #6c7a8d;
 }
 
+.books-progress-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.books-progress-inline {
+  width: 100%;
+  height: 8px;
+  background: #edf1f5;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.books-progress-inline__fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.2s ease;
+}
+
 .books-table__empty {
   padding: 20px 16px;
   color: #6a788a;
+}
+
+.books-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.books-block__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.delete-button {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+  color: #999999;
+  padding: 2px 4px;
+}
+
+.delete-button:hover:not(:disabled) {
+  color: #ff4d4f;
+}
+
+.delete-button:disabled {
+  cursor: not-allowed;
+  color: #c8d0d9;
 }
 
 .books-link {
   color: #0f4d86;
   font-weight: 700;
   text-decoration: none;
+}
+
+.books-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.books-badge--pending {
+  background: #f0ad4e;
+  color: #ffffff;
 }
 
 .book-progress {
@@ -337,6 +404,20 @@
 
 .book-section-status__warning {
   color: #d9822b;
+}
+
+.books-progress-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+.books-progress-block__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #405164;
 }
 
 .story-overview-grid {

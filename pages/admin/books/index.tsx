@@ -1,12 +1,34 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminTabs } from "../../../components/AdminTabs";
 import { AdminLogout } from "../../../components/AdminLogout";
 import type { BookListItem } from "../../../lib/books/types";
+
+type BatchPlannedBook = {
+  title: string;
+  author: string | null;
+};
+
+function progressColor(percent: number) {
+  if (percent >= 100) {
+    return "#4caf50";
+  }
+  if (percent > 80) {
+    return "#d4b106";
+  }
+  if (percent > 40) {
+    return "#f0ad4e";
+  }
+  return "#d9534f";
+}
+
+function formatIls(value: number) {
+  return `${value.toFixed(3)} ₪`;
+}
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
@@ -28,6 +50,16 @@ export default function AdminBooksIndexPage() {
   const [books, setBooks] = useState<BookListItem[]>([]);
   const [loadingBooks, setLoadingBooks] = useState(false);
   const [checkingBook, setCheckingBook] = useState(false);
+  const [batchAgeGroup, setBatchAgeGroup] = useState("8-10");
+  const [batchGenre, setBatchGenre] = useState("");
+  const [batchCount, setBatchCount] = useState(5);
+  const [batchPlan, setBatchPlan] = useState<BatchPlannedBook[]>([]);
+  const [batchId, setBatchId] = useState<string | null>(null);
+  const [batchEstimate, setBatchEstimate] = useState<{ estimated_tokens: number; estimated_cost_ils: number } | null>(null);
+  const [planningBatch, setPlanningBatch] = useState(false);
+  const [runningBatch, setRunningBatch] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{ current: number; total: number } | null>(null);
+  const [statusFilter, setStatusFilter] = useState<"all" | "published" | "pending">("all");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -49,7 +81,7 @@ export default function AdminBooksIndexPage() {
     return `/api/admin/books${params.toString() ? `?${params.toString()}` : ""}`;
   }, [search]);
 
-  const loadBooks = async () => {
+  const loadBooks = useCallback(async () => {
     setLoadingBooks(true);
     setError(null);
     try {
@@ -60,6 +92,23 @@ export default function AdminBooksIndexPage() {
     } finally {
       setLoadingBooks(false);
     }
+  }, [searchUrl]);
+
+  const filteredBooks = books.filter((book) => {
+    if (statusFilter === "published") {
+      return book.is_published === true;
+    }
+    if (statusFilter === "pending") {
+      return book.is_published === false;
+    }
+    return true;
+  });
+
+  const formatMissingSections = (book: BookListItem) => {
+    if (!book.missing_sections || book.missing_sections.length === 0) {
+      return "—";
+    }
+    return book.missing_sections.join(", ");
   };
 
   useEffect(() => {
@@ -67,7 +116,7 @@ export default function AdminBooksIndexPage() {
       return;
     }
     void loadBooks();
-  }, [sessionChecked, searchUrl]);
+  }, [sessionChecked, loadBooks]);
 
   const checkBook = async () => {
     setCheckingBook(true);
@@ -94,6 +143,90 @@ export default function AdminBooksIndexPage() {
     }
   };
 
+  const planBatch = async () => {
+    setPlanningBatch(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const data = await fetchJson<{
+        batchId: string;
+        books: BatchPlannedBook[];
+        estimated_tokens: number;
+        estimated_cost_ils: number;
+      }>("/api/admin/generate-book-batch-plan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ageGroup: batchAgeGroup,
+          genre: batchGenre || null,
+          count: batchCount,
+        }),
+      });
+
+      setBatchPlan(data.books);
+      setBatchId(data.batchId);
+      setBatchEstimate({
+        estimated_tokens: data.estimated_tokens,
+        estimated_cost_ils: data.estimated_cost_ils,
+      });
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setPlanningBatch(false);
+    }
+  };
+
+  const runBatch = async () => {
+    if (batchPlan.length === 0) {
+      return;
+    }
+
+    setRunningBatch(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      let generated = 0;
+      let failed = 0;
+      for (let index = 0; index < batchPlan.length; index += 1) {
+        const book = batchPlan[index];
+        setBatchProgress({ current: index + 1, total: batchPlan.length });
+        const result = await fetchJson<{
+          batchId: string;
+          books: Array<{ id: string; title: string }>;
+          generated: number;
+          failed: number;
+        }>("/api/admin/generate-book-batch-run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            batchId,
+            books: [
+              {
+                ...book,
+                ageGroup: batchAgeGroup,
+                genre: batchGenre || null,
+              },
+            ],
+          }),
+        });
+        generated += result.generated;
+        failed += result.failed;
+      }
+
+      await loadBooks();
+      setBatchPlan([]);
+      setBatchId(null);
+      setBatchEstimate(null);
+      setSuccess(`Готово: ${generated} книг сгенерировано, ${failed} с ошибками`);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setRunningBatch(false);
+      setBatchProgress(null);
+    }
+  };
+
   if (!sessionChecked) {
     return <p style={{ padding: 24 }}>Checking session...</p>;
   }
@@ -113,10 +246,141 @@ export default function AdminBooksIndexPage() {
         <div>
           <h1 className="books-admin-title">Books CMS</h1>
           <p className="books-admin-subtitle">
-            Search books, create new entries, and open the full editor for explanations, tests, and capybara stories.
+            Search books, create new entries, and immediately see how complete each book is.
           </p>
         </div>
       </header>
+
+      <section className="books-panel">
+        <div className="books-section-head">
+          <div>
+            <h2 className="books-panel__title">Пакетная генерация книг</h2>
+            <p className="books-section-help">
+              Сначала создаётся список книг, затем показывается стоимость, и только после подтверждения запускается последовательная генерация.
+            </p>
+          </div>
+        </div>
+
+        <div className="books-grid books-grid--3">
+          <label className="books-field">
+            <span className="books-field__label">Возрастная группа</span>
+            <select className="books-input" value={batchAgeGroup} onChange={(event) => setBatchAgeGroup(event.target.value)}>
+              <option value="5-7">5-7</option>
+              <option value="8-10">8-10</option>
+              <option value="10-12">10-12</option>
+            </select>
+          </label>
+
+          <label className="books-field">
+            <span className="books-field__label">Жанр</span>
+            <select className="books-input" value={batchGenre} onChange={(event) => setBatchGenre(event.target.value)}>
+              <option value="">Любой</option>
+              <option value="приключения">приключения</option>
+              <option value="фантастика">фантастика</option>
+              <option value="сказка">сказка</option>
+              <option value="детектив">детектив</option>
+              <option value="юмор">юмор</option>
+            </select>
+          </label>
+
+          <label className="books-field">
+            <span className="books-field__label">Количество книг</span>
+            <input
+              className="books-input"
+              type="number"
+              min={1}
+              max={20}
+              value={batchCount}
+              onChange={(event) => setBatchCount(Number(event.target.value) || 1)}
+            />
+          </label>
+        </div>
+
+        <div className="books-actions">
+          <button
+            type="button"
+            className="books-button books-button--secondary"
+            disabled={planningBatch || runningBatch}
+            onClick={() => {
+              void planBatch();
+            }}
+          >
+            {planningBatch ? "Расчёт..." : "Рассчитать"}
+          </button>
+        </div>
+
+        {batchEstimate && batchPlan.length > 0 ? (
+          <div className="books-subpanel">
+            <div className="books-section-head">
+              <div>
+                <h3 className="books-subpanel__title">Подтверждение генерации</h3>
+                <p className="books-section-help">Будет сгенерировано книг: {batchPlan.length}</p>
+              </div>
+            </div>
+
+            <div className="story-overview-steps">
+              {batchPlan.map((book) => (
+                <div className="story-overview-step" key={book.title}>
+                  <span className="story-overview-step__role">{book.title}</span>
+                  <span className="story-overview-step__count">{book.author ?? "Автор не указан"}</span>
+                  <span />
+                </div>
+              ))}
+              <div className="story-overview-step">
+                <span className="story-overview-step__role">Токены</span>
+                <span className="story-overview-step__count">{batchEstimate.estimated_tokens} токенов</span>
+                <span />
+              </div>
+              <div className="story-overview-step">
+                <span className="story-overview-step__role">Стоимость</span>
+                <span className="story-overview-step__count">Примерная стоимость</span>
+                <span>{formatIls(batchEstimate.estimated_cost_ils)}</span>
+              </div>
+            </div>
+
+            <div className="books-actions">
+              <button
+                type="button"
+                className="books-button books-button--ghost"
+                disabled={runningBatch}
+                onClick={() => {
+                  setBatchPlan([]);
+                  setBatchId(null);
+                  setBatchEstimate(null);
+                  setBatchProgress(null);
+                }}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="books-button books-button--primary"
+                disabled={runningBatch}
+                onClick={() => {
+                  void runBatch();
+                }}
+              >
+                {runningBatch ? "Генерация..." : "Запустить генерацию"}
+              </button>
+            </div>
+
+            {batchProgress ? (
+              <div className="books-progress-block">
+                <div className="books-progress-block__meta">
+                  <strong>Генерируется книга {batchProgress.current} / {batchProgress.total}</strong>
+                  <span>{Math.round((batchProgress.current / batchProgress.total) * 100)}%</span>
+                </div>
+                <div className="book-progress">
+                  <div
+                    className="book-progress__bar"
+                    style={{ width: `${Math.round((batchProgress.current / batchProgress.total) * 100)}%` }}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+      </section>
 
       <section className="books-panel">
         <h2 className="books-panel__title">Check Book</h2>
@@ -170,6 +434,29 @@ export default function AdminBooksIndexPage() {
 
       <section className="books-panel">
         <h2 className="books-panel__title">Book Search</h2>
+        <div className="books-actions">
+          <button
+            type="button"
+            className={statusFilter === "all" ? "books-button books-button--primary" : "books-button books-button--ghost"}
+            onClick={() => setStatusFilter("all")}
+          >
+            Все книги
+          </button>
+          <button
+            type="button"
+            className={statusFilter === "published" ? "books-button books-button--primary" : "books-button books-button--ghost"}
+            onClick={() => setStatusFilter("published")}
+          >
+            Опубликованные
+          </button>
+          <button
+            type="button"
+            className={statusFilter === "pending" ? "books-button books-button--primary" : "books-button books-button--ghost"}
+            onClick={() => setStatusFilter("pending")}
+          >
+            Требуют одобрения
+          </button>
+        </div>
         <label className="books-field">
           <span className="books-field__label">
             Search books
@@ -193,22 +480,43 @@ export default function AdminBooksIndexPage() {
           <div className="books-table__head">
             <span>Title</span>
             <span>Author</span>
-            <span>Year</span>
+            <span>Progress</span>
+            <span>Missing</span>
             <span>Status</span>
             <span>Action</span>
           </div>
           {loadingBooks && <div className="books-table__empty">Loading books...</div>}
-          {!loadingBooks && books.length === 0 && <div className="books-table__empty">No books found.</div>}
+          {!loadingBooks && filteredBooks.length === 0 && <div className="books-table__empty">No books found.</div>}
           {!loadingBooks &&
-            books.map((book) => (
+            filteredBooks.map((book) => (
               <div className="books-table__row" key={book.id}>
                 <span>
                   <strong>{book.title}</strong>
                   <small>{book.slug}</small>
                 </span>
                 <span>{book.author || "—"}</span>
-                <span>{book.year ?? "—"}</span>
-                <span>{book.is_published ? "Published" : "Draft"}</span>
+                <span className="books-progress-cell">
+                  <strong>{book.progress_percent ?? 0}%</strong>
+                  <div className="books-progress-inline">
+                    <div
+                      className="books-progress-inline__fill"
+                      style={{
+                        width: `${book.progress_percent ?? 0}%`,
+                        background: progressColor(book.progress_percent ?? 0),
+                      }}
+                    />
+                  </div>
+                </span>
+                <span>
+                  <small>{formatMissingSections(book)}</small>
+                </span>
+                <span>
+                  {book.is_published ? (
+                    "Published"
+                  ) : (
+                    <strong className="books-badge books-badge--pending">⚠ Требует одобрения</strong>
+                  )}
+                </span>
                 <span>
                   <Link className="books-link" href={`/admin/books/${book.id}`}>
                     Edit book

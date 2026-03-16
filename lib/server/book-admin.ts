@@ -3,12 +3,24 @@ import slugify from "slugify";
 import { createPagesServerClient } from "@supabase/auth-helpers-nextjs";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { GoogleGenAI } from "@google/genai";
+import { normalizeSlides } from "../ai/normalizeSlides";
+import {
+  buildExplanationPrompt as buildExplanationPromptText,
+  buildFullExplanationPrompt as buildFullExplanationPromptText,
+  buildStoryPartPrompt as buildStoryPartPromptText,
+  buildStoryTemplatePrompt as buildStoryTemplatePromptText,
+  buildTestPrompt as buildTestPromptText,
+  generateWholeBookPrompt,
+} from "../ai/prompts";
+import { SLIDE_TARGETS } from "../ai/slideTargets";
 import {
   DEFAULT_EXPLANATION_MODE_SLUGS,
   STORY_ROLE_KEYS,
   bookEditorPayloadSchema,
   bookExplanationSchema,
+  bookExplanationSlideSchema,
   bookMetaSchema,
+  bookTestQuestionSchema,
   bookTestSchema,
   type BookEditorPayload,
   type BookEditorResponse,
@@ -53,6 +65,17 @@ type BookTestRow = {
   quiz: unknown;
   is_published: boolean | null;
   sort_order: number | null;
+};
+
+type BookCompletionOverviewRow = {
+  id: string;
+  progress_percent: number | null;
+};
+
+type BookMissingSectionRow = {
+  book_id: string;
+  section: string;
+  is_filled: boolean | null;
 };
 
 type StoryTemplateRow = {
@@ -108,14 +131,6 @@ type QuizDbQuestion = {
 
 type QuizDbPayload = {
   questions?: unknown;
-};
-
-const STORY_ROLE_DESCRIPTIONS: Record<StoryRoleKey, string> = {
-  intro: "Start the story. Introduce the capybara, a discovery, or a playful invitation to adventure.",
-  journey: "Move the story forward. Show the capybara traveling, exploring, or beginning the adventure.",
-  problem: "Introduce the obstacle. Something difficult, surprising, or blocking must happen.",
-  solution: "Resolve the obstacle. The capybara uses a clever, kind, or funny solution.",
-  ending: "Close the story. Show the result, lesson, or happy ending after the solution.",
 };
 
 const STORY_ROLE_QUESTIONS: Record<StoryRoleKey, string> = {
@@ -251,7 +266,7 @@ export async function listBooks(
     .from("books")
     .select("id,title,slug,author,year,is_published,created_at")
     .order("created_at", { ascending: false })
-    .limit(50);
+    .limit(100);
 
   const trimmed = search.trim();
   if (trimmed) {
@@ -262,7 +277,56 @@ export async function listBooks(
   if (error) {
     throw new Error(`Failed to load books: ${error.message}`);
   }
-  return (data as BookListItem[] | null) ?? [];
+
+  const books = (data as BookListItem[] | null) ?? [];
+  if (books.length === 0) {
+    return [];
+  }
+
+  const bookIds = books.map((book) => book.id);
+  const [progressRes, missingRes] = await Promise.all([
+    supabase.from("books_completion_overview").select("id,progress_percent").in("id", bookIds),
+    supabase.from("books_missing_sections").select("book_id,section,is_filled").in("book_id", bookIds),
+  ]);
+
+  if (progressRes.error) {
+    throw new Error(`Failed to load book progress: ${progressRes.error.message}`);
+  }
+
+  if (missingRes.error) {
+    throw new Error(`Failed to load missing book sections: ${missingRes.error.message}`);
+  }
+
+  const progressByBookId = new Map(
+    (((progressRes.data as BookCompletionOverviewRow[] | null) ?? []).map((row) => [
+      row.id,
+      typeof row.progress_percent === "number" ? row.progress_percent : 0,
+    ])),
+  );
+
+  const missingByBookId = new Map<string, string[]>();
+  (((missingRes.data as BookMissingSectionRow[] | null) ?? [])).forEach((row) => {
+    if (row.is_filled) {
+      return;
+    }
+    const list = missingByBookId.get(row.book_id) ?? [];
+    list.push(row.section);
+    missingByBookId.set(row.book_id, list);
+  });
+
+  return books
+    .map((book) => ({
+      ...book,
+      progress_percent: progressByBookId.get(book.id) ?? 0,
+      missing_sections: missingByBookId.get(book.id) ?? [],
+    }))
+    .sort((left, right) => {
+      const progressDelta = (left.progress_percent ?? 0) - (right.progress_percent ?? 0);
+      if (progressDelta !== 0) {
+        return progressDelta;
+      }
+      return (right.created_at ?? "").localeCompare(left.created_at ?? "");
+    });
 }
 
 export async function loadCategoryOptions(supabase: SupabaseClient): Promise<CategoryOption[]> {
@@ -1038,6 +1102,279 @@ export async function deleteBookTest(
   }
 }
 
+export async function approveBook(
+  supabase: SupabaseClient,
+  bookId: string,
+): Promise<void> {
+  const { error } = await supabase.from("books").update({ is_published: true }).eq("id", bookId);
+  if (error) {
+    throw new Error(`Failed to approve book: ${error.message}`);
+  }
+}
+
+export async function deleteBook(
+  supabase: SupabaseClient,
+  bookId: string,
+): Promise<void> {
+  const { error } = await supabase.from("books").delete().eq("id", bookId);
+  if (error) {
+    throw new Error(`Failed to delete book: ${error.message}`);
+  }
+}
+
+const fullBookSectionSchema = z.object({
+  slides: z.array(bookExplanationSlideSchema).min(1),
+});
+
+const looseBookTestQuestionSchema = z.object({
+  question: z.string().trim().min(1).max(300),
+  options: z.array(z.string().trim().min(1).max(220)).min(1),
+  correctAnswerIndex: z.number().int().min(0),
+});
+
+const fullBookGenerationSchema = z.object({
+  description: z.string().trim().min(10).max(300).optional(),
+  keywords: z.array(z.string().trim().min(1).max(60)).min(1).optional(),
+  plot: fullBookSectionSchema.optional(),
+  characters: fullBookSectionSchema.optional(),
+  main_idea: fullBookSectionSchema.optional(),
+  philosophy: fullBookSectionSchema.optional(),
+  conflicts: fullBookSectionSchema.optional(),
+  author_message: fullBookSectionSchema.optional(),
+  ending_meaning: fullBookSectionSchema.optional(),
+  twenty_seconds: fullBookSectionSchema.optional(),
+  test: z
+    .object({
+      title: z.string().trim().min(1),
+      description: z.string().trim().optional().nullable(),
+      quiz: z.array(looseBookTestQuestionSchema).min(1),
+    })
+    .optional(),
+});
+
+function normalizeQuizQuestions(quiz: z.infer<typeof looseBookTestQuestionSchema>[]) {
+  const sourceQuiz =
+    quiz.length > 0
+      ? quiz
+      : [
+          {
+            question: "О чём эта книга?",
+            options: ["О приключении", "О погоде", "О машине"],
+            correctAnswerIndex: 0,
+          },
+        ];
+
+  const normalizedQuiz = sourceQuiz.slice(0, 5).map((question) => {
+    const options = question.options.length > 4
+      ? question.options.slice(0, 4)
+      : question.options.length < 3
+        ? [...question.options, ...Array.from({ length: 3 - question.options.length }, () => question.options[question.options.length - 1] ?? "Ответ")]
+        : question.options;
+
+    const normalizedCorrectIndex = Math.max(0, Math.min(question.correctAnswerIndex, options.length - 1));
+
+    return bookTestQuestionSchema.parse({
+      question: question.question,
+      options,
+      correctAnswerIndex: normalizedCorrectIndex,
+    });
+  });
+
+  while (normalizedQuiz.length < 5) {
+    normalizedQuiz.push(normalizedQuiz[normalizedQuiz.length - 1]);
+  }
+
+  return normalizedQuiz;
+}
+
+function normalizeGeneratedKeywords(keywords: string[] | undefined, title: string) {
+  const normalized = [...new Set((keywords ?? []).map((keyword) => keyword.trim().toLowerCase()).filter(Boolean))]
+    .slice(0, 5);
+
+  if (normalized.length >= 3) {
+    return normalized;
+  }
+
+  const fallback = [title.trim().toLowerCase(), "детская книга", "книга для детей"];
+  return [...new Set([...normalized, ...fallback])].slice(0, 5);
+}
+
+export async function createOrGetBook(
+  supabase: SupabaseClient,
+  input: {
+    title: string;
+    author?: string | null;
+    ageGroup?: string | null;
+  },
+): Promise<BookTableRow> {
+  const existing = await findBookByExactTitle(supabase, input.title);
+  if (existing) {
+    const { data, error } = await supabase.from("books").select("*").eq("id", existing.id).single();
+    if (error || !data) {
+      throw new Error(error?.message ?? "Failed to load existing book.");
+    }
+    return data as BookTableRow;
+  }
+
+  const slug = await createUniqueBookSlug(supabase, input.title);
+  const { data, error } = await supabase
+    .from("books")
+    .insert({
+      title: input.title.trim(),
+      author: input.author?.trim() || null,
+      age_group: input.ageGroup?.trim() || null,
+      slug,
+      is_published: false,
+    })
+    .select("*")
+    .single();
+
+  if (error || !data) {
+    throw new Error(error?.message ?? "Failed to create book.");
+  }
+
+  return data as BookTableRow;
+}
+
+export async function generateAndSaveFullBookContent(
+  supabase: SupabaseClient,
+  input: {
+    bookId: string;
+    title: string;
+    author?: string | null;
+    description?: string | null;
+    ageGroup?: string | null;
+  },
+) {
+  const generated = await runGeminiJsonPrompt<unknown>(
+    generateWholeBookPrompt({
+      title: input.title,
+      author: input.author,
+      description: input.description,
+      ageGroup: input.ageGroup,
+    }),
+  );
+  let parsed: z.infer<typeof fullBookGenerationSchema>;
+  try {
+    parsed = fullBookGenerationSchema.parse(generated);
+  } catch (error) {
+    console.error("Invalid Gemini full book payload", generated);
+    throw new GeminiPipelineError(
+      error instanceof Error ? error.message : "Full book validation failed.",
+      "validation",
+      JSON.stringify(generated),
+    );
+  }
+  const originalSlideLengths = {
+    keywords: parsed.keywords?.length ?? 0,
+    plot: parsed.plot?.slides.length ?? 0,
+    characters: parsed.characters?.slides.length ?? 0,
+    main_idea: parsed.main_idea?.slides.length ?? 0,
+    philosophy: parsed.philosophy?.slides.length ?? 0,
+    conflicts: parsed.conflicts?.slides.length ?? 0,
+    author_message: parsed.author_message?.slides.length ?? 0,
+    ending_meaning: parsed.ending_meaning?.slides.length ?? 0,
+    twenty_seconds: parsed.twenty_seconds?.slides.length ?? 0,
+    quiz: parsed.test?.quiz.length ?? 0,
+  };
+  const normalized = {
+    ...parsed,
+    description: parsed.description?.trim() || input.description?.trim() || null,
+    keywords: normalizeGeneratedKeywords(parsed.keywords, input.title),
+    plot: { slides: normalizeSlides(parsed.plot?.slides ?? [], SLIDE_TARGETS.plot) },
+    characters: { slides: normalizeSlides(parsed.characters?.slides ?? [], SLIDE_TARGETS.characters) },
+    main_idea: { slides: normalizeSlides(parsed.main_idea?.slides ?? [], SLIDE_TARGETS.main_idea) },
+    philosophy: { slides: normalizeSlides(parsed.philosophy?.slides ?? [], SLIDE_TARGETS.philosophy) },
+    conflicts: { slides: normalizeSlides(parsed.conflicts?.slides ?? [], SLIDE_TARGETS.conflicts) },
+    author_message: { slides: normalizeSlides(parsed.author_message?.slides ?? [], SLIDE_TARGETS.author_message) },
+    ending_meaning: { slides: normalizeSlides(parsed.ending_meaning?.slides ?? [], SLIDE_TARGETS.ending_meaning) },
+    twenty_seconds: { slides: normalizeSlides(parsed.twenty_seconds?.slides ?? [], SLIDE_TARGETS.twenty_seconds) },
+    test: {
+      title: parsed.test?.title ?? `Тест по книге «${input.title}»`,
+      description: parsed.test?.description ?? "Ответь на вопросы по книге.",
+      quiz: normalizeQuizQuestions(parsed.test?.quiz ?? []),
+    },
+  };
+  console.info("Normalized Gemini response", {
+    original: originalSlideLengths,
+    normalized: {
+      keywords: normalized.keywords.length,
+      plot: normalized.plot.slides.length,
+      characters: normalized.characters.slides.length,
+      main_idea: normalized.main_idea.slides.length,
+      philosophy: normalized.philosophy.slides.length,
+      conflicts: normalized.conflicts.slides.length,
+      author_message: normalized.author_message.slides.length,
+      ending_meaning: normalized.ending_meaning.slides.length,
+      twenty_seconds: normalized.twenty_seconds.slides.length,
+      quiz: normalized.test.quiz.length,
+    },
+  });
+  const [modes, testsRes] = await Promise.all([
+    loadExplanationModes(supabase),
+    supabase.from("book_tests").select("*").eq("book_id", input.bookId).order("sort_order", { ascending: true }).limit(1),
+  ]);
+
+  if (testsRes.error) {
+    throw new Error(`Failed to load existing tests: ${testsRes.error.message}`);
+  }
+
+  const { error: bookUpdateError } = await supabase
+    .from("books")
+    .update({
+      description: normalized.description,
+      keywords: normalized.keywords,
+    })
+    .eq("id", input.bookId);
+
+  if (bookUpdateError) {
+    throw new Error(`Failed to save generated book fields: ${bookUpdateError.message}`);
+  }
+
+  const modeBySlug = new Map(modes.map((mode) => [mode.slug, mode]));
+  const explanationSections = [
+    "plot",
+    "characters",
+    "main_idea",
+    "philosophy",
+    "conflicts",
+    "author_message",
+    "ending_meaning",
+    "twenty_seconds",
+  ] as const;
+
+  const explanations = await Promise.all(
+    explanationSections.map(async (section) => {
+      const mode = modeBySlug.get(section);
+      if (!mode) {
+        return null;
+      }
+      return saveBookExplanation(supabase, input.bookId, {
+        mode_id: mode.id,
+        mode_slug: mode.slug,
+        mode_name: mode.name,
+        is_published: false,
+        slides: normalized[section].slides,
+      });
+    }),
+  );
+
+  const existingTest = ((testsRes.data as BookTestRow[] | null) ?? [])[0];
+  const test = await saveBookTest(supabase, input.bookId, {
+    id: existingTest?.id,
+    title: normalized.test.title,
+    description: normalized.test.description ?? "Ответь на вопросы по книге.",
+    is_published: false,
+    sort_order: existingTest?.sort_order ?? 0,
+    quiz: normalized.test.quiz,
+  });
+
+  return {
+    explanations: explanations.filter((item): item is NonNullable<typeof item> => item !== null),
+    test,
+  };
+}
+
 async function loadStoryTemplateDetails(
   supabase: SupabaseClient,
   template: StoryTemplateRow,
@@ -1364,6 +1701,18 @@ function cleanGeminiJson(raw: string): string {
     .trim();
 }
 
+export class GeminiPipelineError extends Error {
+  stage: string;
+  rawResponse?: string;
+
+  constructor(message: string, stage: string, rawResponse?: string) {
+    super(message);
+    this.name = "GeminiPipelineError";
+    this.stage = stage;
+    this.rawResponse = rawResponse;
+  }
+}
+
 export function parseGeminiJson(raw: string): unknown {
   const cleaned = cleanGeminiJson(raw);
   try {
@@ -1372,9 +1721,13 @@ export function parseGeminiJson(raw: string): unknown {
     const firstBrace = cleaned.indexOf("{");
     const lastBrace = cleaned.lastIndexOf("}");
     if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+      try {
+        return JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
+      } catch {
+        throw new GeminiPipelineError("Failed to parse Gemini JSON response.", "parse", raw);
+      }
     }
-    throw new Error("Failed to parse Gemini JSON response.");
+    throw new GeminiPipelineError("Failed to parse Gemini JSON response.", "parse", raw);
   }
 }
 
@@ -1384,13 +1737,21 @@ export async function runGeminiJsonPrompt<T>(prompt: string): Promise<T> {
   }
 
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
-    contents: prompt,
-  });
+  let response;
+  try {
+    response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: prompt,
+    });
+  } catch (error) {
+    throw new GeminiPipelineError(
+      error instanceof Error ? error.message : "Gemini generation failed.",
+      "generation",
+    );
+  }
 
   if (!response.text) {
-    throw new Error("Gemini returned an empty response.");
+    throw new GeminiPipelineError("Gemini returned an empty response.", "generation");
   }
 
   return parseGeminiJson(response.text) as T;
@@ -1402,24 +1763,7 @@ export function buildExplanationPrompt(input: {
   description?: string | null;
   mode: string;
 }): string {
-  return [
-    "You write educational book explanations for children.",
-    "Return valid JSON only.",
-    "Output format:",
-    '{"slides":[{"text":"..."},{"text":"..."}]}',
-    "Rules:",
-    "- 3 to 4 slides.",
-    "- Each slide must be 1 short child-friendly sentence.",
-    "- Keep language simple and concrete.",
-    "- Focus only on the requested mode.",
-    "- No markdown.",
-    "- No numbering.",
-    "",
-    `Book title: ${input.title}`,
-    `Author: ${input.author ?? "Unknown"}`,
-    `Description: ${input.description ?? "No description provided."}`,
-    `Mode: ${input.mode}`,
-  ].join("\n");
+  return buildExplanationPromptText(input);
 }
 
 export function buildFullExplanationPrompt(input: {
@@ -1428,21 +1772,7 @@ export function buildFullExplanationPrompt(input: {
   description?: string | null;
   modes: Array<{ slug: string; name: string }>;
 }): string {
-  return [
-    "You write educational book explanations for children.",
-    "Return valid JSON only.",
-    'Output format: {"items":[{"mode":"plot","slides":[{"text":"..."}]}]}',
-    "Rules:",
-    "- Generate only for the listed modes.",
-    "- 3 to 4 slides per mode.",
-    "- Each slide must be 1 short child-friendly sentence.",
-    "- No markdown.",
-    "",
-    `Book title: ${input.title}`,
-    `Author: ${input.author ?? "Unknown"}`,
-    `Description: ${input.description ?? "No description provided."}`,
-    `Modes: ${input.modes.map((mode) => `${mode.slug} (${mode.name})`).join(", ")}`,
-  ].join("\n");
+  return buildFullExplanationPromptText(input);
 }
 
 export function buildTestPrompt(input: {
@@ -1451,22 +1781,7 @@ export function buildTestPrompt(input: {
   description?: string | null;
   ageGroup?: string | null;
 }): string {
-  return [
-    "You write reading comprehension quizzes for children.",
-    "Return valid JSON only.",
-    'Output format: {"title":"...","description":"...","quiz":[{"question":"...","options":["...","...","..."],"correctAnswerIndex":0}]}',
-    "Rules:",
-    "- Create 5 questions.",
-    "- Each question must have 3 or 4 answer options.",
-    "- Exactly one correct answer.",
-    "- Keep questions clear for children.",
-    "- No markdown.",
-    "",
-    `Book title: ${input.title}`,
-    `Author: ${input.author ?? "Unknown"}`,
-    `Description: ${input.description ?? "No description provided."}`,
-    `Age group: ${input.ageGroup ?? "Unknown"}`,
-  ].join("\n");
+  return buildTestPromptText(input);
 }
 
 export function buildStoryPartPrompt(input: {
@@ -1479,48 +1794,7 @@ export function buildStoryPartPrompt(input: {
   previousRole?: StoryRoleKey | null;
   context?: string;
 }): string {
-  const storyRole = input.storyRole ?? "intro";
-  const previousRole = input.previousRole ?? null;
-  const roleDescription = STORY_ROLE_DESCRIPTIONS[storyRole];
-  return [
-    "You are writing a children's capybara story fragment.",
-    "Return valid JSON only.",
-    "Style rules:",
-    "- one short sentence",
-    "- playful capybara tone",
-    "- child-friendly wording",
-    "- no violence or scary details",
-    "- the sentence must match the story role exactly",
-    "- the sentence must logically follow the previous role in the story sequence",
-    "- every fragment must still fit with any other fragment from the same role",
-    "",
-    `Book title: ${input.title}`,
-    `Book description: ${input.description ?? "No description provided."}`,
-    `Age group: ${input.ageGroup ?? "Unknown"}`,
-    `Template name: ${input.templateName ?? "Capybara Story"}`,
-    `Content kind: ${input.kind}`,
-    `Story role: ${storyRole.toUpperCase()}`,
-    `Role instruction: ${roleDescription}`,
-    previousRole
-      ? `Previous story role: ${previousRole.toUpperCase()}`
-      : "Previous story role: none, this is the beginning of the story",
-    `Context: ${input.context ?? "No extra context."}`,
-    "",
-    input.kind === "step"
-      ? `Output format: {"question":"${STORY_ROLE_QUESTIONS[storyRole]}","step_key":"${storyRole}"}`
-      : input.kind === "choice"
-        ? 'Output format: {"text":"...","keywords":["...","..."]}'
-        : input.kind === "fragment"
-          ? 'Output format: {"text":"...","keywords":["...","..."]}'
-          : 'Output format: {"text":"...","keywords":["...","..."]}',
-    "",
-    "Narrative rules by role:",
-    "- INTRO: begin the adventure with a discovery, invitation, or curious start.",
-    "- JOURNEY: continue from the intro by moving toward the adventure.",
-    "- PROBLEM: introduce a clear obstacle that interrupts the journey.",
-    "- SOLUTION: resolve the obstacle with a clever or kind action.",
-    "- ENDING: close the story after the solution with a lesson or happy result.",
-  ].join("\n");
+  return buildStoryPartPromptText(input);
 }
 
 export function buildStoryTemplatePrompt(input: {
@@ -1530,39 +1804,5 @@ export function buildStoryTemplatePrompt(input: {
   templateName: string;
   templateSlug: string;
 }): string {
-  return [
-    "You write interactive capybara story templates for children.",
-    "Return valid JSON only.",
-    'Output format: {"steps":[{"step_key":"...","question":"...","choices":[{"text":"...","keywords":["..."]}]}],"fragments":[{"step_key":"...","choice_index":0,"text":"...","keywords":["..."]}],"twists":[{"text":"...","keywords":["..."]}]}',
-    "Rules:",
-    "- Use exactly 5 steps in this exact order: intro, journey, problem, solution, ending.",
-    "- 3 choices per step.",
-    "- 1 or 2 fragments per choice.",
-    "- 3 twists.",
-    "- All text must be short, funny, and child-friendly.",
-    "- Every fragment must match its narrative role and connect logically to the previous role.",
-    "- The full story must always read coherently in this order: intro -> journey -> problem -> solution -> ending.",
-    "- step_key values must be exactly: intro, journey, problem, solution, ending.",
-    "- No markdown.",
-    "",
-    `Book title: ${input.title}`,
-    `Book description: ${input.description ?? "No description provided."}`,
-    `Age group: ${input.ageGroup ?? "Unknown"}`,
-    `Template name: ${input.templateName}`,
-    `Template slug: ${input.templateSlug}`,
-    "",
-    "Required step meanings:",
-    "- intro: start the adventure",
-    "- journey: begin moving toward the goal",
-    "- problem: introduce the obstacle",
-    "- solution: solve the obstacle",
-    "- ending: close the story after the solution",
-    "",
-    "Question guidance:",
-    `- intro: ${STORY_ROLE_QUESTIONS.intro}`,
-    `- journey: ${STORY_ROLE_QUESTIONS.journey}`,
-    `- problem: ${STORY_ROLE_QUESTIONS.problem}`,
-    `- solution: ${STORY_ROLE_QUESTIONS.solution}`,
-    `- ending: ${STORY_ROLE_QUESTIONS.ending}`,
-  ].join("\n");
+  return buildStoryTemplatePromptText(input);
 }

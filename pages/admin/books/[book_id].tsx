@@ -6,6 +6,16 @@ import slugify from "slugify";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminTabs } from "../../../components/AdminTabs";
 import { AdminLogout } from "../../../components/AdminLogout";
+import {
+  buildExplanationPrompt,
+  buildTestPrompt,
+} from "../../../lib/ai/prompts";
+import {
+  estimateBatchBooksCost,
+  estimateBookSectionCost,
+  estimateFullBookCost,
+  type BookGenerationSection,
+} from "../../../lib/ai/bookGenerationProfile";
 import type {
   BookEditorResponse,
   BookExplanationInput,
@@ -104,6 +114,10 @@ function sectionLabel(section: string) {
     tests: "Тест",
   };
   return labels[section] ?? section;
+}
+
+function formatIls(value: number) {
+  return `${value.toFixed(3)} ₪`;
 }
 
 export default function BookEditorPage() {
@@ -239,6 +253,37 @@ export default function BookEditorPage() {
   const updateTests = (tests: BookTestInput[]) => {
     setEditor((current) => (current ? { ...current, tests } : current));
     markDirty("tests");
+  };
+
+  const removeSlide = (explanationIndex: number, slideIndex: number) => {
+    if (!editor) {
+      return;
+    }
+    const explanation = editor.explanations[explanationIndex];
+    if (!explanation || explanation.slides.length <= 1) {
+      return;
+    }
+    updateExplanation(explanationIndex, {
+      ...explanation,
+      slides: explanation.slides.filter((_, index) => index !== slideIndex),
+    });
+  };
+
+  const removeQuestion = (testIndex: number, questionIndex: number) => {
+    if (!editor) {
+      return;
+    }
+    const test = editor.tests[testIndex];
+    if (!test || test.quiz.length <= 1) {
+      return;
+    }
+    const tests = [...editor.tests];
+    tests[testIndex] = {
+      ...test,
+      quiz: test.quiz.filter((_, index) => index !== questionIndex),
+    };
+    updateTests(tests);
+    markDirty(`test:${testIndex}`);
   };
 
   const saveMeta = async () => {
@@ -436,9 +481,123 @@ export default function BookEditorPage() {
     }
   };
 
+  const approveCurrentBook = async () => {
+    setBusyKey("approve-book");
+    setError(null);
+    try {
+      await fetchJson<{ ok: true }>(`/api/admin/books/${bookId}/approve`, {
+        method: "POST",
+      });
+      setEditor((current) =>
+        current
+          ? {
+              ...current,
+              book: {
+                ...current.book,
+                is_published: true,
+              },
+            }
+          : current,
+      );
+      await refreshStatus();
+      showSuccess("Книга одобрена.");
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const deleteCurrentBook = async () => {
+    setBusyKey("delete-book");
+    setError(null);
+    try {
+      await fetchJson<{ ok: true }>(`/api/admin/books/${bookId}/delete`, {
+        method: "DELETE",
+      });
+      await router.push("/admin/books");
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const generateFullBook = async () => {
+    if (!editor) {
+      return;
+    }
+    setBusyKey("generate-full-book");
+    setError(null);
+    try {
+      const data = await fetchJson<{ data: BookEditorResponse }>("/api/admin/generate-book-full", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bookId,
+          title: editor.book.title,
+          author: editor.book.author,
+          description: editor.book.description,
+          ageGroup: editor.book.age_group,
+        }),
+      });
+      setEditor(data.data);
+      await refreshStatus();
+      showSuccess("Вся книга успешно сгенерирована.");
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
   if (!sessionChecked || loading || !editor) {
     return <p style={{ padding: 24 }}>{loading ? "Загрузка редактора..." : "Проверка сессии..."}</p>;
   }
+
+  const bookGenerationSections = editor.explanations.map((explanation) => ({
+    key: explanation.mode_slug,
+    label: explanation.mode_name,
+    estimate: estimateBookSectionCost(
+      buildExplanationPrompt({
+        title: editor.book.title,
+        author: editor.book.author,
+        description: editor.book.description,
+        mode: explanation.mode_slug,
+      }),
+      explanation.mode_slug as BookGenerationSection,
+    ),
+  }));
+
+  const testEstimate = estimateBookSectionCost(
+    buildTestPrompt({
+      title: editor.book.title,
+      author: editor.book.author,
+      description: editor.book.description,
+      ageGroup: editor.book.age_group,
+    }),
+    "test",
+  );
+
+  const fullBookEstimate = estimateFullBookCost({
+    ...Object.fromEntries(
+      editor.explanations.map((explanation) => [
+        explanation.mode_slug,
+        buildExplanationPrompt({
+          title: editor.book.title,
+          author: editor.book.author,
+          description: editor.book.description,
+          mode: explanation.mode_slug,
+        }),
+      ]),
+    ),
+    test: buildTestPrompt({
+      title: editor.book.title,
+      author: editor.book.author,
+      description: editor.book.description,
+      ageGroup: editor.book.age_group,
+    }),
+  } as Partial<Record<BookGenerationSection, string>>);
 
   return (
     <div className="books-admin-page">
@@ -454,11 +613,48 @@ export default function BookEditorPage() {
       <header className="books-admin-header">
         <div>
           <h1 className="books-admin-title">{editor.book.title}</h1>
+          {!editor.book.is_published ? (
+            <div style={{ marginTop: 8 }}>
+              <strong className="books-badge books-badge--pending">⚠ Требует одобрения</strong>
+            </div>
+          ) : null}
           <p className="books-admin-subtitle">
             Редактор книги: метаданные, категории, объяснения и тесты. Конструктор историй вынесен в отдельный раздел.
           </p>
         </div>
         <div className="books-actions books-actions--compact">
+          {!editor.book.is_published ? (
+            <button
+              type="button"
+              className="books-button books-button--primary"
+              disabled={busyKey === "approve-book"}
+              onClick={() => {
+                void approveCurrentBook();
+              }}
+            >
+              {busyKey === "approve-book" ? "Одобрение..." : "Одобрить книгу"}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="books-button books-button--ghost"
+            disabled={busyKey === "delete-book"}
+            onClick={() => {
+              void deleteCurrentBook();
+            }}
+          >
+            {busyKey === "delete-book" ? "Удаление..." : "Удалить книгу"}
+          </button>
+          <button
+            type="button"
+            className="books-button books-button--secondary"
+            disabled={busyKey === "generate-full-book"}
+            onClick={() => {
+              void generateFullBook();
+            }}
+          >
+            {busyKey === "generate-full-book" ? "Генерация..." : "Сгенерировать всю книгу"}
+          </button>
           <button
             type="button"
             className="books-button books-button--secondary"
@@ -473,6 +669,56 @@ export default function BookEditorPage() {
 
       {error && <div className="books-alert books-alert--error">{error}</div>}
       {success && <div className="books-alert books-alert--success">{success}</div>}
+
+      <section className="books-panel">
+        <div className="books-section-head">
+          <div>
+            <h2 className="books-panel__title">Стоимость генерации книги</h2>
+            <p className="books-section-help">
+              Оценка токенов и стоимости до запуска Gemini для каждого блока и для всей книги целиком.
+            </p>
+          </div>
+          <strong>{formatIls(fullBookEstimate.ils)}</strong>
+        </div>
+
+        <div className="story-overview-steps">
+          {bookGenerationSections.map((section) => (
+            <div className="story-overview-step" key={section.key}>
+              <span className="story-overview-step__role">{section.label}</span>
+              <span className="story-overview-step__count">
+                {section.estimate.inputTokens} in / {section.estimate.outputTokens} out
+              </span>
+              <span>{formatIls(section.estimate.ils)}</span>
+            </div>
+          ))}
+          <div className="story-overview-step">
+            <span className="story-overview-step__role">Тест</span>
+            <span className="story-overview-step__count">
+              {testEstimate.inputTokens} in / {testEstimate.outputTokens} out
+            </span>
+            <span>{formatIls(testEstimate.ils)}</span>
+          </div>
+        </div>
+
+        <div className="story-overview-progress">
+          <div className="story-overview-progress__meta">
+            <span>Полная генерация книги</span>
+            <span>
+              {fullBookEstimate.inputTokens} in / {fullBookEstimate.outputTokens} out · {formatIls(fullBookEstimate.ils)}
+            </span>
+          </div>
+        </div>
+
+        <div className="story-overview-steps">
+          {[5, 10, 20].map((count) => (
+            <div className="story-overview-step" key={`batch-${count}`}>
+              <span className="story-overview-step__role">{count} книг</span>
+              <span className="story-overview-step__count">Пакетная генерация</span>
+              <span>{formatIls(estimateBatchBooksCost(count, fullBookEstimate.ils))}</span>
+            </div>
+          ))}
+        </div>
+      </section>
 
       {progress ? (
         <section className="books-panel">
@@ -743,12 +989,24 @@ export default function BookEditorPage() {
               </div>
 
               {explanation.slides.map((slide, slideIndex) => (
-                <label className="books-field" key={`${explanation.mode_id}-${slideIndex}`}>
-                  {helperLabel(
-                    `Слайд ${slideIndex + 1}`,
-                    "Напишите короткое предложение для ребёнка.",
-                    "Короткая понятная фраза о книге. Без длинных академических формулировок.",
-                  )}
+                <div className="books-block" key={`${explanation.mode_id}-${slideIndex}`}>
+                  <div className="books-block__header">
+                    <div className="books-field">
+                      {helperLabel(
+                        `Слайд ${slideIndex + 1}`,
+                        "Напишите короткое предложение для ребёнка.",
+                        "Короткая понятная фраза о книге. Без длинных академических формулировок.",
+                      )}
+                    </div>
+                    <button
+                      type="button"
+                      className="delete-button"
+                      disabled={explanation.slides.length <= 1}
+                      onClick={() => removeSlide(explanationIndex, slideIndex)}
+                    >
+                      ×
+                    </button>
+                  </div>
                   <textarea
                     className="books-input books-input--textarea books-input--small-textarea"
                     value={slide.text}
@@ -760,7 +1018,7 @@ export default function BookEditorPage() {
                       updateExplanation(explanationIndex, { ...explanation, slides });
                     }}
                   />
-                </label>
+                </div>
               ))}
 
               <div className="books-actions books-actions--compact">
@@ -891,12 +1149,24 @@ export default function BookEditorPage() {
 
                     {test.quiz.map((question, questionIndex) => (
                       <div className="books-question" key={`${testIndex}-${questionIndex}`}>
+                        <div className="books-block__header">
+                          <div className="books-field">
+                            {helperLabel(
+                              `Вопрос ${questionIndex + 1}`,
+                              "Введите вопрос по книге.",
+                              "Короткий и понятный вопрос для ребёнка.",
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            className="delete-button"
+                            disabled={test.quiz.length <= 1}
+                            onClick={() => removeQuestion(testIndex, questionIndex)}
+                          >
+                            ×
+                          </button>
+                        </div>
                         <label className="books-field">
-                          {helperLabel(
-                            `Вопрос ${questionIndex + 1}`,
-                            "Введите вопрос по книге.",
-                            "Короткий и понятный вопрос для ребёнка.",
-                          )}
                           <input
                             className="books-input"
                             value={question.question}

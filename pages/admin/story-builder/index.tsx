@@ -6,6 +6,14 @@ import slugify from "slugify";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminTabs } from "../../../components/AdminTabs";
 import { AdminLogout } from "../../../components/AdminLogout";
+import {
+  buildStoryPartPrompt,
+  buildStoryTemplatePrompt,
+} from "../../../lib/ai/prompts";
+import {
+  estimateFullStoryCost,
+  estimateStoryVariantCost,
+} from "../../../lib/ai/storyGenerationProfile";
 import { formatKeywords, parseKeywords } from "../../../lib/books/keywords";
 import { slugifyRu } from "../../../lib/books/slugify-ru";
 import type {
@@ -221,6 +229,10 @@ function variantsLabel(count: number) {
     return "варианта";
   }
   return "вариантов";
+}
+
+function formatIls(value: number) {
+  return `${value.toFixed(3)} ₪`;
 }
 
 function fragmentStateKey(templateIndex: number, role: StoryRoleKey, fragmentIndex: number) {
@@ -981,39 +993,96 @@ export default function StoryBuilderPage() {
             }
           }}
         >
-          <div className="books-section-head">
-            <div>
-              <h2 className="books-panel__title">Шаблон истории</h2>
-              <p className="books-section-help">Шаблон всегда открыт. Шаги ниже автоматически сворачиваются после успешного сохранения.</p>
-            </div>
-            <div className="books-actions books-actions--compact">
-              <button
-                type="button"
-                className="books-button books-button--secondary"
-                disabled={busyKey === `template-generate:${templateIndex}`}
-                onClick={() => {
-                  void generateTemplate(templateIndex);
-                }}
-              >
-                {busyKey === `template-generate:${templateIndex}` ? "Генерация..." : "Сгенерировать всё"}
-              </button>
-              <button
-                type="button"
-                className={saveButtonClass(saveState, `template:${templateIndex}`)}
-                disabled={busyKey === `template-save:${templateIndex}`}
-                onClick={() => {
-                  void saveTemplate(templateIndex);
-                }}
-              >
-                {busyKey === `template-save:${templateIndex}` ? "Сохранение..." : saveButtonLabel(saveState, `template:${templateIndex}`)}
-              </button>
-            </div>
-          </div>
+          {(() => {
+            const fullTemplatePrompt = buildStoryTemplatePrompt({
+              title: template.name,
+              description: `Interactive capybara story template: ${template.name}`,
+              ageGroup: null,
+              templateName: template.name,
+              templateSlug: template.slug,
+            });
+            const variantPrompt = buildStoryPartPrompt({
+              title: template.name,
+              description: `Шаблон истории ${template.name}`,
+              ageGroup: null,
+              templateName: template.name,
+              kind: "fragment",
+              storyRole: "intro",
+              previousRole: null,
+              context: "Оцени стоимость генерации одного варианта истории.",
+            });
+            const variantEstimate = estimateStoryVariantCost(variantPrompt);
+            const fullStoryEstimate = estimateFullStoryCost(variantPrompt);
+            const templateEstimate = estimateFullStoryCost(fullTemplatePrompt);
 
-          <div className="books-grid books-grid--2">
-            <label className="books-field">
-              {helperLabel("Название шаблона", "Введите название шаблона истории.", "Публичное название шаблона для CMS.")}
-              <input
+            return (
+              <>
+                <div className="books-section-head">
+                  <div>
+                    <h2 className="books-panel__title">Шаблон истории</h2>
+                    <p className="books-section-help">Шаблон всегда открыт. Шаги ниже автоматически сворачиваются после успешного сохранения.</p>
+                  </div>
+                  <div className="books-actions books-actions--compact">
+                    <button
+                      type="button"
+                      className="books-button books-button--secondary"
+                      disabled={busyKey === `template-generate:${templateIndex}`}
+                      onClick={() => {
+                        void generateTemplate(templateIndex);
+                      }}
+                    >
+                      {busyKey === `template-generate:${templateIndex}` ? "Генерация..." : "Сгенерировать всё"}
+                    </button>
+                    <button
+                      type="button"
+                      className={saveButtonClass(saveState, `template:${templateIndex}`)}
+                      disabled={busyKey === `template-save:${templateIndex}`}
+                      onClick={() => {
+                        void saveTemplate(templateIndex);
+                      }}
+                    >
+                      {busyKey === `template-save:${templateIndex}` ? "Сохранение..." : saveButtonLabel(saveState, `template:${templateIndex}`)}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="books-subpanel">
+                  <div className="books-section-head">
+                    <div>
+                      <h3 className="books-subpanel__title">Стоимость генерации истории</h3>
+                      <p className="books-section-help">Оценка токенов и стоимости до запуска генерации.</p>
+                    </div>
+                    <strong>{formatIls(templateEstimate.ils)}</strong>
+                  </div>
+                  <div className="story-overview-steps">
+                    <div className="story-overview-step">
+                      <span className="story-overview-step__role">1 вариант</span>
+                      <span className="story-overview-step__count">
+                        {variantEstimate.inputTokens} in / {variantEstimate.outputTokens} out
+                      </span>
+                      <span>{formatIls(variantEstimate.ils)}</span>
+                    </div>
+                    <div className="story-overview-step">
+                      <span className="story-overview-step__role">7 вариантов</span>
+                      <span className="story-overview-step__count">
+                        {fullStoryEstimate.inputTokens} in / {fullStoryEstimate.outputTokens} out
+                      </span>
+                      <span>{formatIls(fullStoryEstimate.ils)}</span>
+                    </div>
+                    <div className="story-overview-step">
+                      <span className="story-overview-step__role">Весь шаблон</span>
+                      <span className="story-overview-step__count">
+                        {templateEstimate.inputTokens} in / {templateEstimate.outputTokens} out
+                      </span>
+                      <span>{formatIls(templateEstimate.ils)}</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="books-grid books-grid--2">
+          <label className="books-field">
+            {helperLabel("Название шаблона", "Введите название шаблона истории.", "Публичное название шаблона для CMS.")}
+            <input
                 className="books-input"
                 value={template.name}
                 placeholder="Приключения капибары"
@@ -1067,7 +1136,10 @@ export default function StoryBuilderPage() {
                 }}
               />
             </label>
-          </div>
+                </div>
+              </>
+            );
+          })()}
 
           {template.steps.map((step, stepIndex) => {
             const roleFragments = template.fragments.filter((fragment) => fragment.step_key === step.step_key);
@@ -1075,6 +1147,18 @@ export default function StoryBuilderPage() {
             const stepSaveKey = stepStateKey(templateIndex, stepIndex);
             const fragmentsSaveKey = `fragments:${templateIndex}:${step.step_key}`;
             const stepCollapsed = collapsedSteps[stepSaveKey] ?? false;
+            const stepGenerationEstimate = estimateStoryVariantCost(
+              buildStoryPartPrompt({
+                title: template.name,
+                description: `Шаблон истории ${template.name}`,
+                ageGroup: null,
+                templateName: template.name,
+                kind: "step",
+                storyRole: step.step_key,
+                previousRole: stepIndex > 0 ? template.steps[stepIndex - 1].step_key : null,
+                context: `Нужно сгенерировать вопрос для роли ${step.step_key}.`,
+              }),
+            );
 
             return (
               <div className="books-subpanel" key={`${template.id ?? templateIndex}-${step.step_key}`}>
@@ -1106,6 +1190,9 @@ export default function StoryBuilderPage() {
                           Каждый шаг истории может иметь несколько вариантов, чтобы ребёнок мог выбирать развитие сюжета.
                           <br />
                           Например: 1) Капибара нашла радугу 2) Капибара услышала странный звук 3) Капибара увидела карту.
+                        </div>
+                        <div className="books-section-help">
+                          Стоимость генерации шага: {stepGenerationEstimate.inputTokens} in / {stepGenerationEstimate.outputTokens} out · {formatIls(stepGenerationEstimate.ils)}
                         </div>
                       </div>
                       <div className="books-actions books-actions--compact">

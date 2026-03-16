@@ -162,6 +162,8 @@ export type BookListItem = {
   year: number | null;
   is_published: boolean | null;
   created_at: string | null;
+  progress_percent?: number | null;
+  missing_sections?: string[];
 };
 
 export type BookRow = BookMetaInput & {
