@@ -206,7 +206,7 @@ export function buildStoryPartPrompt(input: {
 }
 
 export function buildStoryTemplatePrompt(input: {
-  title: string;
+  title?: string | null;
   description?: string | null;
   ageGroup?: string | null;
   templateName: string;
@@ -220,16 +220,19 @@ export function buildStoryTemplatePrompt(input: {
     ...STORY_SAFETY_RULES,
     STORY_PROMPT,
     "Этот prompt относится к творческому режиму. Здесь можно использовать воображение.",
-    'Формат ответа: {"steps":[{"step_key":"...","question":"...","choices":[{"text":"...","keywords":["..."]}]}],"fragments":[{"step_key":"...","choice_index":0,"text":"...","keywords":["..."]}],"twists":[{"text":"...","keywords":["..."]}]}',
+    'Формат ответа: {"title":"...","steps":[{"step_key":"...","question":"...","choices":[{"text":"...","keywords":["..."]}]}],"fragments":[{"step_key":"...","choice_index":0,"text":"...","keywords":["..."]}],"twists":[{"text":"...","keywords":["..."]}]}',
     "Требования к ответу:",
+    "- title: короткое доброе название истории из 3-6 слов.",
+    "- Если название истории не задано, придумай короткое и доброе название истории.",
     "- Ровно 5 шагов: intro, journey, problem, solution, ending.",
+    "- All step_key values MUST be one of: intro, journey, problem, solution, ending.",
     "- На каждый шаг ровно 3 варианта выбора.",
     "- На каждый вариант 1 или 2 фрагмента.",
     "- 3 неожиданных добрых поворота.",
     "- История должна оставаться связной при любом выборе.",
     "- Все step_key должны точно совпадать с допустимыми значениями.",
     "",
-    `Название книги-основы: ${input.title}`,
+    `Название истории: ${input.title?.trim() || "Не задано, придумай сам."}`,
     `Описание: ${input.description ?? "Описание отсутствует."}`,
     `Возраст: ${input.ageGroup ?? "Не указан"}`,
     `Название шаблона: ${input.templateName}`,

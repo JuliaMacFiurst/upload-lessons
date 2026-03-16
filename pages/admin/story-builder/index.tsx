@@ -421,13 +421,14 @@ export default function StoryBuilderPage() {
     setError(null);
     try {
       const data = await fetchJson<{
+        title: string;
         steps: Array<{ step_key: StoryRoleKey; question: string; choices: Array<{ text: string; keywords: string[] }> }>;
         fragments: Array<{ step_key: StoryRoleKey; choice_index: number; text: string; keywords: string[] }>;
       }>("/api/admin/generate-story-template", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: template.name,
+          title: template.name || "",
           description: `Interactive capybara story template: ${template.name}`,
           ageGroup: null,
           templateName: template.name,
@@ -437,6 +438,7 @@ export default function StoryBuilderPage() {
 
       updateTemplate(templateIndex, {
         ...template,
+        name: data.title,
         steps: STORY_ROLE_KEYS.map((role, index) => {
           const generatedStep = data.steps.find((item) => item.step_key === role);
           return {
