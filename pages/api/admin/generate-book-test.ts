@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { ZodError, z } from "zod";
 import {
   buildTestPrompt,
+  normalizeGeneratedQuizPayload,
   requireAdminSession,
   runGeminiJsonPrompt,
 } from "../../../lib/server/book-admin";
@@ -17,7 +18,7 @@ const bodySchema = z.object({
 const responseSchema = z.object({
   title: z.string().trim().min(1),
   description: z.string().trim().optional().nullable(),
-  quiz: z.array(bookTestQuestionSchema).min(1).max(10),
+  quiz: z.unknown(),
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -30,18 +31,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await requireAdminSession(req, res);
     const body = bodySchema.parse(req.body ?? {});
     const generated = await runGeminiJsonPrompt<unknown>(buildTestPrompt(body));
+    if (process.env.NODE_ENV === "development") {
+      console.info("[generation] single-test.raw", generated);
+    }
 
     const data = responseSchema.parse(generated);
-
-    // Database and admin UI expect quiz in the form:
-    // { questions: [...] }
+    const normalizedQuiz = z.array(bookTestQuestionSchema).min(1).max(10).parse(
+      normalizeGeneratedQuizPayload(data.quiz),
+    );
     const normalized = {
       title: data.title,
       description: data.description ?? null,
-      quiz: {
-        questions: data.quiz,
-      },
+      quiz: normalizedQuiz,
     };
+    if (process.env.NODE_ENV === "development") {
+      console.info("[generation] single-test.normalized", normalized);
+    }
 
     return res.status(200).json(normalized);
   } catch (error) {

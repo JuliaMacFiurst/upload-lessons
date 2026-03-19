@@ -22,6 +22,9 @@ import {
   bookMetaSchema,
   bookTestQuestionSchema,
   bookTestSchema,
+  storyFragmentSchema,
+  storyStepSchema,
+  storyTwistSchema,
   type BookEditorPayload,
   type BookEditorResponse,
   type BookExplanationInput,
@@ -210,6 +213,13 @@ export function safeSlug(input: string): string {
   });
 }
 
+function logGenerationDebug(stage: string, payload: unknown) {
+  if (process.env.NODE_ENV !== "development") {
+    return;
+  }
+  console.info(`[generation] ${stage}`, payload);
+}
+
 export async function createUniqueBookSlug(
   supabase: SupabaseClient,
   title: string,
@@ -391,77 +401,116 @@ function coerceSlides(value: unknown): BookExplanationInput["slides"] {
     .filter((item): item is { text: string } => item !== null);
 }
 
-export function quizDbToEditor(value: unknown): BookEditorResponse["tests"][number]["quiz"] {
+export function normalizeGeneratedExplanationPayload(value: unknown): { slides: BookExplanationInput["slides"] } {
+  const record = value && typeof value === "object" ? (value as { slides?: unknown }) : {};
+  return {
+    slides: coerceSlides(record.slides),
+  };
+}
+
+type LooseGeneratedQuizQuestion = {
+  question: string;
+  options: string[];
+  correctAnswerIndex: number;
+};
+
+function normalizeLooseGeneratedQuizQuestions(value: unknown): LooseGeneratedQuizQuestion[] {
   if (Array.isArray(value)) {
     return value
       .map((item) => {
         if (!item || typeof item !== "object") {
           return null;
         }
+
         const record = item as {
           question?: unknown;
           options?: unknown;
           correctAnswerIndex?: unknown;
+          answers?: unknown;
         };
 
         const question = typeof record.question === "string" ? record.question.trim() : "";
-        const options = Array.isArray(record.options)
-          ? record.options
-              .map((option) => (typeof option === "string" ? option.trim() : ""))
-              .filter(Boolean)
-          : [];
-        const correctAnswerIndex =
-          typeof record.correctAnswerIndex === "number" && Number.isInteger(record.correctAnswerIndex)
-            ? record.correctAnswerIndex
-            : 0;
-
-        if (!question || options.length < 3) {
+        if (!question) {
           return null;
         }
+
+        const directOptions = Array.isArray(record.options)
+          ? record.options.map((option) => (typeof option === "string" ? option.trim() : "")).filter(Boolean)
+          : [];
+
+        const answers = Array.isArray(record.answers) ? (record.answers as QuizDbAnswer[]) : [];
+        const answerOptions = answers
+          .map((answer) => (typeof answer.text === "string" ? answer.text.trim() : ""))
+          .filter(Boolean);
+        const answerCorrectIndex = answers.findIndex((answer) => answer.correct === true);
+
+        const options = directOptions.length > 0 ? directOptions : answerOptions;
+        if (options.length === 0) {
+          return null;
+        }
+
+        const rawCorrectIndex =
+          typeof record.correctAnswerIndex === "number" && Number.isInteger(record.correctAnswerIndex)
+            ? record.correctAnswerIndex
+            : answerCorrectIndex >= 0
+              ? answerCorrectIndex
+              : 0;
 
         return {
           question,
           options,
-          correctAnswerIndex,
+          correctAnswerIndex: rawCorrectIndex,
         };
       })
-      .filter((item): item is NonNullable<typeof item> => item !== null);
+      .filter((item): item is LooseGeneratedQuizQuestion => item !== null);
   }
 
   if (!value || typeof value !== "object") {
     return [];
   }
 
-  const questions = (value as QuizDbPayload).questions;
-  if (!Array.isArray(questions)) {
-    return [];
+  const record = value as { questions?: unknown; quiz?: unknown };
+  if (record.questions !== undefined) {
+    return normalizeLooseGeneratedQuizQuestions(record.questions);
   }
+  if (record.quiz !== undefined) {
+    return normalizeLooseGeneratedQuizQuestions(record.quiz);
+  }
+  return [];
+}
 
-  return questions
-    .map((item) => {
-      if (!item || typeof item !== "object") {
+export function normalizeGeneratedQuizPayload(value: unknown): BookEditorResponse["tests"][number]["quiz"] {
+  return normalizeLooseGeneratedQuizQuestions(value)
+    .map((question) => {
+      const options = question.options.length > 4
+        ? question.options.slice(0, 4)
+        : question.options.length < 3
+          ? [
+              ...question.options,
+              ...Array.from(
+                { length: 3 - question.options.length },
+                () => question.options[question.options.length - 1] ?? "Ответ",
+              ),
+            ]
+          : question.options;
+
+      const normalizedCorrectIndex = Math.max(0, Math.min(question.correctAnswerIndex, options.length - 1));
+
+      try {
+        return bookTestQuestionSchema.parse({
+          question: question.question,
+          options,
+          correctAnswerIndex: normalizedCorrectIndex,
+        });
+      } catch {
         return null;
       }
-
-      const record = item as QuizDbQuestion;
-      const question = typeof record.question === "string" ? record.question.trim() : "";
-      const answers = Array.isArray(record.answers) ? (record.answers as QuizDbAnswer[]) : [];
-      const options = answers
-        .map((answer) => (typeof answer.text === "string" ? answer.text.trim() : ""))
-        .filter(Boolean);
-      const correctAnswerIndex = answers.findIndex((answer) => answer.correct === true);
-
-      if (!question || options.length < 3) {
-        return null;
-      }
-
-      return {
-        question,
-        options,
-        correctAnswerIndex: correctAnswerIndex >= 0 ? correctAnswerIndex : 0,
-      };
     })
-    .filter((item): item is NonNullable<typeof item> => item !== null);
+    .filter((item): item is BookEditorResponse["tests"][number]["quiz"][number] => item !== null);
+}
+
+export function quizDbToEditor(value: unknown): BookEditorResponse["tests"][number]["quiz"] {
+  return normalizeGeneratedQuizPayload(value);
 }
 
 export function quizEditorToDb(value: BookEditorResponse["tests"][number]["quiz"]): {
@@ -1123,13 +1172,22 @@ export async function deleteBook(
 }
 
 const fullBookSectionSchema = z.object({
-  slides: z.array(bookExplanationSlideSchema).min(1),
+  slides: z.unknown(),
 });
 
 const looseBookTestQuestionSchema = z.object({
   question: z.string().trim().min(1).max(300),
-  options: z.array(z.string().trim().min(1).max(220)).min(1),
-  correctAnswerIndex: z.number().int().min(0),
+  options: z.array(z.string().trim().min(1).max(220)).min(1).optional(),
+  correctAnswerIndex: z.number().int().min(0).optional(),
+  answers: z
+    .array(
+      z.object({
+        text: z.string().trim().min(1).max(220),
+        correct: z.boolean().optional(),
+      }),
+    )
+    .min(1)
+    .optional(),
 });
 
 const fullBookGenerationSchema = z.object({
@@ -1147,15 +1205,15 @@ const fullBookGenerationSchema = z.object({
     .object({
       title: z.string().trim().min(1),
       description: z.string().trim().optional().nullable(),
-      quiz: z.array(looseBookTestQuestionSchema).min(1),
+      quiz: z.unknown(),
     })
     .optional(),
 });
 
-function normalizeQuizQuestions(quiz: z.infer<typeof looseBookTestQuestionSchema>[]) {
+function normalizeQuizQuestions(quiz: unknown) {
   const sourceQuiz =
-    quiz.length > 0
-      ? quiz
+    normalizeGeneratedQuizPayload(quiz).length > 0
+      ? normalizeGeneratedQuizPayload(quiz)
       : [
           {
             question: "О чём эта книга?",
@@ -1164,21 +1222,7 @@ function normalizeQuizQuestions(quiz: z.infer<typeof looseBookTestQuestionSchema
           },
         ];
 
-  const normalizedQuiz = sourceQuiz.slice(0, 5).map((question) => {
-    const options = question.options.length > 4
-      ? question.options.slice(0, 4)
-      : question.options.length < 3
-        ? [...question.options, ...Array.from({ length: 3 - question.options.length }, () => question.options[question.options.length - 1] ?? "Ответ")]
-        : question.options;
-
-    const normalizedCorrectIndex = Math.max(0, Math.min(question.correctAnswerIndex, options.length - 1));
-
-    return bookTestQuestionSchema.parse({
-      question: question.question,
-      options,
-      correctAnswerIndex: normalizedCorrectIndex,
-    });
-  });
+  const normalizedQuiz = sourceQuiz.slice(0, 5);
 
   while (normalizedQuiz.length < 5) {
     normalizedQuiz.push(normalizedQuiz[normalizedQuiz.length - 1]);
@@ -1254,11 +1298,13 @@ export async function generateAndSaveFullBookContent(
       ageGroup: input.ageGroup,
     }),
   );
+  logGenerationDebug("full-book.raw", generated);
+
   let parsed: z.infer<typeof fullBookGenerationSchema>;
   try {
     parsed = fullBookGenerationSchema.parse(generated);
   } catch (error) {
-    console.error("Invalid Gemini full book payload", generated);
+    logGenerationDebug("full-book.validation-error", generated);
     throw new GeminiPipelineError(
       error instanceof Error ? error.message : "Full book validation failed.",
       "validation",
@@ -1267,35 +1313,35 @@ export async function generateAndSaveFullBookContent(
   }
   const originalSlideLengths = {
     keywords: parsed.keywords?.length ?? 0,
-    plot: parsed.plot?.slides.length ?? 0,
-    characters: parsed.characters?.slides.length ?? 0,
-    main_idea: parsed.main_idea?.slides.length ?? 0,
-    philosophy: parsed.philosophy?.slides.length ?? 0,
-    conflicts: parsed.conflicts?.slides.length ?? 0,
-    author_message: parsed.author_message?.slides.length ?? 0,
-    ending_meaning: parsed.ending_meaning?.slides.length ?? 0,
-    twenty_seconds: parsed.twenty_seconds?.slides.length ?? 0,
-    quiz: parsed.test?.quiz.length ?? 0,
+    plot: coerceSlides(parsed.plot?.slides).length,
+    characters: coerceSlides(parsed.characters?.slides).length,
+    main_idea: coerceSlides(parsed.main_idea?.slides).length,
+    philosophy: coerceSlides(parsed.philosophy?.slides).length,
+    conflicts: coerceSlides(parsed.conflicts?.slides).length,
+    author_message: coerceSlides(parsed.author_message?.slides).length,
+    ending_meaning: coerceSlides(parsed.ending_meaning?.slides).length,
+    twenty_seconds: coerceSlides(parsed.twenty_seconds?.slides).length,
+    quiz: normalizeGeneratedQuizPayload(parsed.test?.quiz).length,
   };
   const normalized = {
     ...parsed,
     description: parsed.description?.trim() || input.description?.trim() || null,
     keywords: normalizeGeneratedKeywords(parsed.keywords, input.title),
-    plot: { slides: normalizeSlides(parsed.plot?.slides ?? [], SLIDE_TARGETS.plot) },
-    characters: { slides: normalizeSlides(parsed.characters?.slides ?? [], SLIDE_TARGETS.characters) },
-    main_idea: { slides: normalizeSlides(parsed.main_idea?.slides ?? [], SLIDE_TARGETS.main_idea) },
-    philosophy: { slides: normalizeSlides(parsed.philosophy?.slides ?? [], SLIDE_TARGETS.philosophy) },
-    conflicts: { slides: normalizeSlides(parsed.conflicts?.slides ?? [], SLIDE_TARGETS.conflicts) },
-    author_message: { slides: normalizeSlides(parsed.author_message?.slides ?? [], SLIDE_TARGETS.author_message) },
-    ending_meaning: { slides: normalizeSlides(parsed.ending_meaning?.slides ?? [], SLIDE_TARGETS.ending_meaning) },
-    twenty_seconds: { slides: normalizeSlides(parsed.twenty_seconds?.slides ?? [], SLIDE_TARGETS.twenty_seconds) },
+    plot: { slides: normalizeSlides(coerceSlides(parsed.plot?.slides), SLIDE_TARGETS.plot) },
+    characters: { slides: normalizeSlides(coerceSlides(parsed.characters?.slides), SLIDE_TARGETS.characters) },
+    main_idea: { slides: normalizeSlides(coerceSlides(parsed.main_idea?.slides), SLIDE_TARGETS.main_idea) },
+    philosophy: { slides: normalizeSlides(coerceSlides(parsed.philosophy?.slides), SLIDE_TARGETS.philosophy) },
+    conflicts: { slides: normalizeSlides(coerceSlides(parsed.conflicts?.slides), SLIDE_TARGETS.conflicts) },
+    author_message: { slides: normalizeSlides(coerceSlides(parsed.author_message?.slides), SLIDE_TARGETS.author_message) },
+    ending_meaning: { slides: normalizeSlides(coerceSlides(parsed.ending_meaning?.slides), SLIDE_TARGETS.ending_meaning) },
+    twenty_seconds: { slides: normalizeSlides(coerceSlides(parsed.twenty_seconds?.slides), SLIDE_TARGETS.twenty_seconds) },
     test: {
       title: parsed.test?.title ?? `Тест по книге «${input.title}»`,
       description: parsed.test?.description ?? "Ответь на вопросы по книге.",
       quiz: normalizeQuizQuestions(parsed.test?.quiz ?? []),
     },
   };
-  console.info("Normalized Gemini response", {
+  logGenerationDebug("full-book.normalized", {
     original: originalSlideLengths,
     normalized: {
       keywords: normalized.keywords.length,
@@ -1367,6 +1413,23 @@ export async function generateAndSaveFullBookContent(
     is_published: false,
     sort_order: existingTest?.sort_order ?? 0,
     quiz: normalized.test.quiz,
+  });
+
+  logGenerationDebug("full-book.db-save", {
+    bookId: input.bookId,
+    description: normalized.description,
+    keywords: normalized.keywords,
+    explanations: explanations
+      .filter((item): item is NonNullable<typeof item> => item !== null)
+      .map((item) => ({
+        mode_id: item.mode_id,
+        slides: item.slides.length,
+      })),
+    test: {
+      id: test.id,
+      title: test.title,
+      quiz: test.quiz.length,
+    },
   });
 
   return {
@@ -1517,15 +1580,16 @@ export async function saveStoryStepBlock(
   templateId: string,
   step: StoryBuilderTemplate["steps"][number],
 ): Promise<StoryBuilderTemplate["steps"][number]> {
-  const role = normalizeStoryRole(step.step_key);
+  const parsedStep = storyStepSchema.parse(step);
+  const role = normalizeStoryRole(parsedStep.step_key);
   const { data: savedStepData, error: stepError } = await supabase
     .from("story_steps")
     .upsert({
-      id: step.id,
+      id: parsedStep.id,
       template_id: templateId,
       step_key: role,
-      question: step.question,
-      sort_order: step.sort_order,
+      question: parsedStep.question,
+      sort_order: parsedStep.sort_order,
     })
     .select("*")
     .single();
@@ -1541,11 +1605,11 @@ export async function saveStoryStepBlock(
   }
 
   let choices: StoryBuilderTemplate["steps"][number]["choices"] = [];
-  if (step.choices.length > 0) {
+  if (parsedStep.choices.length > 0) {
     const { data: insertedChoices, error: choiceError } = await supabase
       .from("story_choices")
       .insert(
-        step.choices.map((choice, index) => ({
+        parsedStep.choices.map((choice, index) => ({
           step_id: savedStep.id,
           text: choice.text,
           keywords: choice.keywords,
@@ -1580,8 +1644,10 @@ export async function saveStoryFragmentsBlock(
   fragments: StoryBuilderTemplate["fragments"],
   steps: StoryBuilderTemplate["steps"],
 ): Promise<StoryBuilderTemplate["fragments"]> {
+  const parsedSteps = z.array(storyStepSchema).parse(steps);
+  const parsedFragments = z.array(storyFragmentSchema).parse(fragments);
   const choiceIdsByRoleAndIndex = new Map<string, string>();
-  steps.forEach((step) => {
+  parsedSteps.forEach((step) => {
     step.choices.forEach((choice, index) => {
       if (choice.id) {
         choiceIdsByRoleAndIndex.set(`${step.step_key}:${index}`, choice.id);
@@ -1598,14 +1664,14 @@ export async function saveStoryFragmentsBlock(
     throw new Error(`Failed to reset story fragments: ${deleteError.message}`);
   }
 
-  if (fragments.length === 0) {
+  if (parsedFragments.length === 0) {
     return [];
   }
 
   const { data, error } = await supabase
     .from("story_fragments")
     .insert(
-      fragments.map((fragment, index) => ({
+      parsedFragments.map((fragment, index) => ({
         template_id: templateId,
         step_key: normalizeStoryRole(fragment.step_key),
         choice_id:
@@ -1627,7 +1693,7 @@ export async function saveStoryFragmentsBlock(
 
   return ((data as StoryFragmentRow[] | null) ?? []).map((fragment) => {
     const role = normalizeStoryRole(fragment.step_key);
-    const step = steps.find((item) => item.step_key === role);
+    const step = parsedSteps.find((item) => item.step_key === role);
     const choiceIndex =
       fragment.choice_id && step
         ? step.choices.findIndex((choice) => choice.id === fragment.choice_id)
@@ -1648,7 +1714,8 @@ export async function saveStoryTwists(
   supabase: SupabaseClient,
   twists: StoryBuilderResponse["twists"],
 ): Promise<StoryBuilderResponse["twists"]> {
-  const existingIds = twists.map((twist) => twist.id).filter(Boolean) as string[];
+  const parsedTwists = z.array(storyTwistSchema).parse(twists);
+  const existingIds = parsedTwists.map((twist) => twist.id).filter(Boolean) as string[];
   const { data: allExisting, error: loadError } = await supabase.from("story_twists").select("id");
   if (loadError) {
     throw new Error(`Failed to load existing twists: ${loadError.message}`);
@@ -1663,14 +1730,14 @@ export async function saveStoryTwists(
     }
   }
 
-  if (twists.length === 0) {
+  if (parsedTwists.length === 0) {
     return [];
   }
 
   const { data, error } = await supabase
     .from("story_twists")
     .upsert(
-      twists.map((twist) => ({
+      parsedTwists.map((twist) => ({
         id: twist.id,
         text: twist.text,
         keywords: twist.keywords,

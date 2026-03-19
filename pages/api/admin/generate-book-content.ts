@@ -1,6 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { ZodError, z } from "zod";
-import { buildExplanationPrompt, requireAdminSession, runGeminiJsonPrompt } from "../../../lib/server/book-admin";
+import {
+  buildExplanationPrompt,
+  normalizeGeneratedExplanationPayload,
+  requireAdminSession,
+  runGeminiJsonPrompt,
+} from "../../../lib/server/book-admin";
 import { bookExplanationSlideSchema } from "../../../lib/books/types";
 
 const bodySchema = z.object({
@@ -11,7 +16,7 @@ const bodySchema = z.object({
 });
 
 const responseSchema = z.object({
-  slides: z.array(bookExplanationSlideSchema).min(1).max(6),
+  slides: z.unknown(),
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -24,13 +29,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await requireAdminSession(req, res);
     const body = bodySchema.parse(req.body ?? {});
     const generated = await runGeminiJsonPrompt(buildExplanationPrompt(body));
+    if (process.env.NODE_ENV === "development") {
+      console.info("[generation] explanation.raw", generated);
+    }
     let data;
     try {
       data = responseSchema.parse(generated);
     } catch {
       throw new Error("Gemini returned invalid explanation format");
     }
-    return res.status(200).json(data);
+    const normalized = {
+      slides: z.array(bookExplanationSlideSchema).min(1).max(6).parse(
+        normalizeGeneratedExplanationPayload(data).slides,
+      ),
+    };
+    if (process.env.NODE_ENV === "development") {
+      console.info("[generation] explanation.normalized", normalized);
+    }
+    return res.status(200).json(normalized);
   } catch (error) {
     if (error instanceof ZodError) {
       return res.status(400).json({ error: error.issues[0]?.message ?? "Validation failed." });

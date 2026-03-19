@@ -68,16 +68,22 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       templateSlug: body.templateSlug?.trim() || "capybara-story",
     };
     const generated = await runGeminiJsonPrompt<unknown>(buildStoryTemplatePrompt(promptInput));
-    console.log("Gemini raw response:", JSON.stringify(generated));
+    if (process.env.NODE_ENV === "development") {
+      console.info("[generation] story-template.raw", generated);
+    }
 
     const normalized = normalizeStoryTemplate(generated);
     normalized.title = (normalized.title || promptInput.title || "История про капибару").trim().slice(0, 120);
-    console.log("Normalized story template:", normalized);
+    if (process.env.NODE_ENV === "development") {
+      console.info("[generation] story-template.normalized", normalized);
+    }
     const data = responseSchema.parse(normalized) as StoryTemplateResponse;
 
     return res.status(200).json(data);
   } catch (error) {
-    console.error("Story template parse error", error);
+    if (process.env.NODE_ENV === "development") {
+      console.error("Story template parse error", error);
+    }
 
     if (error instanceof ZodError) {
       return res.status(400).json({ error: error.issues[0]?.message ?? "Validation failed." });

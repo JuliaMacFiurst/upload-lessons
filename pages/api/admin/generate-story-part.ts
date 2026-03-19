@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { ZodError, z } from "zod";
 import {
   buildStoryPartPrompt,
+  normalizeStoryRole,
   requireAdminSession,
   runGeminiJsonPrompt,
 } from "../../../lib/server/book-admin";
@@ -29,6 +30,30 @@ const responseSchema = z.union([
   }),
 ]);
 
+function normalizeGeneratedStoryPart(value: unknown, kind: z.infer<typeof bodySchema>["kind"]) {
+  const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+
+  if (kind === "step") {
+    return {
+      question: typeof record.question === "string" ? record.question.trim() : "",
+      step_key: normalizeStoryRole(
+        typeof record.step_key === "string" ? record.step_key : undefined,
+      ),
+    };
+  }
+
+  const keywords = Array.isArray(record.keywords)
+    ? record.keywords.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
+    : typeof record.keywords === "string" && record.keywords.trim()
+      ? [record.keywords.trim()]
+      : [];
+
+  return {
+    text: typeof record.text === "string" ? record.text.trim() : "",
+    keywords,
+  };
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
@@ -39,7 +64,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await requireAdminSession(req, res);
     const body = bodySchema.parse(req.body ?? {});
     const generated = await runGeminiJsonPrompt<unknown>(buildStoryPartPrompt(body));
-    const data = responseSchema.parse(generated);
+    if (process.env.NODE_ENV === "development") {
+      console.info("[generation] story-part.raw", generated);
+    }
+    const normalized = normalizeGeneratedStoryPart(generated, body.kind);
+    const data = responseSchema.parse(normalized);
+    if (process.env.NODE_ENV === "development") {
+      console.info("[generation] story-part.normalized", data);
+    }
     return res.status(200).json(data);
   } catch (error) {
     if (error instanceof ZodError) {
