@@ -1,25 +1,21 @@
 import { z } from "zod";
+import {
+  CANONICAL_BOOK_SECTION_KEYS,
+  STORY_ROLE_KEYS,
+  canonicalExplanationSectionSchema,
+  canonicalQuizQuestionSchema,
+  canonicalQuizSchema,
+  canonicalSlideSchema,
+  canonicalStoryChoiceSchema,
+  canonicalStoryFragmentSchema,
+  canonicalStoryStepSchema,
+  canonicalStoryTwistSchema,
+  type StoryRoleKey,
+} from "./contracts";
 
-export const DEFAULT_EXPLANATION_MODE_SLUGS = [
-  "plot",
-  "characters",
-  "main_idea",
-  "philosophy",
-  "conflicts",
-  "author_message",
-  "ending_meaning",
-  "twenty_seconds",
-] as const;
-
-export const STORY_ROLE_KEYS = [
-  "intro",
-  "journey",
-  "problem",
-  "solution",
-  "ending",
-] as const;
-
-export type StoryRoleKey = (typeof STORY_ROLE_KEYS)[number];
+export const DEFAULT_EXPLANATION_MODE_SLUGS = CANONICAL_BOOK_SECTION_KEYS;
+export { STORY_ROLE_KEYS };
+export type { StoryRoleKey };
 
 export const bookMetaSchema = z.object({
   id: z.string().uuid().optional(),
@@ -38,9 +34,7 @@ export const bookMetaSchema = z.object({
   is_published: z.boolean(),
 });
 
-export const bookExplanationSlideSchema = z.object({
-  text: z.string().trim().min(1, "Slide text is required.").max(400),
-});
+export const bookExplanationSlideSchema = canonicalSlideSchema;
 
 export const bookExplanationSchema = z.object({
   id: z.string().uuid().optional(),
@@ -48,56 +42,37 @@ export const bookExplanationSchema = z.object({
   mode_slug: z.string().trim().min(1),
   mode_name: z.string().trim().min(1),
   is_published: z.boolean().default(false),
-  slides: z.array(bookExplanationSlideSchema).max(12),
+  slides: canonicalExplanationSectionSchema.shape.slides,
 });
 
-export const bookTestQuestionSchema = z.object({
-  question: z.string().trim().min(1, "Question text is required.").max(300),
-  options: z
-    .array(z.string().trim().min(1, "Answer option is required.").max(220))
-    .min(3, "Each question needs at least 3 options.")
-    .max(4, "Each question supports up to 4 options."),
-  correctAnswerIndex: z.number().int().min(0).max(3),
-});
+export const bookTestQuestionSchema = canonicalQuizQuestionSchema;
 
-export const bookTestSchema = z.object({
+export const bookTestSchema = canonicalQuizSchema.extend({
   id: z.string().uuid().optional(),
-  title: z.string().trim().min(1, "Test title is required.").max(160),
-  description: z.string().trim().max(700).optional().nullable(),
   is_published: z.boolean().default(false),
   sort_order: z.number().int().min(0).default(0),
-  quiz: z.array(bookTestQuestionSchema).min(1, "Add at least one quiz question.").max(20),
 });
 
-export const storyChoiceSchema = z.object({
+export const storyChoiceSchema = canonicalStoryChoiceSchema.extend({
   id: z.string().uuid().optional(),
-  text: z.string().trim().min(1, "Choice text is required.").max(220),
-  keywords: z.array(z.string().trim().min(1).max(60)).max(12),
   sort_order: z.number().int().min(0).default(0),
 });
 
-export const storyStepSchema = z.object({
+export const storyStepSchema = canonicalStoryStepSchema.extend({
   id: z.string().uuid().optional(),
-  step_key: z.enum(STORY_ROLE_KEYS),
-  question: z.string().trim().min(1, "Step question is required.").max(300),
   sort_order: z.number().int().min(0).default(0),
   choices: z.array(storyChoiceSchema).max(8),
 });
 
-export const storyFragmentSchema = z.object({
+export const storyFragmentSchema = canonicalStoryFragmentSchema.extend({
   id: z.string().uuid().optional(),
-  step_key: z.enum(STORY_ROLE_KEYS),
   choice_id: z.string().uuid().optional().nullable(),
   choice_temp_key: z.string().trim().optional().nullable(),
-  text: z.string().trim().min(1, "Fragment text is required.").max(500),
-  keywords: z.array(z.string().trim().min(1).max(60)).max(12),
   sort_order: z.number().int().min(0).default(0),
-});
+}).omit({ choice_index: true });
 
-export const storyTwistSchema = z.object({
+export const storyTwistSchema = canonicalStoryTwistSchema.extend({
   id: z.string().uuid().optional(),
-  text: z.string().trim().min(1, "Twist text is required.").max(220),
-  keywords: z.array(z.string().trim().min(1).max(60)).max(12),
   age_group: z.string().trim().max(120).optional().nullable(),
   is_published: z.boolean().default(true),
 });

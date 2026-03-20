@@ -1,6 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { z, ZodError } from "zod";
-import { requireAdminSession, saveStoryStepBlock } from "../../../../lib/server/book-admin";
+import {
+  requireAdminSession,
+  saveStoryStepBlock,
+} from "../../../../lib/server/book-admin";
 
 const schema = z.object({
   templateId: z.string().uuid(),
@@ -16,7 +19,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const supabase = await requireAdminSession(req, res);
     const body = schema.parse(req.body ?? {});
+    console.log("STORY STEP API PAYLOAD", body);
     const step = await saveStoryStepBlock(supabase, body.templateId, body.step);
+    console.log("STORY STEP API RESPONSE", { templateId: body.templateId, step });
     return res.status(200).json({ step });
   } catch (error) {
     if (error instanceof ZodError) {

@@ -1,6 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { z, ZodError } from "zod";
-import { requireAdminSession, saveStoryFragmentsBlock } from "../../../../lib/server/book-admin";
+import {
+  requireAdminSession,
+  saveStoryFragmentsBlock,
+} from "../../../../lib/server/book-admin";
 
 const schema = z.object({
   templateId: z.string().uuid(),
@@ -18,6 +21,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const supabase = await requireAdminSession(req, res);
     const body = schema.parse(req.body ?? {});
+    console.log("STORY FRAGMENTS API PAYLOAD", body);
     const fragments = await saveStoryFragmentsBlock(
       supabase,
       body.templateId,
@@ -25,6 +29,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body.fragments,
       body.steps,
     );
+    console.log("STORY FRAGMENTS API RESPONSE", {
+      templateId: body.templateId,
+      role: body.role,
+      fragmentsCount: fragments.length,
+    });
     return res.status(200).json({ fragments });
   } catch (error) {
     if (error instanceof ZodError) {

@@ -266,8 +266,8 @@ export function importStoryTemplateCsv(text: string): StoryTemplateInput {
   });
 
   return {
-    name: templateRow?.name?.trim() || "Capybara Story Template",
-    slug: templateRow?.slug?.trim() || "capybara-story-template",
+    name: templateRow?.name?.trim() || "Story Template",
+    slug: templateRow?.slug?.trim() || "story-template",
     is_published: templateRow?.is_published?.trim() !== "false",
     steps,
     fragments,

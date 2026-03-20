@@ -1,10 +1,10 @@
 import { STORY_ROLE_KEYS, type StoryRoleKey } from "../books/types";
 
 const DEFAULT_STEP_QUESTIONS: Record<StoryRoleKey, string> = {
-  intro: "Как начинается приключение капибары?",
-  journey: "Куда капибара отправляется дальше?",
+  intro: "С чего началось приключение?",
+  journey: "Куда герой отправляется дальше?",
   problem: "Какая проблема появляется в пути?",
-  solution: "Как капибара решает проблему?",
+  solution: "Как герой решает проблему?",
   ending: "Чем заканчивается история?",
 };
 
@@ -58,7 +58,7 @@ function normalizeChoices(value: unknown) {
 
   while (choices.length < 3) {
     choices.push({
-      text: choices[choices.length - 1]?.text ?? "Капибара пробует другой путь.",
+      text: choices[choices.length - 1]?.text ?? "Герой пробует другой путь.",
       keywords: [],
     });
   }
@@ -182,7 +182,7 @@ export function normalizeStoryTemplate(data: unknown) {
   const steps = normalizeSteps(record.steps);
   const title = typeof record.title === "string" && record.title.trim()
     ? record.title.trim().slice(0, 120)
-    : "История про капибару";
+    : "Новая история";
 
   return {
     title,

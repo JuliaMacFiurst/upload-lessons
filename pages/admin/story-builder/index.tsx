@@ -25,6 +25,15 @@ import type {
   StoryTwistInput,
 } from "../../../lib/books/types";
 import { STORY_ROLE_KEYS } from "../../../lib/books/types";
+import {
+  adaptStoryTemplateToContract,
+  buildStory,
+  validateStoryTemplateSource,
+} from "../../../lib/story/story-service";
+import {
+  createDefaultStoryPath,
+  type StoryPath,
+} from "../../../lib/story/story-contract";
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
@@ -35,21 +44,114 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return data;
 }
 
+const DRAFT_TEMPLATE_ID = "__draft__";
+const MAX_TEMPLATE_GENERATION_COST_ILS = 0.25;
+
 const ROLE_HINTS: Record<StoryRoleKey, string> = {
-  intro: "Начало истории: знакомство с капибарой и отправная точка приключения.",
-  journey: "Путь героя: куда капибара отправляется после начала истории.",
+  intro: "Начало истории: знакомство с главным героем и отправная точка истории.",
+  journey: "Путь героя: куда главный герой отправляется после начала истории.",
   problem: "Проблема: какое препятствие возникает в путешествии.",
-  solution: "Решение: как капибара справляется с проблемой.",
+  solution: "Решение: как главный герой справляется с проблемой.",
   ending: "Финал: чем заканчивается история и какой остаётся вывод.",
 };
 
 const ROLE_QUESTIONS_RU: Record<StoryRoleKey, string> = {
-  intro: "Как начинается приключение капибары?",
-  journey: "Куда капибара отправляется дальше?",
+  intro: "С чего началось приключение?",
+  journey: "Куда герой отправляется дальше?",
   problem: "Какая проблема появляется в пути?",
-  solution: "Как капибара решает проблему?",
+  solution: "Как герой решает проблему?",
   ending: "Чем заканчивается история?",
 };
+
+const ROLE_LABELS_RU: Record<StoryRoleKey, string> = {
+  intro: "Начало",
+  journey: "Путь",
+  problem: "Проблема",
+  solution: "Решение",
+  ending: "Финал",
+};
+
+const ROLE_SUBTITLES_RU: Record<StoryRoleKey, string> = {
+  intro: "Кто герой и где он",
+  journey: "Что он делает",
+  problem: "Что пошло не так",
+  solution: "Как он справился",
+  ending: "Чем всё закончилось",
+};
+
+const ROLE_EDITOR_HELP: Record<
+  StoryRoleKey,
+  { description: string; example: string }
+> = {
+  intro: {
+    description: "Опиши героя и начальную ситуацию",
+    example: "Жила-была Аня, и она обожала находить странные вещи",
+  },
+  journey: {
+    description: "Что герой делает или куда отправляется",
+    example: "Однажды она пошла на чердак искать старый фонарь",
+  },
+  problem: {
+    description: "Что пошло не так",
+    example: "Но дверь захлопнулась, и фонарь вдруг погас",
+  },
+  solution: {
+    description: "Как герой решил проблему",
+    example: "Она нашла ключ по тихому звону в темноте",
+  },
+  ending: {
+    description: "Чем всё закончилось",
+    example: "С тех пор Аня всегда слушала странные подсказки внимательнее",
+  },
+};
+
+function getIntroNarrationText(template: StoryBuilderTemplate) {
+  const introShared = getStepSharedFragments(template, "intro")[0];
+  return introShared?.fragment.text.trim() ?? "";
+}
+
+function inferHeroContext(template: StoryBuilderTemplate) {
+  const introNarration = getIntroNarrationText(template);
+  if (introNarration) {
+    const firstSentence = introNarration.split(/(?<=[.!?])\s+/)[0]?.trim();
+    if (firstSentence) {
+      return firstSentence;
+    }
+  }
+  return template.name.trim() || "герой из этой истории";
+}
+
+function buildAssembledStorySegments(template: StoryBuilderTemplate, path: StoryPath) {
+  return buildStory(
+    adaptStoryTemplateToContract({
+      steps: template.steps,
+      fragments: template.fragments,
+      twists: template.twists,
+    }).template,
+    path,
+  ).flatMap((segment) => ("twist" in segment ? [] : [segment]));
+}
+
+function buildStoryPreviewText(
+  template: StoryBuilderTemplate,
+  path: StoryPath,
+  maxStepIndex: number,
+) {
+  const segments = buildAssembledStorySegments(template, path).slice(0, maxStepIndex + 1);
+  const parts = segments.flatMap((segment) =>
+    [segment.sharedText ?? "", segment.choice, segment.text]
+      .map((item) => item?.trim() ?? "")
+      .filter(Boolean),
+  );
+
+  return parts.join(" ").trim();
+}
+
+function summarizeSelectedPath(path: StoryPath, maxStepIndex: number) {
+  return STORY_ROLE_KEYS.slice(0, maxStepIndex + 1)
+    .map((role) => `${role}: вариант ${(path[role] ?? 0) + 1}`)
+    .join(", ");
+}
 
 type StoryTemplateStats = {
   id: string;
@@ -58,6 +160,11 @@ type StoryTemplateStats = {
   keywords: string[] | null;
   age_group: string | null;
   steps: Record<StoryRoleKey, number>;
+};
+
+type StoryTemplateListItem = {
+  id: string;
+  name: string;
 };
 
 function helperLabel(label: string, tooltip: string, help: string) {
@@ -75,19 +182,75 @@ function helperLabel(label: string, tooltip: string, help: string) {
 }
 
 function saveButtonClass(state: Record<string, "saved" | "dirty">, key: string) {
-  return state[key] === "saved" ? "books-button books-button--success" : "books-button books-button--primary";
+  return state[key] === "saved"
+    ? "books-button books-button--success"
+    : "books-button books-button--primary";
 }
 
 function saveButtonLabel(state: Record<string, "saved" | "dirty">, key: string) {
   return state[key] === "saved" ? "✔ Сохранено" : "Сохранить";
 }
 
-function makeSlug(value: string) {
-  return slugifyRu(value) || slugify(value, { lower: true, strict: true, trim: true }) || "story-template";
+function generateSlug(title: string) {
+  return (
+    slugifyRu(title) ||
+    slugify(title, { lower: true, strict: true, trim: true }) ||
+    "story-template"
+  );
+}
+
+function ensureThreeChoices(
+  choices: StoryBuilderTemplate["steps"][number]["choices"],
+): StoryBuilderTemplate["steps"][number]["choices"] {
+  const normalized = Array.from({ length: 3 }, (_, index) => {
+    const sourceChoice =
+      choices.find((choice) => (choice.sort_order ?? index) === index) ?? null;
+
+    if (sourceChoice) {
+      return {
+        ...sourceChoice,
+        sort_order: index,
+      };
+    }
+
+    return {
+      text: "",
+      keywords: [],
+      sort_order: index,
+    };
+  });
+
+  return normalized;
+}
+
+function normalizeTemplateChoices(
+  template: StoryBuilderTemplate,
+): StoryBuilderTemplate {
+  return {
+    ...template,
+    steps: STORY_ROLE_KEYS.map((role, roleIndex) => {
+      const sourceStep =
+        template.steps.find((step) => step.step_key === role) ??
+        {
+          step_key: role,
+          question: ROLE_QUESTIONS_RU[role],
+          sort_order: roleIndex,
+          choices: [],
+        };
+
+      return {
+        ...sourceStep,
+        step_key: role,
+        sort_order: roleIndex,
+        question: sourceStep.question || ROLE_QUESTIONS_RU[role],
+        choices: ensureThreeChoices(sourceStep.choices ?? []),
+      };
+    }),
+  };
 }
 
 function createEmptyTemplate(index: number): StoryBuilderTemplate {
-  return {
+  return normalizeTemplateChoices({
     name: `Шаблон истории ${index + 1}`,
     slug: `story-template-${index + 1}`,
     is_published: true,
@@ -95,11 +258,11 @@ function createEmptyTemplate(index: number): StoryBuilderTemplate {
       step_key: role,
       question: ROLE_QUESTIONS_RU[role],
       sort_order: roleIndex,
-      choices: [],
+      choices: ensureThreeChoices([]),
     })),
     fragments: [],
     twists: [],
-  };
+  });
 }
 
 function emptyTwist(): StoryTwistInput {
@@ -111,72 +274,28 @@ function emptyTwist(): StoryTwistInput {
   };
 }
 
-function hasStepData(template: StoryBuilderTemplate, role: StoryRoleKey): boolean {
-  const step = template.steps.find((item) => item.step_key === role);
-  const fragments = template.fragments.filter((item) => item.step_key === role);
-  return Boolean(
-    step &&
-      (step.question.trim() !== ROLE_QUESTIONS_RU[role] ||
-        step.choices.length > 0 ||
-        fragments.some((fragment) => fragment.text.trim() || fragment.keywords.length > 0)),
-  );
-}
-
-function hasChoiceData(
-  template: StoryBuilderTemplate,
-  role: StoryRoleKey,
-  choiceIndex: number,
-): boolean {
-  const step = template.steps.find((item) => item.step_key === role);
-  const choice = step?.choices[choiceIndex];
-  const fragments = template.fragments.filter(
-    (item) => item.step_key === role && item.choice_temp_key === String(choiceIndex),
-  );
-  return Boolean(choice && (choice.text.trim() || choice.keywords.length > 0 || fragments.length > 0));
-}
-
-function hasFragmentData(fragment: StoryFragmentInput): boolean {
-  return Boolean(fragment.text.trim() || fragment.keywords.length > 0);
-}
-
-function buildInitialCollapsedSteps(templates: StoryBuilderTemplate[]) {
-  const next: Record<string, boolean> = {};
-  templates.forEach((template, templateIndex) => {
-    STORY_ROLE_KEYS.forEach((role, stepIndex) => {
-      next[`step:${templateIndex}:${stepIndex}`] = hasStepData(template, role);
-    });
-  });
-  return next;
-}
-
-function buildInitialCollapsedChoices(templates: StoryBuilderTemplate[]) {
-  const next: Record<string, boolean> = {};
-  templates.forEach((template, templateIndex) => {
-    template.steps.forEach((step, stepIndex) => {
-      step.choices.forEach((_, choiceIndex) => {
-        next[`choice:${templateIndex}:${stepIndex}:${choiceIndex}`] = hasChoiceData(
-          template,
-          step.step_key,
-          choiceIndex,
-        );
-      });
-    });
-  });
-  return next;
-}
-
-function buildInitialCollapsedFragments(templates: StoryBuilderTemplate[]) {
-  const next: Record<string, boolean> = {};
-  templates.forEach((template, templateIndex) => {
-    template.fragments.forEach((fragment, fragmentIndex) => {
-      next[`fragment:${templateIndex}:${fragment.step_key}:${fragmentIndex}`] = hasFragmentData(fragment);
-    });
-  });
-  return next;
-}
-
-function groupOverviewRows(rows: StoryTemplateOverviewRow[]): StoryTemplateStats[] {
+function groupOverviewRows(
+  templates: StoryTemplateListItem[],
+  rows: StoryTemplateOverviewRow[],
+): StoryTemplateStats[] {
   const grouped = new Map<string, StoryTemplateStats>();
+
+  templates.forEach((template) => {
+    grouped.set(template.id, {
+      id: template.id,
+      name: template.name,
+      description: null,
+      keywords: null,
+      age_group: null,
+      steps: {
+        intro: 0,
+        journey: 0,
+        problem: 0,
+        solution: 0,
+        ending: 0,
+      },
+    });
+  });
 
   rows.forEach((row) => {
     const current =
@@ -200,7 +319,9 @@ function groupOverviewRows(rows: StoryTemplateOverviewRow[]): StoryTemplateStats
     grouped.set(row.id, current);
   });
 
-  return Array.from(grouped.values()).sort((left, right) => left.name.localeCompare(right.name, "ru"));
+  return Array.from(grouped.values()).sort((left, right) =>
+    left.name.localeCompare(right.name, "ru"),
+  );
 }
 
 function totalVariants(stats: StoryTemplateStats) {
@@ -235,43 +356,258 @@ function formatIls(value: number) {
   return `${value.toFixed(3)} ₪`;
 }
 
-function fragmentStateKey(templateIndex: number, role: StoryRoleKey, fragmentIndex: number) {
-  return `fragment:${templateIndex}:${role}:${fragmentIndex}`;
+function findFirstIncompleteChoiceIndex(
+  step: StoryBuilderTemplate["steps"][number],
+  fragments: StoryBuilderTemplate["fragments"],
+): number {
+  return step.choices.findIndex((choice, choiceIndex) => {
+    const hasText = choice.text.trim().length > 0;
+    const hasFragment = fragments.some(
+      (fragment) =>
+        fragment.step_key === step.step_key &&
+        fragment.choice_temp_key === String(choiceIndex) &&
+        fragment.text.trim().length > 0,
+    );
+
+    return !hasText || !hasFragment;
+  });
 }
 
-function choiceStateKey(templateIndex: number, stepIndex: number, choiceIndex: number) {
-  return `choice:${templateIndex}:${stepIndex}:${choiceIndex}`;
+function getStepCompletionStats(
+  step: StoryBuilderTemplate["steps"][number],
+  fragments: StoryBuilderTemplate["fragments"],
+) {
+  const questionComplete = step.question.trim().length > 0;
+  const filledChoicesCount = step.choices.filter(
+    (choice) => choice.text.trim().length > 0,
+  ).length;
+  const choiceFragmentsCount = step.choices.filter((_, choiceIndex) =>
+    fragments.some(
+      (fragment) =>
+        fragment.step_key === step.step_key &&
+        fragment.choice_temp_key === String(choiceIndex) &&
+        fragment.text.trim().length > 0,
+    ),
+  ).length;
+
+  return {
+    questionComplete,
+    filledChoicesCount,
+    choiceFragmentsCount,
+    stepComplete:
+      questionComplete && filledChoicesCount === 3 && choiceFragmentsCount === 3,
+  };
 }
 
-function stepStateKey(templateIndex: number, stepIndex: number) {
-  return `step:${templateIndex}:${stepIndex}`;
+function formatStoryWarning(message: string) {
+  if (message === "Solution may not resolve the problem.") {
+    return "Решение пока не выглядит как реальное преодоление проблемы.";
+  }
+  if (message === "Ending appears to introduce a new problem.") {
+    return "Финал вводит новую проблему вместо завершения истории.";
+  }
+  if (message.includes("has semantically similar choice texts")) {
+    return "Варианты выбора слишком похожи по смыслу.";
+  }
+  if (message.includes("may not connect clearly to the previous step")) {
+    return "Переход с предыдущего шага выглядит логически слабым.";
+  }
+  if (message === "Journey reads too similarly to intro.") {
+    return "Шаг journey слишком похож на intro и не двигает историю дальше.";
+  }
+  return message;
+}
+
+function normalizeChoiceSimilarityText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[.,!?;:]/g, "")
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .slice(0, 6)
+    .join(" ");
+}
+
+function getSimilarChoiceIndexes(step: StoryBuilderTemplate["steps"][number]) {
+  const indexes = new Set<number>();
+  const seen = new Map<string, number>();
+
+  step.choices.forEach((choice, index) => {
+    const key = normalizeChoiceSimilarityText(choice.text);
+    if (!key) {
+      return;
+    }
+    const existing = seen.get(key);
+    if (existing !== undefined) {
+      indexes.add(existing);
+      indexes.add(index);
+      return;
+    }
+    seen.set(key, index);
+  });
+
+  return indexes;
+}
+
+function getNextStoryRole(role: StoryRoleKey): StoryRoleKey | null {
+  const index = STORY_ROLE_KEYS.indexOf(role);
+  if (index === -1 || index >= STORY_ROLE_KEYS.length - 1) {
+    return null;
+  }
+  return STORY_ROLE_KEYS[index + 1];
+}
+
+function countWords(value: string) {
+  return value
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
+}
+
+function collectTemplateWarnings(template: StoryBuilderTemplate) {
+  const warnings: string[] = [];
+
+  template.steps.forEach((step) => {
+    const stepLabel = ROLE_LABELS_RU[step.step_key];
+    const filledChoices = step.choices.filter((choice) => choice.text.trim().length > 0);
+
+    if (filledChoices.length === 0) {
+      warnings.push(`${stepLabel}: нет вариантов в шаге.`);
+    }
+
+    if (step.question.trim().length > 120) {
+      warnings.push(`${stepLabel}: вопрос для ребёнка слишком длинный.`);
+    }
+
+    if (step.question.trim().length > 0 && countWords(step.question) < 3) {
+      warnings.push(`${stepLabel}: вопрос для ребёнка слишком короткий.`);
+    }
+
+    step.choices.forEach((choice, choiceIndex) => {
+      const choiceLabel = `${stepLabel}, вариант ${choiceIndex + 1}`;
+
+      if (!choice.text.trim()) {
+        return;
+      }
+
+      if (choice.text.trim().length > 120) {
+        warnings.push(`${choiceLabel}: текст слишком длинный.`);
+      }
+      if (countWords(choice.text) < 3) {
+        warnings.push(`${choiceLabel}: текст слишком короткий.`);
+      }
+      if (choice.keywords.length === 0) {
+        warnings.push(`${choiceLabel}: пустые ключевые слова.`);
+      }
+    });
+  });
+
+  return warnings;
+}
+
+function getStepSharedFragments(
+  template: StoryBuilderTemplate,
+  role: StoryRoleKey,
+) {
+  return template.fragments
+    .map((fragment, fragmentIndex) => ({ fragment, fragmentIndex }))
+    .filter(
+      ({ fragment }) => fragment.step_key === role && !fragment.choice_temp_key,
+    );
+}
+
+function getFragmentRenderKey(
+  fragment: StoryBuilderTemplate["fragments"][number],
+  fragmentIndex: number,
+) {
+  return (
+    fragment.id ??
+    `${fragment.step_key}:${fragment.choice_temp_key ?? "shared"}:${fragment.sort_order}:${fragmentIndex}`
+  );
 }
 
 export default function StoryBuilderPage() {
   const router = useRouter();
   const supabase = createClientComponentClient();
-  const fragmentRefs = useRef<Record<string, HTMLDivElement | null>>({});
-  const templateEditorRefs = useRef<Record<string, HTMLElement | null>>({});
+  const activeTemplateRef = useRef<StoryBuilderTemplate | null>(null);
 
   const [sessionChecked, setSessionChecked] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [templates, setTemplates] = useState<StoryBuilderTemplate[]>([]);
+  const [loadingOverview, setLoadingOverview] = useState(true);
+  const [editorLoading, setEditorLoading] = useState(false);
   const [overviewStats, setOverviewStats] = useState<StoryTemplateStats[]>([]);
   const [twists, setTwists] = useState<StoryBuilderResponse["twists"]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [activeTemplate, setActiveTemplate] = useState<StoryBuilderTemplate | null>(null);
+  const [selectedStep, setSelectedStep] = useState(0);
+  const [expandedChoiceIndex, setExpandedChoiceIndex] = useState(0);
+  const [showSharedFragments, setShowSharedFragments] = useState(false);
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<Record<string, "saved" | "dirty">>({});
   const [keywordDrafts, setKeywordDrafts] = useState<Record<string, string>>({});
-  const [slugDrafts, setSlugDrafts] = useState<Record<string, string>>({});
-  const [collapsedSteps, setCollapsedSteps] = useState<Record<string, boolean>>({});
-  const [collapsedChoices, setCollapsedChoices] = useState<Record<string, boolean>>({});
-  const [collapsedFragments, setCollapsedFragments] = useState<Record<string, boolean>>({});
-  const [pendingScrollKey, setPendingScrollKey] = useState<string | null>(null);
+  const [isSlugManuallyEdited, setIsSlugManuallyEdited] = useState(false);
+  const [previewPath, setPreviewPath] = useState<StoryPath>(createDefaultStoryPath());
+  const [templateWarnings, setTemplateWarnings] = useState<string[]>([]);
+  const [showFragmentHint, setShowFragmentHint] = useState(false);
+
+  const isDirty = Object.values(saveState).includes("dirty");
 
   const loadOverview = useCallback(async () => {
-    const overview = await fetchJson<{ rows: StoryTemplateOverviewRow[] }>("/api/admin/story-builder/overview");
-    setOverviewStats(groupOverviewRows(overview.rows));
+    const overview = await fetchJson<{
+      templates: StoryTemplateListItem[];
+      rows: StoryTemplateOverviewRow[];
+    }>(
+      "/api/admin/story-builder/overview",
+    );
+    console.log("[StoryBuilder] fetched templates:", overview.templates.length);
+    setOverviewStats(groupOverviewRows(overview.templates, overview.rows));
+  }, []);
+
+  const loadTwists = useCallback(async () => {
+    const data = await fetchJson<{ twists: StoryBuilderResponse["twists"] }>(
+      "/api/admin/story-builder/twists",
+    );
+    setTwists(data.twists);
+  }, []);
+
+  const loadInitialData = useCallback(async () => {
+    setLoadingOverview(true);
+    setError(null);
+    try {
+      await Promise.all([loadOverview(), loadTwists()]);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setLoadingOverview(false);
+    }
+  }, [loadOverview, loadTwists]);
+
+  const loadTemplate = useCallback(async (templateId: string) => {
+    setEditorLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const data = await fetchJson<{ template: StoryBuilderTemplate }>(
+        `/api/admin/story-builder/template?id=${encodeURIComponent(templateId)}`,
+      );
+      const template = normalizeTemplateChoices(data.template);
+      setSelectedTemplateId(templateId);
+      setActiveTemplate(template);
+      setSelectedStep(0);
+      setExpandedChoiceIndex(0);
+      setShowSharedFragments(false);
+      setIsSlugManuallyEdited(template.slug !== generateSlug(template.name));
+      setPreviewPath(createDefaultStoryPath());
+      setKeywordDrafts({});
+      setTemplateWarnings([]);
+      setShowFragmentHint(false);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setEditorLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -284,59 +620,81 @@ export default function StoryBuilderPage() {
     });
   }, [router, supabase]);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [data, overview] = await Promise.all([
-        fetchJson<StoryBuilderResponse>("/api/admin/story-builder"),
-        fetchJson<{ rows: StoryTemplateOverviewRow[] }>("/api/admin/story-builder/overview"),
-      ]);
-      setTemplates(data.templates);
-      setOverviewStats(groupOverviewRows(overview.rows));
-      setTwists(data.twists);
-      setCollapsedSteps(buildInitialCollapsedSteps(data.templates));
-      setCollapsedChoices(buildInitialCollapsedChoices(data.templates));
-      setCollapsedFragments(buildInitialCollapsedFragments(data.templates));
-    } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
     if (!sessionChecked) {
       return;
     }
-    void loadData();
-  }, [sessionChecked, loadData]);
+    void loadInitialData();
+  }, [sessionChecked, loadInitialData]);
 
   useEffect(() => {
-    if (!pendingScrollKey) {
+    activeTemplateRef.current = activeTemplate;
+  }, [activeTemplate]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (!isDirty) {
+        return;
+      }
+      event.preventDefault();
+      event.returnValue = "У вас есть несохранённые изменения. Вы уверены?";
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [isDirty]);
+
+  const safeReturnToTemplateList = () => {
+    if (isDirty) {
+      const confirmLeave = window.confirm(
+        "У вас есть несохранённые изменения. Вы уверены, что хотите уйти?",
+      );
+
+      if (!confirmLeave) {
+        return;
+      }
+    }
+
+    closeEditor();
+  };
+
+  useEffect(() => {
+    const currentTemplate = activeTemplateRef.current;
+    if (!currentTemplate) {
       return;
     }
-    const element = fragmentRefs.current[pendingScrollKey];
-    if (!element) {
+    const nextStep = currentTemplate.steps[selectedStep];
+    if (!nextStep) {
       return;
     }
-    requestAnimationFrame(() => {
-      element.scrollIntoView({ behavior: "smooth", block: "center" });
-      setPendingScrollKey(null);
-    });
-  }, [pendingScrollKey, templates]);
+    const firstProblemChoiceIndex = findFirstIncompleteChoiceIndex(
+      nextStep,
+      currentTemplate.fragments,
+    );
+    setExpandedChoiceIndex(firstProblemChoiceIndex === -1 ? 0 : firstProblemChoiceIndex);
+    setShowSharedFragments(false);
+  }, [selectedStep, selectedTemplateId]);
+
+  useEffect(() => {
+    if (!activeTemplate) {
+      return;
+    }
+    const step = activeTemplate.steps[selectedStep];
+    if (!step) {
+      return;
+    }
+    setPreviewPath((current) => ({
+      ...current,
+      [step.step_key]: expandedChoiceIndex as 0 | 1 | 2,
+    }));
+  }, [activeTemplate, expandedChoiceIndex, selectedStep]);
 
   const showSuccess = (message: string) => {
     setSuccess(message);
     setError(null);
-  };
-
-  const scrollToTemplateEditor = (templateId: string) => {
-    const element = templateEditorRefs.current[templateId];
-    if (!element) {
-      return;
-    }
-    element.scrollIntoView({ behavior: "smooth", block: "start" });
   };
 
   const showSaveError = (message: string) => {
@@ -352,13 +710,52 @@ export default function StoryBuilderPage() {
     setSaveState((current) => ({ ...current, [key]: "saved" }));
   };
 
-  const updateTemplate = (templateIndex: number, next: StoryBuilderTemplate) => {
-    setTemplates((current) => current.map((template, index) => (index === templateIndex ? next : template)));
+  const updateActiveTemplate = (
+    updater: (current: StoryBuilderTemplate) => StoryBuilderTemplate,
+  ) => {
+    setActiveTemplate((current) =>
+      current ? normalizeTemplateChoices(updater(current)) : current,
+    );
   };
 
-  const sanitizeTemplateForRequest = (template: StoryBuilderTemplate): StoryBuilderTemplate => ({
+  const openNewTemplate = () => {
+    const template = createEmptyTemplate(overviewStats.length);
+    setSelectedTemplateId(DRAFT_TEMPLATE_ID);
+    setActiveTemplate(template);
+    setSelectedStep(0);
+    setExpandedChoiceIndex(0);
+    setShowSharedFragments(false);
+    setIsSlugManuallyEdited(false);
+    setPreviewPath(createDefaultStoryPath());
+    setKeywordDrafts({});
+    setSaveState({});
+    setTemplateWarnings([]);
+    setShowFragmentHint(false);
+    setError(null);
+    setSuccess(null);
+  };
+
+  const closeEditor = () => {
+    setSelectedTemplateId(null);
+    setActiveTemplate(null);
+    setSelectedStep(0);
+    setExpandedChoiceIndex(0);
+    setShowSharedFragments(false);
+    setIsSlugManuallyEdited(false);
+    setPreviewPath(createDefaultStoryPath());
+    setKeywordDrafts({});
+    setSaveState({});
+    setTemplateWarnings([]);
+    setShowFragmentHint(false);
+    setError(null);
+    setSuccess(null);
+  };
+
+  const sanitizeTemplateForRequest = (
+    template: StoryBuilderTemplate,
+  ): StoryBuilderTemplate => ({
     ...template,
-    slug: makeSlug(template.slug || template.name),
+    slug: generateSlug(template.slug || template.name),
     fragments: template.fragments
       .filter((fragment) => fragment.text.trim().length > 0)
       .map((fragment, index) => ({
@@ -367,45 +764,65 @@ export default function StoryBuilderPage() {
       })),
   });
 
-  const ensureTemplateSaved = async (templateIndex: number): Promise<StoryBuilderTemplate | null> => {
-    const template = templates[templateIndex];
-    if (!template) {
+  const ensureTemplateSaved = async (): Promise<StoryBuilderTemplate | null> => {
+    if (!activeTemplate) {
       return null;
     }
-    if (template.id) {
-      return template;
+    if (activeTemplate.id) {
+      return activeTemplate;
     }
-    const data = await fetchJson<{ template: StoryBuilderTemplate }>("/api/admin/story-builder/template", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(sanitizeTemplateForRequest(template)),
-    });
-    const merged = { ...template, id: data.template.id, slug: data.template.slug, name: data.template.name };
-    updateTemplate(templateIndex, merged);
-    markSaved(`template:${templateIndex}`);
+
+    const data = await fetchJson<{ template: StoryBuilderTemplate }>(
+      "/api/admin/story-builder/template",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(sanitizeTemplateForRequest(activeTemplate)),
+      },
+    );
+
+    const merged = {
+      ...activeTemplate,
+      id: data.template.id,
+      slug: data.template.slug,
+      name: data.template.name,
+    };
+
+    setActiveTemplate(normalizeTemplateChoices(merged));
+    setSelectedTemplateId(data.template.id ?? DRAFT_TEMPLATE_ID);
+    markSaved("template");
     return merged;
   };
 
-  const saveTemplate = async (templateIndex: number) => {
-    setBusyKey(`template-save:${templateIndex}`);
+  const saveTemplate = async () => {
+    if (!activeTemplate) {
+      return;
+    }
+
+    setBusyKey("template-save");
     setError(null);
     try {
-      const template = templates[templateIndex];
-      if (!template.name.trim()) {
+      if (!activeTemplate.name.trim()) {
         throw new Error("Не удалось сохранить шаблон. Заполните название.");
       }
-      const data = await fetchJson<{ template: StoryBuilderTemplate }>("/api/admin/story-builder/template", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sanitizeTemplateForRequest(template)),
-      });
-      updateTemplate(templateIndex, {
-        ...template,
+
+      const data = await fetchJson<{ template: StoryBuilderTemplate }>(
+        "/api/admin/story-builder/template",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sanitizeTemplateForRequest(activeTemplate)),
+        },
+      );
+
+      updateActiveTemplate((current) => ({
+        ...current,
         id: data.template.id,
         slug: data.template.slug,
         name: data.template.name,
-      });
-      markSaved(`template:${templateIndex}`);
+      }));
+      setSelectedTemplateId(data.template.id ?? DRAFT_TEMPLATE_ID);
+      markSaved("template");
       await loadOverview();
       showSuccess("Шаблон истории сохранён.");
     } catch (fetchError) {
@@ -415,34 +832,100 @@ export default function StoryBuilderPage() {
     }
   };
 
-  const generateTemplate = async (templateIndex: number) => {
-    const template = templates[templateIndex];
-    setBusyKey(`template-generate:${templateIndex}`);
+  const buildGenerationContext = (
+    template: StoryBuilderTemplate,
+    stepIndex: number,
+    path: StoryPath,
+    options?: { choiceIndex?: number; choiceText?: string | null },
+  ) => {
+    const step = template.steps[stepIndex];
+    const nextRole = getNextStoryRole(step.step_key);
+    const selectedChoiceText =
+      options?.choiceText?.trim() ||
+      (typeof options?.choiceIndex === "number"
+        ? step.choices[options.choiceIndex]?.text?.trim() || ""
+        : "");
+    const introChoiceDirection =
+      step.step_key === "intro" && typeof options?.choiceIndex === "number"
+        ? options.choiceIndex === 0
+          ? "Сделай исследовательское направление: странное место, звук, след, карта, находка."
+          : options.choiceIndex === 1
+            ? "Сделай игровое или социальное направление: помощь, игра, встреча, приглашение, подготовка к событию."
+            : "Сделай необычное или любопытное направление: странный предмет, смешная случайность, волшебная деталь, неожиданный гость."
+        : null;
+    const introFragmentTone =
+      step.step_key === "intro"
+        ? "Для intro fragment добавь короткую деталь настроения, образ или ощущение. Не пересказывай choice."
+        : null;
+    const introNarration = getIntroNarrationText(template);
+    const heroContext = inferHeroContext(template);
+    const currentStoryText = buildStoryPreviewText(template, path, stepIndex);
+    const selectedPath = summarizeSelectedPath(path, stepIndex);
+
+    return [
+      `Название шаблона: ${template.name || "Новая история"}.`,
+      `Главный герой: ${heroContext}.`,
+      `Текст начала истории: ${introNarration || "Начало истории ещё не заполнено."}`,
+      "Не предполагай заранее тип героя. Опирайся только на название шаблона и текст начала истории.",
+      `Текущий шаг: ${step.step_key}.`,
+      `Цель шага: ${ROLE_HINTS[step.step_key]}`,
+      `Выбранная ветка: ${selectedPath || "ветка пока не выбрана"}.`,
+      `Полный текущий текст истории:\n${currentStoryText || introNarration || "Текст истории пока не заполнен."}`,
+      `Текущий вопрос шага: ${step.question || "Вопрос ещё не заполнен."}`,
+      selectedChoiceText
+        ? `Выбранный choice: ${selectedChoiceText}`
+        : "Выбранный choice: ещё не задан.",
+      "Продолжай именно текущую ветку истории.",
+      "Не начинай историю заново и не меняй героя без причины.",
+      introChoiceDirection ?? "",
+      introFragmentTone ?? "",
+      nextRole
+        ? `Следующий шаг должен логично подготовить роль: ${nextRole}.`
+        : "Это финальный шаг, он должен мягко завершить историю.",
+    ].filter(Boolean).join("\n\n");
+  };
+
+  const generateTemplate = async () => {
+    if (!activeTemplate) {
+      return;
+    }
+
+    setBusyKey("template-generate");
     setError(null);
     try {
       const data = await fetchJson<{
         title: string;
-        steps: Array<{ step_key: StoryRoleKey; question: string; choices: Array<{ text: string; keywords: string[] }> }>;
-        fragments: Array<{ step_key: StoryRoleKey; choice_index: number; text: string; keywords: string[] }>;
+        steps: Array<{
+          step_key: StoryRoleKey;
+          question: string;
+          choices: Array<{ text: string; keywords: string[] }>;
+        }>;
+        fragments: Array<{
+          step_key: StoryRoleKey;
+          choice_index: number;
+          text: string;
+          keywords: string[];
+        }>;
       }>("/api/admin/generate-story-template", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          title: template.name || "",
-          description: `Interactive capybara story template: ${template.name}`,
+          title: activeTemplate.name || "",
+          description: `Шаблон детской интерактивной истории: ${activeTemplate.name}`,
           ageGroup: null,
-          templateName: template.name,
-          templateSlug: template.slug,
+          templateName: activeTemplate.name,
+          templateSlug: activeTemplate.slug,
         }),
       });
 
-      updateTemplate(templateIndex, {
-        ...template,
+      updateActiveTemplate((current) => ({
+        ...current,
         name: data.title,
+        slug: isSlugManuallyEdited ? current.slug : generateSlug(data.title),
         steps: STORY_ROLE_KEYS.map((role, index) => {
           const generatedStep = data.steps.find((item) => item.step_key === role);
           return {
-            id: template.steps.find((item) => item.step_key === role)?.id,
+            id: current.steps.find((item) => item.step_key === role)?.id,
             step_key: role,
             question: generatedStep?.question ?? ROLE_QUESTIONS_RU[role],
             sort_order: index,
@@ -461,8 +944,9 @@ export default function StoryBuilderPage() {
           keywords: fragment.keywords,
           sort_order: index,
         })),
-      });
-      markDirty(`template:${templateIndex}`);
+      }));
+      markDirty("template");
+      markDirty(`step:${STORY_ROLE_KEYS[selectedStep]}`);
       showSuccess("Шаблон истории сгенерирован.");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -471,113 +955,108 @@ export default function StoryBuilderPage() {
     }
   };
 
-  const generateStepQuestion = async (templateIndex: number, stepIndex: number) => {
-    const template = templates[templateIndex];
-    const step = template.steps[stepIndex];
-    setBusyKey(`step-generate:${templateIndex}:${stepIndex}`);
-    setError(null);
-    try {
-      const data = await fetchJson<{ question: string; step_key: StoryRoleKey }>("/api/admin/generate-story-part", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: template.name,
-          description: `Шаблон истории ${template.name}`,
-          ageGroup: null,
-          templateName: template.name,
-          kind: "step",
-          storyRole: step.step_key,
-          previousRole: stepIndex > 0 ? template.steps[stepIndex - 1].step_key : null,
-          context: `Нужно сгенерировать вопрос для роли ${step.step_key}.`,
-        }),
-      });
-      updateTemplate(templateIndex, {
-        ...template,
-        steps: template.steps.map((item, index) =>
-          index === stepIndex ? { ...item, question: data.question, step_key: data.step_key } : item,
-        ),
-      });
-      markDirty(`step:${templateIndex}:${stepIndex}`);
-      setCollapsedSteps((current) => ({ ...current, [`step:${templateIndex}:${stepIndex}`]: false }));
-      showSuccess(`Шаг ${step.step_key} сгенерирован.`);
-    } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
-    } finally {
-      setBusyKey(null);
+  const saveStep = async () => {
+    if (!activeTemplate) {
+      return;
     }
-  };
 
-  const saveStep = async (templateIndex: number, stepIndex: number) => {
-    setBusyKey(`step-save:${templateIndex}:${stepIndex}`);
+    const step = activeTemplate.steps[selectedStep];
+    if (!step) {
+      return;
+    }
+
+    const stepSaveKey = `step:${step.step_key}`;
+    const fragmentsSaveKey = `fragments:${step.step_key}`;
+    setBusyKey(`step-save:${step.step_key}`);
     setError(null);
     try {
-      const currentTemplate = templates[templateIndex];
-      const step = currentTemplate.steps[stepIndex];
-      const role = step.step_key;
-      const stepSaveKey = `step:${templateIndex}:${stepIndex}`;
-      const fragmentsSaveKey = `fragments:${templateIndex}:${role}`;
+      const roleFragments = activeTemplate.fragments.filter(
+        (fragment) => fragment.step_key === step.step_key,
+      );
+      const partialStep = {
+        ...step,
+        question: step.question.trim(),
+        choices: step.choices
+          .filter((choice) => choice.text.trim() !== "")
+          .map((choice, choiceIndex) => ({
+            ...choice,
+            text: choice.text.trim(),
+            keywords: choice.keywords.filter((keyword) => keyword.trim().length > 0),
+            sort_order: choice.sort_order ?? choiceIndex,
+          })),
+      };
+      const nonEmptyFragments = roleFragments
+        .filter((fragment) => fragment.text.trim() !== "")
+        .map((fragment, fragmentIndex) => ({
+          ...fragment,
+          choice_id: null,
+          text: fragment.text.trim(),
+          keywords: fragment.keywords.filter((keyword) => keyword.trim().length > 0),
+          sort_order: fragment.sort_order ?? fragmentIndex,
+        }));
 
-      if (step.choices.length < 3) {
-        throw new Error("Для каждого шага нужно минимум 3 варианта.");
-      }
-      if (step.choices.some((choice) => choice.text.trim() === "")) {
-        throw new Error("Заполните текст у всех вариантов перед сохранением.");
+      if (!partialStep.question) {
+        throw new Error("Заполните вопрос для ребёнка перед сохранением шага.");
       }
 
-      const savedTemplate = await ensureTemplateSaved(templateIndex);
+      const savedTemplate = await ensureTemplateSaved();
       if (!savedTemplate?.id) {
         throw new Error("Сначала сохраните шаблон истории.");
       }
 
-      const stepResponse = await fetchJson<{ step: StoryBuilderTemplate["steps"][number] }>("/api/admin/story-builder/step", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          templateId: savedTemplate.id,
-          step,
-        }),
-      });
+      const stepPayload = {
+        templateId: savedTemplate.id,
+        step: partialStep,
+      };
+      const fragmentsPayload = {
+        templateId: savedTemplate.id,
+        role: step.step_key,
+        fragments: nonEmptyFragments,
+        steps: [partialStep],
+      };
 
-      const nextSteps = currentTemplate.steps.map((item, index) => (index === stepIndex ? stepResponse.step : item));
-      const roleFragments = currentTemplate.fragments.filter((fragment) => fragment.step_key === role);
-      const nonEmptyFragments = roleFragments.filter((fragment) => fragment.text.trim() !== "");
+      console.log("SAVE PAYLOAD", { stepPayload, fragmentsPayload });
+      console.log("STEP SAVE PAYLOAD", stepPayload);
+      console.log("FRAGMENTS SAVE PAYLOAD", fragmentsPayload);
 
-      if (roleFragments.some((fragment) => fragment.text.trim() === "")) {
-        throw new Error("Текст фрагмента не должен быть пустым.");
-      }
-      if (nonEmptyFragments.length === 0) {
-        throw new Error("В шаге должен быть хотя бы один фрагмент.");
-      }
+      const stepResponse = await fetchJson<{ step: StoryBuilderTemplate["steps"][number] }>(
+        "/api/admin/story-builder/step",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(stepPayload),
+        },
+      );
+      console.log("STEP SAVE RESPONSE", stepResponse);
 
-      const fragmentsResponse = await fetchJson<{ fragments: StoryBuilderTemplate["fragments"] }>("/api/admin/story-builder/fragments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          templateId: savedTemplate.id,
-          role,
-          fragments: nonEmptyFragments,
-          steps: nextSteps,
-        }),
-      });
+      const fragmentsResponse = await fetchJson<{ fragments: StoryBuilderTemplate["fragments"] }>(
+        "/api/admin/story-builder/fragments",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...fragmentsPayload,
+            steps: [stepResponse.step],
+          }),
+        },
+      );
+      console.log("FRAGMENTS SAVE RESPONSE", fragmentsResponse);
 
-      updateTemplate(templateIndex, {
-        ...currentTemplate,
-        id: savedTemplate.id,
-        steps: nextSteps,
-        fragments: [
-          ...currentTemplate.fragments.filter((fragment) => fragment.step_key !== role),
-          ...fragmentsResponse.fragments,
-        ].sort((a, b) => a.sort_order - b.sort_order),
-      });
+      const persistedTemplate = await fetchJson<{ template: StoryBuilderTemplate }>(
+        `/api/admin/story-builder/template?id=${encodeURIComponent(savedTemplate.id)}`,
+      );
+      console.log("REFETCHED TEMPLATE AFTER SAVE", persistedTemplate);
+
+      setActiveTemplate(normalizeTemplateChoices(persistedTemplate.template));
+      setIsSlugManuallyEdited(
+        persistedTemplate.template.slug !== generateSlug(persistedTemplate.template.name),
+      );
 
       markSaved(stepSaveKey);
       markSaved(fragmentsSaveKey);
-      nextSteps[stepIndex]?.choices.forEach((_, choiceIndex) => {
-        markSaved(choiceStateKey(templateIndex, stepIndex, choiceIndex));
-      });
-      setCollapsedSteps((current) => ({ ...current, [stepSaveKey]: true }));
+      markSaved("template");
       await loadOverview();
-      showSuccess(`Шаг ${role} и все связанные данные сохранены.`);
+      showSuccess(`Шаг ${step.step_key} и связанные фрагменты сохранены.`);
     } catch (fetchError) {
       showSaveError(fetchError instanceof Error ? fetchError.message : String(fetchError));
     } finally {
@@ -585,88 +1064,139 @@ export default function StoryBuilderPage() {
     }
   };
 
-  const generateChoice = async (templateIndex: number, stepIndex: number, choiceIndex: number) => {
-    const template = templates[templateIndex];
-    const step = template.steps[stepIndex];
-    setBusyKey(`choice-generate:${templateIndex}:${stepIndex}:${choiceIndex}`);
+  const generateChoice = async (choiceIndex: number) => {
+    if (!activeTemplate) {
+      return;
+    }
+
+    const step = activeTemplate.steps[selectedStep];
+    if (!step) {
+      return;
+    }
+
+    setBusyKey(`choice-generate:${step.step_key}:${choiceIndex}`);
     setError(null);
     try {
-      const data = await fetchJson<{ text: string; keywords: string[] }>("/api/admin/generate-story-part", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: template.name,
-          description: `Шаг ${step.step_key}: ${step.question}`,
-          ageGroup: null,
-          templateName: template.name,
-          kind: "choice",
-          storyRole: step.step_key,
-          previousRole: stepIndex > 0 ? template.steps[stepIndex - 1].step_key : null,
-          context: `Нужен вариант выбора для шага ${step.step_key}.`,
-        }),
-      });
-      updateTemplate(templateIndex, {
-        ...template,
-        steps: template.steps.map((item, index) =>
-          index === stepIndex
+      const roleFragments = activeTemplate.fragments.filter(
+        (fragment) => fragment.step_key === step.step_key,
+      );
+      const filledChoices = step.choices
+        .map((choice, index) => ({
+          text: choice.text.trim(),
+          fragment:
+            roleFragments.find(
+              (fragment) =>
+                fragment.choice_temp_key === String(index) &&
+                fragment.text.trim().length > 0,
+            )?.text ?? "",
+        }))
+        .filter((choice) => choice.text.length > 0);
+      const emptyChoiceIndexes = step.choices
+        .map((choice, index) => (choice.text.trim() ? null : index))
+        .filter((index): index is number => index !== null);
+      const targetChoiceIndexes =
+        emptyChoiceIndexes.length > 0 ? emptyChoiceIndexes : [choiceIndex];
+      const currentStoryText = buildStoryPreviewText(activeTemplate, previewPath, selectedStep);
+      const selectedPath = summarizeSelectedPath(previewPath, selectedStep);
+      const data = await fetchJson<{
+        choices: Array<{ text: string; fragment: string; keywords: string[] }>;
+      }>(
+        "/api/admin/generate-story-step-choices",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: activeTemplate.name,
+            stepKey: step.step_key,
+            introNarration: getIntroNarrationText(activeTemplate),
+            currentStoryText,
+            selectedPath,
+            roleDescription: ROLE_HINTS[step.step_key],
+            question: step.question,
+            existingChoices: filledChoices,
+            count: targetChoiceIndexes.length,
+          }),
+        },
+      );
+
+      if (!Array.isArray(data.choices) || data.choices.length === 0) {
+        console.error("EMPTY_STEP_CHOICES_RESPONSE", {
+          step: step.step_key,
+          choiceIndex,
+          response: data,
+        });
+        throw new Error("Не удалось сгенерировать недостающие варианты.");
+      }
+
+      updateActiveTemplate((current) => ({
+        ...current,
+        steps: current.steps.map((item, index) =>
+          index === selectedStep
             ? {
                 ...item,
                 choices: item.choices.map((choice, itemIndex) =>
-                  itemIndex === choiceIndex ? { ...choice, text: data.text, keywords: data.keywords } : choice,
+                  targetChoiceIndexes.includes(itemIndex)
+                    ? {
+                        ...choice,
+                        text:
+                          data.choices[targetChoiceIndexes.indexOf(itemIndex)]?.text ?? choice.text,
+                        keywords:
+                          data.choices[targetChoiceIndexes.indexOf(itemIndex)]?.keywords ??
+                          choice.keywords,
+                      }
+                    : choice,
                 ),
               }
             : item,
         ),
-      });
-      setCollapsedChoices((current) => ({
-        ...current,
-        [`choice:${templateIndex}:${stepIndex}:${choiceIndex}`]: false,
-      }));
-      markDirty(`step:${templateIndex}:${stepIndex}`);
-      showSuccess(`Вариант для шага ${step.step_key} сгенерирован.`);
-    } catch (fetchError) {
-      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
-    } finally {
-      setBusyKey(null);
-    }
-  };
+        fragments: (() => {
+          const nextFragments = [...current.fragments];
+          let nextSortOrder = nextFragments.filter(
+            (fragment) => fragment.step_key === step.step_key,
+          ).length;
 
-  const generateFragment = async (templateIndex: number, role: StoryRoleKey, fragmentIndex: number) => {
-    const template = templates[templateIndex];
-    const stepIndex = STORY_ROLE_KEYS.indexOf(role);
-    const fragment = template.fragments[fragmentIndex];
-    setBusyKey(`fragment-generate:${templateIndex}:${role}:${fragmentIndex}`);
-    setError(null);
-    try {
-      const data = await fetchJson<{ text: string; keywords: string[] }>("/api/admin/generate-story-part", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: template.name,
-          description: `Роль истории ${role}. ${ROLE_HINTS[role]}`,
-          ageGroup: null,
-          templateName: template.name,
-          kind: "fragment",
-          storyRole: role,
-          previousRole: stepIndex > 0 ? STORY_ROLE_KEYS[stepIndex - 1] : null,
-          context: `Нужна фраза для роли ${role}. Она должна логично продолжать историю.`,
-        }),
-      });
+          targetChoiceIndexes.forEach((targetIndex, generatedIndex) => {
+            const generatedChoice = data.choices[generatedIndex];
+            if (!generatedChoice) {
+              return;
+            }
 
-      updateTemplate(templateIndex, {
-        ...template,
-        fragments: template.fragments.map((item, index) =>
-          index === fragmentIndex ? { ...item, text: data.text, keywords: data.keywords } : item,
-        ),
-      });
-      setCollapsedFragments((current) => ({
-        ...current,
-        [fragmentStateKey(templateIndex, role, fragmentIndex)]: false,
+            const existingFragmentIndex = nextFragments.findIndex(
+              (fragment) =>
+                fragment.step_key === step.step_key &&
+                fragment.choice_temp_key === String(targetIndex),
+            );
+
+            if (existingFragmentIndex >= 0) {
+              nextFragments[existingFragmentIndex] = {
+                ...nextFragments[existingFragmentIndex],
+                text: generatedChoice.fragment,
+                keywords: generatedChoice.keywords,
+              };
+              return;
+            }
+
+            nextFragments.push({
+              step_key: step.step_key,
+              choice_id: null,
+              choice_temp_key: String(targetIndex),
+              text: generatedChoice.fragment,
+              keywords: generatedChoice.keywords,
+              sort_order: nextSortOrder,
+            });
+            nextSortOrder += 1;
+          });
+
+          return nextFragments;
+        })(),
       }));
-      markDirty(`fragments:${templateIndex}:${role}`);
-      markDirty(stepStateKey(templateIndex, stepIndex));
+      setExpandedChoiceIndex(targetChoiceIndexes[0] ?? choiceIndex);
+      markDirty(`fragments:${step.step_key}`);
+      markDirty(`step:${step.step_key}`);
       showSuccess(
-        `Фрагмент${fragment?.choice_temp_key ? ` для варианта ${Number(fragment.choice_temp_key) + 1}` : ""} сгенерирован.`,
+        targetChoiceIndexes.length > 1
+          ? `Для шага ${step.step_key} добавлены недостающие варианты.`
+          : `Вариант для шага ${step.step_key} сгенерирован.`,
       );
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -675,102 +1205,274 @@ export default function StoryBuilderPage() {
     }
   };
 
-  const deleteChoice = (templateIndex: number, stepIndex: number, choiceIndex: number) => {
-    const template = templates[templateIndex];
-    const step = template.steps[stepIndex];
-    const role = step.step_key;
+  const generateFragment = async (fragmentIndex: number) => {
+    if (!activeTemplate) {
+      return;
+    }
 
-    const nextChoices = step.choices
-      .filter((_, index) => index !== choiceIndex)
-      .map((choice, index) => ({ ...choice, sort_order: index }));
+    const step = activeTemplate.steps[selectedStep];
+    const fragment = activeTemplate.fragments[fragmentIndex];
+    if (!step || !fragment) {
+      return;
+    }
 
-    const nextFragments = template.fragments.flatMap((fragment) => {
-      if (fragment.step_key !== role) {
-        return [fragment];
-      }
-      const fragmentChoiceIndex =
-        fragment.choice_temp_key === null || fragment.choice_temp_key === undefined
-          ? null
-          : Number(fragment.choice_temp_key);
+    const choiceIndex =
+      fragment.choice_temp_key !== null &&
+      fragment.choice_temp_key !== undefined &&
+      fragment.choice_temp_key !== ""
+        ? Number(fragment.choice_temp_key)
+        : undefined;
+    const choiceText =
+      typeof choiceIndex === "number" && choiceIndex >= 0
+        ? step.choices[choiceIndex]?.text ?? ""
+        : "";
 
-      if (fragmentChoiceIndex === choiceIndex) {
-        return [{ ...fragment, choice_id: null, choice_temp_key: null }];
-      }
+    setBusyKey(`fragment-generate:${step.step_key}:${fragmentIndex}`);
+    setError(null);
+    try {
+      const data = await fetchJson<{ text: string; keywords: string[] }>(
+        "/api/admin/generate-story-part",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: activeTemplate.name,
+            description: `Роль истории ${step.step_key}. ${ROLE_HINTS[step.step_key]}`,
+            ageGroup: null,
+            templateName: activeTemplate.name,
+            kind: "fragment",
+            storyRole: step.step_key,
+            previousRole:
+              selectedStep > 0 ? STORY_ROLE_KEYS[selectedStep - 1] : null,
+            context: buildGenerationContext(activeTemplate, selectedStep, previewPath, {
+              choiceIndex,
+              choiceText,
+            }),
+          }),
+        },
+      );
 
-      if (fragmentChoiceIndex !== null && fragmentChoiceIndex > choiceIndex) {
-        return [{ ...fragment, choice_temp_key: String(fragmentChoiceIndex - 1) }];
-      }
-
-      return [fragment];
-    });
-
-    updateTemplate(templateIndex, {
-      ...template,
-      steps: template.steps.map((item, index) =>
-        index === stepIndex ? { ...item, choices: nextChoices } : item,
-      ),
-      fragments: nextFragments.map((fragment, index) => ({ ...fragment, sort_order: index })),
-    });
-    markDirty(`step:${templateIndex}:${stepIndex}`);
-    markDirty(`fragments:${templateIndex}:${role}`);
+      updateActiveTemplate((current) => ({
+        ...current,
+        fragments: current.fragments.map((item, index) =>
+          index === fragmentIndex
+            ? { ...item, text: data.text, keywords: data.keywords }
+            : item,
+        ),
+      }));
+      markDirty(`fragments:${step.step_key}`);
+      markDirty(`step:${step.step_key}`);
+      showSuccess("Фрагмент сгенерирован.");
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setBusyKey(null);
+    }
   };
 
-  const addFragment = (
-    templateIndex: number,
-    stepIndex: number,
-    role: StoryRoleKey,
-    choiceIndex: number | null,
-  ) => {
-    const template = templates[templateIndex];
-    const fragmentIndex = template.fragments.length;
-    const fragmentKey = fragmentStateKey(templateIndex, role, fragmentIndex);
+  const addFragment = (choiceIndex: number | null) => {
+    if (!activeTemplate) {
+      return;
+    }
+
+    const step = activeTemplate.steps[selectedStep];
+    if (!step) {
+      return;
+    }
+
     const nextFragment: StoryFragmentInput = {
-      step_key: role,
+      step_key: step.step_key,
       choice_id: null,
       choice_temp_key: choiceIndex === null ? null : String(choiceIndex),
       text: "",
       keywords: [],
-      sort_order: template.fragments.filter((fragment) => fragment.step_key === role).length,
+      sort_order: activeTemplate.fragments.filter(
+        (fragment) => fragment.step_key === step.step_key,
+      ).length,
     };
 
-    updateTemplate(templateIndex, {
-      ...template,
-      fragments: [...template.fragments, nextFragment],
-    });
-    markDirty(`fragments:${templateIndex}:${role}`);
-    markDirty(stepStateKey(templateIndex, stepIndex));
-    setCollapsedFragments((current) => ({ ...current, [fragmentKey]: false }));
-    setPendingScrollKey(fragmentKey);
-    setCollapsedSteps((current) => ({ ...current, [stepStateKey(templateIndex, stepIndex)]: false }));
-    if (choiceIndex !== null) {
-      setCollapsedChoices((current) => ({
+    updateActiveTemplate((current) => ({
+      ...current,
+      fragments: [...current.fragments, nextFragment],
+    }));
+    markDirty(`fragments:${step.step_key}`);
+    markDirty(`step:${step.step_key}`);
+  };
+
+  const upsertIntroNarration = (text: string) => {
+    if (!activeTemplate) {
+      return;
+    }
+
+    const sharedFragments = getStepSharedFragments(activeTemplate, "intro");
+    const primaryShared = sharedFragments[0];
+
+    if (primaryShared) {
+      updateActiveTemplate((current) => ({
         ...current,
-        [choiceStateKey(templateIndex, stepIndex, choiceIndex)]: false,
+        fragments: current.fragments.map((item, index) =>
+          index === primaryShared.fragmentIndex ? { ...item, text } : item,
+        ),
+      }));
+    } else {
+      const nextFragment: StoryFragmentInput = {
+        step_key: "intro",
+        choice_id: null,
+        choice_temp_key: null,
+        text,
+        keywords: [],
+        sort_order: sharedFragments.length,
+      };
+
+      updateActiveTemplate((current) => ({
+        ...current,
+        fragments: [...current.fragments, nextFragment],
       }));
     }
+
+    markDirty("fragments:intro");
+    markDirty("step:intro");
+  };
+
+  const upsertIntroNarrationKeywords = (rawValue: string) => {
+    if (!activeTemplate) {
+      return;
+    }
+
+    const sharedFragments = getStepSharedFragments(activeTemplate, "intro");
+    const primaryShared = sharedFragments[0];
+    const keywords = parseKeywords(rawValue);
+
+    if (primaryShared) {
+      updateActiveTemplate((current) => ({
+        ...current,
+        fragments: current.fragments.map((item, index) =>
+          index === primaryShared.fragmentIndex ? { ...item, keywords } : item,
+        ),
+      }));
+    } else {
+      const nextFragment: StoryFragmentInput = {
+        step_key: "intro",
+        choice_id: null,
+        choice_temp_key: null,
+        text: "",
+        keywords,
+        sort_order: sharedFragments.length,
+      };
+
+      updateActiveTemplate((current) => ({
+        ...current,
+        fragments: [...current.fragments, nextFragment],
+      }));
+    }
+
+    markDirty("fragments:intro");
+    markDirty("step:intro");
+  };
+
+  const generateIntroNarration = async () => {
+    if (!activeTemplate) {
+      return;
+    }
+
+    const introShared = getStepSharedFragments(activeTemplate, "intro")[0];
+
+    if (!introShared) {
+      upsertIntroNarration("");
+      requestAnimationFrame(() => {
+        void generateIntroNarration();
+      });
+      return;
+    }
+
+    setBusyKey(`fragment-generate:intro:${introShared.fragmentIndex}`);
+    setError(null);
+    try {
+      const introStep = activeTemplate.steps[0];
+      const data = await fetchJson<{ text: string; keywords: string[] }>(
+        "/api/admin/generate-story-part",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: activeTemplate.name,
+            description: `Начало истории: первый рассказный абзац до вопроса ребёнку.`,
+            ageGroup: null,
+            templateName: activeTemplate.name,
+            kind: "fragment",
+            storyRole: "intro",
+            previousRole: null,
+            context: [
+              buildGenerationContext(activeTemplate, 0, previewPath),
+              "Это основной текст начала истории.",
+              "Он должен идти до вопроса ребёнку.",
+              "Представь героя, место и стартовую ситуацию.",
+              "Пиши только по-русски.",
+              "Сделай 1-2 коротких предложения, тёплых и понятных детям.",
+            ].join("\n\n"),
+          }),
+        },
+      );
+
+      updateActiveTemplate((current) => ({
+        ...current,
+        fragments: current.fragments.map((item, index) =>
+          index === introShared.fragmentIndex
+            ? { ...item, text: data.text, keywords: data.keywords }
+            : item,
+        ),
+      }));
+      markDirty("fragments:intro");
+      markDirty(`step:${introStep.step_key}`);
+      showSuccess("Начало истории сгенерировано.");
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const updateTwistKeywordDraft = (index: number, rawValue: string) => {
+    setKeywordDrafts((current) => ({
+      ...current,
+      [`twist:${index}`]: rawValue,
+    }));
+    setTwists((current) =>
+      current.map((item, twistIndex) =>
+        twistIndex === index
+          ? { ...item, keywords: parseKeywords(rawValue) }
+          : item,
+      ),
+    );
+    markDirty("twists");
   };
 
   const generateTwist = async (index: number) => {
     setBusyKey(`twist-generate:${index}`);
     setError(null);
     try {
-      const data = await fetchJson<{ text: string; keywords: string[] }>("/api/admin/generate-story-part", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: "Неожиданный поворот",
-          description: "Смешной поворот для детской истории про капибару.",
-          ageGroup: null,
-          templateName: "Глобальные повороты",
-          kind: "twist",
-          storyRole: "ending",
-          previousRole: "solution",
-          context: "Короткий неожиданный, но добрый поворот для истории.",
-        }),
-      });
+      const data = await fetchJson<{ text: string; keywords: string[] }>(
+        "/api/admin/generate-story-part",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: "Неожиданный поворот",
+            description: "Смешной поворот для любой детской истории.",
+            ageGroup: null,
+            templateName: "Глобальные повороты",
+            kind: "twist",
+            storyRole: "ending",
+            previousRole: "solution",
+            context: "Короткий неожиданный, но добрый поворот для истории.",
+          }),
+        },
+      );
       setTwists((current) =>
         current.map((twist, twistIndex) =>
-          twistIndex === index ? { ...twist, text: data.text, keywords: data.keywords } : twist,
+          twistIndex === index
+            ? { ...twist, text: data.text, keywords: data.keywords }
+            : twist,
         ),
       );
       markDirty("twists");
@@ -786,11 +1488,14 @@ export default function StoryBuilderPage() {
     setBusyKey("twists-save");
     setError(null);
     try {
-      const data = await fetchJson<{ twists: StoryBuilderResponse["twists"] }>("/api/admin/story-builder/twists", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ twists }),
-      });
+      const data = await fetchJson<{ twists: StoryBuilderResponse["twists"] }>(
+        "/api/admin/story-builder/twists",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ twists }),
+        },
+      );
       setTwists(data.twists);
       markSaved("twists");
       showSuccess("Неожиданные повороты сохранены.");
@@ -801,10 +1506,147 @@ export default function StoryBuilderPage() {
     }
   };
 
+  const runTemplateValidation = () => {
+    if (!activeTemplate) {
+      return;
+    }
+    const warnings = collectTemplateWarnings(activeTemplate);
+    setTemplateWarnings(warnings);
+    if (warnings.length === 0) {
+      showSuccess("Шаблон выглядит понятно и заполнен без явных проблем.");
+    }
+  };
+
+  if (!sessionChecked || loadingOverview) {
+    return (
+      <p style={{ padding: 24 }}>
+        {loadingOverview
+          ? "Загрузка конструктора историй..."
+          : "Проверка сессии..."}
+      </p>
+    );
+  }
+
+  const activeStep = activeTemplate?.steps[selectedStep] ?? null;
+  const activeStepKey = activeStep ? `step:${activeStep.step_key}` : "";
+  const fullTemplatePrompt = activeTemplate
+    ? buildStoryTemplatePrompt({
+        title: activeTemplate.name,
+        description: `Шаблон детской интерактивной истории: ${activeTemplate.name}`,
+        ageGroup: null,
+        templateName: activeTemplate.name,
+        templateSlug: activeTemplate.slug,
+      })
+    : "";
+  const variantPrompt = activeTemplate
+    ? buildStoryPartPrompt({
+        title: activeTemplate.name,
+        description: `Шаблон истории ${activeTemplate.name}`,
+        ageGroup: null,
+        templateName: activeTemplate.name,
+        kind: "fragment",
+        storyRole: activeStep?.step_key ?? "intro",
+        previousRole: selectedStep > 0 ? STORY_ROLE_KEYS[selectedStep - 1] : null,
+        context: "Оцени стоимость генерации одного варианта истории.",
+      })
+    : "";
+  const variantEstimate = activeTemplate
+    ? estimateStoryVariantCost(variantPrompt)
+    : null;
+  const fullStoryEstimate = activeTemplate
+    ? estimateFullStoryCost(variantPrompt)
+    : null;
+  const templateEstimate = activeTemplate
+    ? estimateFullStoryCost(fullTemplatePrompt)
+    : null;
+  const isTemplateCostHigh = (templateEstimate?.ils ?? 0) > MAX_TEMPLATE_GENERATION_COST_ILS;
+
+  const stepValidation =
+    activeTemplate && activeStep
+      ? validateStoryTemplateSource(
+          {
+            steps: activeTemplate.steps,
+            fragments: activeTemplate.fragments,
+            twists: activeTemplate.twists,
+          },
+          { scope: activeStep.step_key },
+        )
+      : null;
+
+  const roleFragments =
+    activeTemplate && activeStep
+      ? activeTemplate.fragments.filter(
+          (fragment) => fragment.step_key === activeStep.step_key,
+        )
+      : [];
+  const generalFragments = roleFragments.filter(
+    (fragment) => !fragment.choice_temp_key,
+  );
+  const advancedGeneralFragments =
+    activeStep?.step_key === "intro" ? generalFragments.slice(1) : generalFragments;
+  const choiceFragments =
+    activeStep === null
+      ? []
+      : roleFragments
+          .map((fragment, fragmentIndex) => ({ fragment, fragmentIndex }))
+          .filter(
+            ({ fragment }) =>
+              fragment.choice_temp_key === String(expandedChoiceIndex),
+          );
+  const stepStats =
+    activeTemplate && activeStep
+      ? getStepCompletionStats(activeStep, activeTemplate.fragments)
+      : null;
+  const similarChoiceIndexes = activeStep
+    ? getSimilarChoiceIndexes(activeStep)
+    : new Set<number>();
+  const assembledPreview =
+    activeTemplate && activeStep
+      ? buildStoryPreviewText(activeTemplate, previewPath, selectedStep)
+      : "";
+  const introNarrationFragment =
+    activeTemplate ? getStepSharedFragments(activeTemplate, "intro")[0] ?? null : null;
+  const activePreviewFragment =
+    activeStep === null
+      ? null
+      : roleFragments.find(
+          (fragment) => fragment.choice_temp_key === String(expandedChoiceIndex),
+        ) ?? null;
+  const assembledPreviewProse = assembledPreview
+    ? buildStory(
+        adaptStoryTemplateToContract({
+          steps: activeTemplate?.steps ?? [],
+          fragments: activeTemplate?.fragments ?? [],
+          twists: activeTemplate?.twists ?? [],
+        }).template,
+        previewPath,
+      )
+        .flatMap((segment) => ("twist" in segment ? [] : [segment]))
+        .slice(0, selectedStep + 1)
+        .map((segment) => {
+          const parts = [];
+          if (segment.sharedText?.trim()) {
+            parts.push(segment.sharedText.trim());
+          }
+          if (segment.choice?.trim()) {
+            parts.push(segment.choice.trim());
+          }
+          if (segment.text?.trim()) {
+            parts.push(segment.text.trim());
+          }
+          return parts.join(" ");
+        })
+        .filter(Boolean)
+        .join("\n\n")
+    : "";
+
   const twistsPanel = twists.map((twist, twistIndex) => (
     <div className="books-question" key={twist.id ?? `twist-${twistIndex}`}>
       <div className="books-section-head">
-        <strong>Поворот {twistIndex + 1}</strong>
+        <div>
+          <strong>Поворот {twistIndex + 1}</strong>
+          <div className="books-section-help">Используется во всех историях</div>
+        </div>
         <button
           type="button"
           className="books-button books-button--secondary"
@@ -813,7 +1655,9 @@ export default function StoryBuilderPage() {
             void generateTwist(twistIndex);
           }}
         >
-          {busyKey === `twist-generate:${twistIndex}` ? "Генерация..." : "Сгенерировать"}
+          {busyKey === `twist-generate:${twistIndex}`
+            ? "Генерация..."
+            : "Сгенерировать"}
         </button>
       </div>
 
@@ -831,7 +1675,9 @@ export default function StoryBuilderPage() {
             onChange={(event) => {
               setTwists((current) =>
                 current.map((item, index) =>
-                  index === twistIndex ? { ...item, text: event.target.value } : item,
+                  index === twistIndex
+                    ? { ...item, text: event.target.value }
+                    : item,
                 ),
               );
               markDirty("twists");
@@ -847,20 +1693,13 @@ export default function StoryBuilderPage() {
           )}
           <input
             className="books-input"
-            value={keywordDrafts[`twist:${twistIndex}`] ?? formatKeywords(twist.keywords)}
+            value={
+              keywordDrafts[`twist:${twistIndex}`] ??
+              formatKeywords(twist.keywords)
+            }
             placeholder="сюрприз, смешно финал"
             onChange={(event) => {
-              const rawValue = event.target.value;
-              setKeywordDrafts((current) => ({
-                ...current,
-                [`twist:${twistIndex}`]: rawValue,
-              }));
-              setTwists((current) =>
-                current.map((item, index) =>
-                  index === twistIndex ? { ...item, keywords: parseKeywords(rawValue) } : item,
-                ),
-              );
-              markDirty("twists");
+              updateTwistKeywordDraft(twistIndex, event.target.value);
             }}
             onBlur={() => {
               setKeywordDrafts((current) => ({
@@ -873,10 +1712,6 @@ export default function StoryBuilderPage() {
       </div>
     </div>
   ));
-
-  if (!sessionChecked || loading) {
-    return <p style={{ padding: 24 }}>{loading ? "Загрузка конструктора историй..." : "Проверка сессии..."}</p>;
-  }
 
   return (
     <div className="books-admin-page">
@@ -893,166 +1728,348 @@ export default function StoryBuilderPage() {
         <div>
           <h1 className="books-admin-title">Конструктор историй</h1>
           <p className="books-admin-subtitle">
-            Шаблоны историй теперь компактнее: шаги сворачиваются, фрагменты находятся рядом со своими вариантами, а сохранение шага сохраняет всё сразу.
+            Фокусный режим: список шаблонов отдельно, редактор отдельно, в памяти
+            только один активный шаблон.
           </p>
+          {isDirty ? (
+            <p
+              className="books-section-help"
+              style={{ color: "#a33a3a", fontWeight: 600, marginTop: 8 }}
+            >
+              ● Несохранено
+            </p>
+          ) : null}
         </div>
-        <div className="books-actions books-actions--compact">
-          <button
-            type="button"
-            className="books-button books-button--secondary"
-            onClick={() => setTemplates((current) => [createEmptyTemplate(current.length), ...current])}
-          >
-            Добавить шаблон
-          </button>
-        </div>
+        {selectedTemplateId ? (
+          <div className="books-actions books-actions--compact">
+            <button
+              type="button"
+              className="books-button books-button--ghost"
+              onClick={safeReturnToTemplateList}
+            >
+              ← К списку шаблонов
+            </button>
+          </div>
+        ) : (
+          <div className="books-actions books-actions--compact">
+            <button
+              type="button"
+              className="books-button books-button--secondary"
+              onClick={openNewTemplate}
+            >
+              Добавить шаблон
+            </button>
+          </div>
+        )}
       </header>
 
       {error && <div className="books-alert books-alert--error">{error}</div>}
       {success && <div className="books-alert books-alert--success">{success}</div>}
 
-      <section className="books-panel">
-        <div className="books-section-head">
-          <div>
-            <h2 className="books-panel__title">Конструкторы историй</h2>
-            <p className="books-section-help">
-              Сводка по готовности шаблонов: сразу видно, где не хватает вариантов для шагов.
-            </p>
-          </div>
-        </div>
+      {!selectedTemplateId && (
+        <>
+          <section className="books-panel">
+            <div className="books-section-head">
+              <div>
+                <h2 className="books-panel__title">Шаблоны</h2>
+                <p className="books-section-help">
+                  Список и прогресс. Редактор открывается на отдельном экране.
+                </p>
+              </div>
+            </div>
 
-        {overviewStats.length === 0 ? (
-          <div className="books-section-help">Сохранённые конструкторы ещё не найдены.</div>
-        ) : (
-          <div className="story-overview-grid">
-            {overviewStats.map((stats) => {
-              const percent = completionPercent(stats);
-              const total = totalVariants(stats);
+            {overviewStats.length === 0 ? (
+              <div className="books-section-help">
+                Сохранённые конструкторы ещё не найдены.
+              </div>
+            ) : (
+              <div className="story-overview-grid">
+                {overviewStats.map((stats) => {
+                  const percent = completionPercent(stats);
+                  const total = totalVariants(stats);
 
-              return (
-                <article className="story-overview-card" key={stats.id}>
-                  <div className="books-section-head">
-                    <div>
-                      <h3 className="books-subpanel__title">{stats.name}</h3>
-                      <p className="books-section-help">
-                        {stats.keywords?.length ? stats.keywords.join(", ") : "Без ключевых слов"}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      className="books-button books-button--secondary"
-                      onClick={() => scrollToTemplateEditor(stats.id)}
-                    >
-                      Редактировать
-                    </button>
-                  </div>
-
-                  <div className="story-overview-steps">
-                    {STORY_ROLE_KEYS.map((role) => {
-                      const count = stats.steps[role] ?? 0;
-                      return (
-                        <div className="story-overview-step" key={`${stats.id}:${role}`}>
-                          <span className="story-overview-step__role">{role}</span>
-                          <span className="story-overview-step__count">
-                            {count} {variantsLabel(count)}
-                          </span>
-                          {count < 3 ? <span className="story-overview-step__warning">⚠ мало вариантов</span> : null}
+                  return (
+                    <article className="story-overview-card" key={stats.id}>
+                      <div className="books-section-head">
+                        <div>
+                          <h3 className="books-subpanel__title">{stats.name}</h3>
+                          <p className="books-section-help">
+                            {stats.keywords?.length
+                              ? stats.keywords.join(", ")
+                              : "Без ключевых слов"}
+                          </p>
                         </div>
-                      );
-                    })}
-                  </div>
+                        <button
+                          type="button"
+                          className="books-button books-button--secondary"
+                          disabled={editorLoading}
+                          onClick={() => {
+                            void loadTemplate(stats.id);
+                          }}
+                        >
+                          {editorLoading && selectedTemplateId === stats.id
+                            ? "Загрузка..."
+                            : "Открыть"}
+                        </button>
+                      </div>
 
-                  <div className="story-overview-progress">
-                    <div className="story-overview-progress__meta">
-                      <span>Заполненность</span>
-                      <span>
-                        {percent}% · {total}/15
-                      </span>
-                    </div>
-                    <div className="story-progress">
-                      <div
-                        className="story-progress__bar"
-                        style={{
-                          width: `${percent}%`,
-                          background: `linear-gradient(90deg, ${progressTone(percent)}, ${progressTone(percent)})`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-        )}
-      </section>
+                      <div className="story-overview-steps">
+                        {STORY_ROLE_KEYS.map((role) => {
+                          const count = stats.steps[role] ?? 0;
+                          return (
+                            <div className="story-overview-step" key={`${stats.id}:${role}`}>
+                              <span className="story-overview-step__role">
+                                {ROLE_LABELS_RU[role]}
+                              </span>
+                              <span className="story-overview-step__count">
+                                {count} {variantsLabel(count)}
+                              </span>
+                              {count < 3 ? (
+                                <span className="story-overview-step__warning">
+                                  ⚠ мало вариантов
+                                </span>
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
 
-      {templates.map((template, templateIndex) => (
-        <section
-          className="books-panel"
-          key={template.id ?? `template-${templateIndex}`}
-          ref={(element) => {
-            if (template.id) {
-              templateEditorRefs.current[template.id] = element;
-            }
-          }}
-        >
-          {(() => {
-            const fullTemplatePrompt = buildStoryTemplatePrompt({
-              title: template.name,
-              description: `Interactive capybara story template: ${template.name}`,
-              ageGroup: null,
-              templateName: template.name,
-              templateSlug: template.slug,
-            });
-            const variantPrompt = buildStoryPartPrompt({
-              title: template.name,
-              description: `Шаблон истории ${template.name}`,
-              ageGroup: null,
-              templateName: template.name,
-              kind: "fragment",
-              storyRole: "intro",
-              previousRole: null,
-              context: "Оцени стоимость генерации одного варианта истории.",
-            });
-            const variantEstimate = estimateStoryVariantCost(variantPrompt);
-            const fullStoryEstimate = estimateFullStoryCost(variantPrompt);
-            const templateEstimate = estimateFullStoryCost(fullTemplatePrompt);
+                      <div className="story-overview-progress">
+                        <div className="story-overview-progress__meta">
+                          <span>Заполненность</span>
+                          <span>
+                            {percent}% · {total}/15
+                          </span>
+                        </div>
+                        <div className="story-progress">
+                          <div
+                            className="story-progress__bar"
+                            style={{
+                              width: `${percent}%`,
+                              background: `linear-gradient(90deg, ${progressTone(percent)}, ${progressTone(percent)})`,
+                            }}
+                          />
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </section>
 
-            return (
-              <>
-                <div className="books-section-head">
-                  <div>
-                    <h2 className="books-panel__title">Шаблон истории</h2>
-                    <p className="books-section-help">Шаблон всегда открыт. Шаги ниже автоматически сворачиваются после успешного сохранения.</p>
-                  </div>
-                  <div className="books-actions books-actions--compact">
-                    <button
-                      type="button"
-                      className="books-button books-button--secondary"
-                      disabled={busyKey === `template-generate:${templateIndex}`}
-                      onClick={() => {
-                        void generateTemplate(templateIndex);
-                      }}
-                    >
-                      {busyKey === `template-generate:${templateIndex}` ? "Генерация..." : "Сгенерировать всё"}
-                    </button>
-                    <button
-                      type="button"
-                      className={saveButtonClass(saveState, `template:${templateIndex}`)}
-                      disabled={busyKey === `template-save:${templateIndex}`}
-                      onClick={() => {
-                        void saveTemplate(templateIndex);
-                      }}
-                    >
-                      {busyKey === `template-save:${templateIndex}` ? "Сохранение..." : saveButtonLabel(saveState, `template:${templateIndex}`)}
-                    </button>
-                  </div>
+          <section className="books-panel">
+            <div className="books-section-head">
+              <div>
+                <h2 className="books-panel__title">Глобальные неожиданные повороты</h2>
+                <p className="books-section-help">
+                  Эти повороты могут появляться в любой истории. Генератор случайно
+                  вставляет их в сюжет.
+                </p>
+              </div>
+              <div className="books-actions books-actions--compact">
+                <button
+                  type="button"
+                  className="books-button books-button--ghost"
+                  onClick={() => {
+                    setTwists((current) => [...current, emptyTwist()]);
+                    markDirty("twists");
+                  }}
+                >
+                  Добавить поворот
+                </button>
+                <button
+                  type="button"
+                  className={saveButtonClass(saveState, "twists")}
+                  disabled={busyKey === "twists-save"}
+                  onClick={() => {
+                    void saveTwists();
+                  }}
+                >
+                  {busyKey === "twists-save"
+                    ? "Сохранение..."
+                    : saveButtonLabel(saveState, "twists")}
+                </button>
+              </div>
+            </div>
+
+            <div
+              style={{
+                marginBottom: 16,
+                borderTop: "1px solid #e6ddcf",
+                paddingTop: 16,
+              }}
+            >
+              <div
+                className="books-section-help"
+                style={{
+                  padding: "10px 12px",
+                  borderRadius: 12,
+                  background: "#fff8ec",
+                }}
+              >
+                Общий пул поворотов. Этот блок не относится к какому-то одному шаблону.
+              </div>
+            </div>
+
+            {/* future: allow template-specific twists */}
+            {twistsPanel}
+          </section>
+        </>
+      )}
+
+      {selectedTemplateId && activeTemplate && (
+        <>
+          <section className="books-panel">
+            <div
+              style={{
+                marginBottom: 16,
+                padding: 16,
+                borderRadius: 16,
+                border: "1px solid #dbe8ff",
+                background: "#f7faff",
+              }}
+            >
+              <h3 style={{ margin: "0 0 10px", fontSize: 18 }}>
+                Как работает генератор историй
+              </h3>
+              <div className="books-section-help" style={{ display: "grid", gap: 8 }}>
+                <div>1. История состоит из 5 шагов: Начало, Путь, Проблема, Решение, Финал</div>
+                <div>2. В каждом шаге есть несколько вариантов.</div>
+                <div>
+                  3. Генератор выбирает один вариант из каждого шага, добавляет
+                  неожиданные события и собирает финальную историю.
                 </div>
+              </div>
+            </div>
 
+            <div className="books-section-head">
+              <div>
+                <h2 className="books-panel__title">Информация о шаблоне</h2>
+                <p className="books-section-help">
+                  Один шаблон открыт, одна форма meta, один блок стоимости
+                  генерации.
+                </p>
+              </div>
+              <div className="books-actions books-actions--compact">
+                <button
+                  type="button"
+                  className="books-button books-button--secondary"
+                  disabled={busyKey === "template-generate"}
+                  onClick={() => {
+                    void generateTemplate();
+                  }}
+                >
+                  {busyKey === "template-generate"
+                    ? "Генерация..."
+                    : "Сгенерировать всё"}
+                </button>
+                <button
+                  type="button"
+                  className={saveButtonClass(saveState, "template")}
+                  disabled={busyKey === "template-save"}
+                  onClick={() => {
+                    void saveTemplate();
+                  }}
+                >
+                  {busyKey === "template-save"
+                    ? "Сохранение..."
+                    : saveButtonLabel(saveState, "template")}
+                </button>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: "grid",
+                gap: 16,
+                gridTemplateColumns: "minmax(0, 1.5fr) minmax(280px, 1fr)",
+              }}
+            >
+              <div className="books-grid books-grid--2">
+                <label className="books-field">
+                  {helperLabel(
+                    "Название шаблона",
+                    "Введите название шаблона истории.",
+                    "Публичное название шаблона для CMS.",
+                  )}
+                  <input
+                    className="books-input"
+                    value={activeTemplate.name}
+                    placeholder="Тайна фонаря на чердаке"
+                    onChange={(event) => {
+                      const nextName = event.target.value;
+                      const nextSlug = generateSlug(nextName);
+                      console.log("TITLE CHANGE", nextName);
+                      console.log("GENERATED SLUG", nextSlug);
+
+                      updateActiveTemplate((current) => {
+                        const nextTemplate = {
+                          ...current,
+                          name: nextName,
+                          slug: isSlugManuallyEdited ? current.slug : nextSlug,
+                        };
+                        console.log("FINAL SLUG", nextTemplate.slug);
+                        setTimeout(() => {
+                          console.log("ACTUAL SLUG IN STATE:", nextTemplate.slug);
+                        }, 0);
+                        return nextTemplate;
+                      });
+                      markDirty("template");
+                    }}
+                  />
+                </label>
+
+                <label className="books-field">
+                  {helperLabel(
+                    "Slug шаблона",
+                    "Slug можно редактировать вручную.",
+                    "Автоматически создаётся из названия, но поле остаётся редактируемым.",
+                  )}
+                  <input
+                    className="books-input"
+                    value={activeTemplate.slug}
+                    placeholder="priklyucheniya-kapibary"
+                    onChange={(event) => {
+                      const rawValue = event.target.value;
+                      setIsSlugManuallyEdited(true);
+                      updateActiveTemplate((current) => {
+                        const nextTemplate = {
+                          ...current,
+                          slug: generateSlug(rawValue),
+                        };
+                        setTimeout(() => {
+                          console.log("ACTUAL SLUG IN STATE:", nextTemplate.slug);
+                        }, 0);
+                        return nextTemplate;
+                      });
+                      markDirty("template");
+                    }}
+                    onBlur={() => {
+                      const normalized = generateSlug(activeTemplate.slug);
+                      updateActiveTemplate((current) => {
+                        const nextTemplate = {
+                          ...current,
+                          slug: normalized,
+                        };
+                        setTimeout(() => {
+                          console.log("ACTUAL SLUG IN STATE:", nextTemplate.slug);
+                        }, 0);
+                        return nextTemplate;
+                      });
+                    }}
+                  />
+                </label>
+              </div>
+
+              {variantEstimate && fullStoryEstimate && templateEstimate && (
                 <div className="books-subpanel">
                   <div className="books-section-head">
                     <div>
-                      <h3 className="books-subpanel__title">Стоимость генерации истории</h3>
-                      <p className="books-section-help">Оценка токенов и стоимости до запуска генерации.</p>
+                      <h3 className="books-subpanel__title">Стоимость генерации</h3>
+                      <p className="books-section-help">
+                        Оценка только для активного шаблона.
+                      </p>
                     </div>
                     <strong>{formatIls(templateEstimate.ils)}</strong>
                   </div>
@@ -1079,627 +2096,921 @@ export default function StoryBuilderPage() {
                       <span>{formatIls(templateEstimate.ils)}</span>
                     </div>
                   </div>
-                </div>
-
-                <div className="books-grid books-grid--2">
-          <label className="books-field">
-            {helperLabel("Название шаблона", "Введите название шаблона истории.", "Публичное название шаблона для CMS.")}
-            <input
-                className="books-input"
-                value={template.name}
-                placeholder="Приключения капибары"
-                onChange={(event) => {
-                  const nextName = event.target.value;
-                  const currentAutoSlug = makeSlug(template.name);
-                  const nextAutoSlug = makeSlug(nextName);
-                  const shouldAutoUpdateSlug =
-                    !template.slug.trim() ||
-                    template.slug === currentAutoSlug ||
-                    (slugDrafts[`template:${templateIndex}`] ?? template.slug) === currentAutoSlug;
-
-                  updateTemplate(templateIndex, {
-                    ...template,
-                    name: nextName,
-                    slug: shouldAutoUpdateSlug ? nextAutoSlug : template.slug,
-                  });
-                  if (shouldAutoUpdateSlug) {
-                    setSlugDrafts((current) => ({
-                      ...current,
-                      [`template:${templateIndex}`]: nextAutoSlug,
-                    }));
-                  }
-                  markDirty(`template:${templateIndex}`);
-                }}
-              />
-            </label>
-
-            <label className="books-field">
-              {helperLabel("Slug шаблона", "Slug можно редактировать вручную.", "Автоматически создаётся из названия, но поле остаётся редактируемым.")}
-              <input
-                className="books-input"
-                value={slugDrafts[`template:${templateIndex}`] ?? template.slug}
-                placeholder="priklyucheniya-kapibary"
-                onChange={(event) => {
-                  const rawValue = event.target.value;
-                  setSlugDrafts((current) => ({
-                    ...current,
-                    [`template:${templateIndex}`]: rawValue,
-                  }));
-                  updateTemplate(templateIndex, { ...template, slug: makeSlug(rawValue) });
-                  markDirty(`template:${templateIndex}`);
-                }}
-                onBlur={() => {
-                  const normalized = makeSlug(slugDrafts[`template:${templateIndex}`] ?? template.slug);
-                  updateTemplate(templateIndex, { ...template, slug: normalized });
-                  setSlugDrafts((current) => ({
-                    ...current,
-                    [`template:${templateIndex}`]: normalized,
-                  }));
-                }}
-              />
-            </label>
-                </div>
-              </>
-            );
-          })()}
-
-          {template.steps.map((step, stepIndex) => {
-            const roleFragments = template.fragments.filter((fragment) => fragment.step_key === step.step_key);
-            const generalFragments = roleFragments.filter((fragment) => !fragment.choice_temp_key);
-            const stepSaveKey = stepStateKey(templateIndex, stepIndex);
-            const fragmentsSaveKey = `fragments:${templateIndex}:${step.step_key}`;
-            const stepCollapsed = collapsedSteps[stepSaveKey] ?? false;
-            const stepGenerationEstimate = estimateStoryVariantCost(
-              buildStoryPartPrompt({
-                title: template.name,
-                description: `Шаблон истории ${template.name}`,
-                ageGroup: null,
-                templateName: template.name,
-                kind: "step",
-                storyRole: step.step_key,
-                previousRole: stepIndex > 0 ? template.steps[stepIndex - 1].step_key : null,
-                context: `Нужно сгенерировать вопрос для роли ${step.step_key}.`,
-              }),
-            );
-
-            return (
-              <div className="books-subpanel" key={`${template.id ?? templateIndex}-${step.step_key}`}>
-                <button
-                  type="button"
-                  className="books-collapse"
-                  onClick={() =>
-                    setCollapsedSteps((current) => ({
-                      ...current,
-                      [stepSaveKey]: !(current[stepSaveKey] ?? false),
-                    }))
-                  }
-                >
-                  <span>{stepCollapsed ? "▶" : "▼"}</span>
-                  <span>
-                    Шаг {step.step_key}
-                    {saveState[stepSaveKey] === "saved" ? " ✔" : ""}
-                  </span>
-                </button>
-
-                {!stepCollapsed && (
-                  <>
-                    <div className="books-section-head">
-                      <div>
-                        <p className="books-section-help">{ROLE_HINTS[step.step_key]}</p>
-                        <div className="books-section-help">
-                          <strong>Зачем нужно несколько вариантов?</strong>
-                          <br />
-                          Каждый шаг истории может иметь несколько вариантов, чтобы ребёнок мог выбирать развитие сюжета.
-                          <br />
-                          Например: 1) Капибара нашла радугу 2) Капибара услышала странный звук 3) Капибара увидела карту.
-                        </div>
-                        <div className="books-section-help">
-                          Стоимость генерации шага: {stepGenerationEstimate.inputTokens} in / {stepGenerationEstimate.outputTokens} out · {formatIls(stepGenerationEstimate.ils)}
-                        </div>
-                      </div>
-                      <div className="books-actions books-actions--compact">
-                        <button
-                          type="button"
-                          className="books-button books-button--secondary"
-                          disabled={busyKey === `step-generate:${templateIndex}:${stepIndex}`}
-                          onClick={() => {
-                            void generateStepQuestion(templateIndex, stepIndex);
-                          }}
-                        >
-                          {busyKey === `step-generate:${templateIndex}:${stepIndex}` ? "Генерация..." : "Сгенерировать"}
-                        </button>
-                        <button
-                          type="button"
-                          className={saveButtonClass(saveState, stepSaveKey)}
-                          disabled={busyKey === `step-save:${templateIndex}:${stepIndex}`}
-                          onClick={() => {
-                            void saveStep(templateIndex, stepIndex);
-                          }}
-                        >
-                          {busyKey === `step-save:${templateIndex}:${stepIndex}` ? "Сохранение..." : saveButtonLabel(saveState, stepSaveKey)}
-                        </button>
-                      </div>
+                  {isTemplateCostHigh ? (
+                    <div
+                      className="books-section-help"
+                      style={{
+                        marginTop: 12,
+                        padding: "10px 12px",
+                        borderRadius: 12,
+                        background: "#fff5d6",
+                        color: "#725300",
+                      }}
+                    >
+                      Стоимость выше рекомендуемого лимита {formatIls(MAX_TEMPLATE_GENERATION_COST_ILS)}.
+                      Генерацию можно запускать, но лучше проверить объём шаблона.
                     </div>
+                  ) : null}
+                </div>
+              )}
+            </div>
+          </section>
 
-                    <label className="books-field">
-                      {helperLabel("Вопрос для шага", "Введите вопрос для шага истории.", "Этот вопрос будет показан ребёнку при выборе следующего хода истории.")}
-                      <input
-                        className="books-input"
-                        value={step.question}
-                        placeholder="Введите вопрос для шага истории"
-                        onChange={(event) => {
-                          updateTemplate(templateIndex, {
-                            ...template,
-                            steps: template.steps.map((item, index) =>
-                              index === stepIndex ? { ...item, question: event.target.value } : item,
-                            ),
-                          });
-                          markDirty(stepSaveKey);
+          <section
+            style={{
+              display: "grid",
+              gap: 16,
+              alignItems: "start",
+              gridTemplateColumns: "280px minmax(0, 1fr)",
+            }}
+          >
+            <aside className="books-panel">
+              <div className="books-section-head">
+                <div>
+                  <h2 className="books-panel__title">Шаги</h2>
+                  <p className="books-section-help">
+                    Слева навигация, справа только активный редактор шага.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gap: 10,
+                }}
+              >
+                {activeTemplate.steps.map((step, index) => {
+                  const stats = getStepCompletionStats(
+                    step,
+                    activeTemplate.fragments,
+                  );
+                  const isActive = index === selectedStep;
+
+                  return (
+                    <button
+                      key={step.step_key}
+                      type="button"
+                      className={
+                        isActive
+                          ? "books-button books-button--primary"
+                          : saveState[`step:${step.step_key}`] === "saved"
+                            ? "books-button books-button--success"
+                            : "books-button books-button--ghost"
+                      }
+                      style={{
+                        justifyContent: "space-between",
+                        alignItems: "flex-start",
+                        padding: "12px 14px",
+                        textAlign: "left",
+                      }}
+                      onClick={() => setSelectedStep(index)}
+                      >
+                      <span
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 4,
                         }}
-                      />
-                    </label>
+                      >
+                        <span>{ROLE_LABELS_RU[step.step_key]}</span>
+                        <span style={{ fontSize: 12, opacity: 0.65 }}>
+                          {ROLE_SUBTITLES_RU[step.step_key]}
+                        </span>
+                        <span style={{ fontSize: 12, opacity: 0.8 }}>
+                          {stats.stepComplete
+                            ? "готов"
+                            : `${stats.filledChoicesCount}/3 choices · ${stats.choiceFragmentsCount}/3 fragments`}
+                        </span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </aside>
 
-                    <div className="books-section-head">
-                      <h4 className="books-subpanel__title">Варианты</h4>
+            <div className="books-panel">
+              {activeStep && (
+                <>
+                  <div className="books-section-head">
+                    <div>
+                      <h2 className="books-panel__title">
+                        {ROLE_LABELS_RU[activeStep.step_key]}
+                      </h2>
+                      <p className="books-section-help">
+                        {ROLE_SUBTITLES_RU[activeStep.step_key]}
+                      </p>
+                    </div>
+                    <div className="books-actions books-actions--compact">
                       <button
                         type="button"
                         className="books-button books-button--ghost"
+                        onClick={runTemplateValidation}
+                      >
+                        Проверить шаблон
+                      </button>
+                      <button
+                        type="button"
+                        className={saveButtonClass(saveState, activeStepKey)}
+                        disabled={busyKey === `step-save:${activeStep.step_key}`}
                         onClick={() => {
-                          updateTemplate(templateIndex, {
-                            ...template,
-                            steps: template.steps.map((item, index) =>
-                              index === stepIndex
-                                ? {
-                                    ...item,
-                                    choices: [
-                                      ...item.choices,
-                                      { text: "", keywords: [], sort_order: item.choices.length },
-                                    ],
-                                  }
-                                : item,
-                            ),
-                          });
-                          setCollapsedChoices((current) => ({
-                            ...current,
-                            [choiceStateKey(templateIndex, stepIndex, step.choices.length)]: false,
-                          }));
-                          markDirty(stepSaveKey);
+                          void saveStep();
                         }}
                       >
-                        Добавить вариант
+                        {busyKey === `step-save:${activeStep.step_key}`
+                          ? "Сохранение..."
+                          : saveButtonLabel(saveState, activeStepKey)}
                       </button>
                     </div>
+                  </div>
 
-                    {step.choices.map((choice, choiceIndex) => {
-                      const choiceKey = choiceStateKey(templateIndex, stepIndex, choiceIndex);
-                      const choiceCollapsed = collapsedChoices[choiceKey] ?? false;
-                      const relatedFragments = roleFragments
-                        .map((fragment) => ({
-                          fragment,
-                          fragmentIndex: template.fragments.findIndex((item) => item === fragment),
-                        }))
-                        .filter(({ fragment }) => fragment.choice_temp_key === String(choiceIndex));
+                  {stepValidation?.errors.length ? (
+                    <div className="books-alert books-alert--error">
+                      {stepValidation.errors[0]}
+                    </div>
+                  ) : null}
 
-                      return (
-                        <div className="books-question" key={`${step.step_key}-${choiceIndex}`}>
+                  {stepValidation?.warnings.length ? (
+                    <div
+                      className="books-section-help"
+                      style={{
+                        marginBottom: 16,
+                        padding: "10px 12px",
+                        borderRadius: 12,
+                        background: "#fff5d6",
+                        color: "#725300",
+                      }}
+                    >
+                      <strong>Flow warnings:</strong>{" "}
+                      {stepValidation.warnings
+                        .slice(0, 3)
+                        .map(formatStoryWarning)
+                        .join(" ")}
+                    </div>
+                  ) : null}
+
+                  {templateWarnings.length > 0 ? (
+                    <div
+                      className="books-section-help"
+                      style={{
+                        marginBottom: 16,
+                        padding: "12px 14px",
+                        borderRadius: 12,
+                        background: "#fff7e8",
+                        color: "#725300",
+                      }}
+                    >
+                      <strong>Предупреждения по шаблону:</strong>
+                      <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
+                        {templateWarnings.map((warning) => (
+                          <div key={warning}>• {warning}</div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div
+                    className="books-subpanel"
+                    style={{ marginBottom: 16, background: "#fffdf8" }}
+                  >
+                    <div className="books-section-head">
+                      <div>
+                        <h3 className="books-subpanel__title">
+                          {ROLE_LABELS_RU[activeStep.step_key]}
+                        </h3>
+                        <p className="books-section-help">
+                          {ROLE_EDITOR_HELP[activeStep.step_key].description}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="books-section-help">
+                      <strong>Пример:</strong> {ROLE_EDITOR_HELP[activeStep.step_key].example}
+                    </div>
+                  </div>
+
+                  {stepStats && variantEstimate && (
+                    <div className="books-subpanel" style={{ marginBottom: 16 }}>
+                      <div className="books-section-head">
+                        <div>
+                          <h3 className="books-subpanel__title">Статус шага</h3>
+                          <p className="books-section-help">
+                            В редакторе смонтирован только этот шаг.
+                          </p>
+                        </div>
+                        <span>
+                          {variantEstimate.inputTokens} in / {variantEstimate.outputTokens} out ·{" "}
+                          {formatIls(variantEstimate.ils)}
+                        </span>
+                      </div>
+                      <div className="story-overview-steps">
+                        <div className="story-overview-step">
+                          <span className="story-overview-step__role">Вопрос ребёнку</span>
+                          <span>{stepStats.questionComplete ? "готов" : "пусто"}</span>
+                        </div>
+                        <div className="story-overview-step">
+                          <span className="story-overview-step__role">Choices</span>
+                          <span>{stepStats.filledChoicesCount}/3</span>
+                        </div>
+                        <div className="story-overview-step">
+                          <span className="story-overview-step__role">Fragments</span>
+                          <span>{stepStats.choiceFragmentsCount}/3</span>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeStep.step_key === "intro" ? (
+                    <div className="books-subpanel" style={{ marginBottom: 16 }}>
+                      <div className="books-section-head">
+                        <div>
+                          <h3 className="books-subpanel__title">
+                            Начало истории (основной текст)
+                          </h3>
+                          <p className="books-section-help">
+                            Первое предложение истории. Представляет героя и ситуацию.
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          className="books-button books-button--secondary"
+                          disabled={busyKey === `fragment-generate:intro:${introNarrationFragment?.fragmentIndex ?? 0}`}
+                          onClick={() => {
+                            void generateIntroNarration();
+                          }}
+                        >
+                          {busyKey === `fragment-generate:intro:${introNarrationFragment?.fragmentIndex ?? 0}`
+                            ? "Генерация..."
+                            : "Сгенерировать"}
+                        </button>
+                      </div>
+
+                      <label className="books-field">
+                        <span className="books-field__help">
+                          Пример: Жила-была Аня, девочка 10 лет. Она очень любила приключения.
+                        </span>
+                        <textarea
+                          className="books-input books-input--textarea books-input--small-textarea"
+                          value={introNarrationFragment?.fragment.text ?? ""}
+                          placeholder="Жила-была Аня, девочка 10 лет. Она очень любила приключения."
+                          onChange={(event) => {
+                            upsertIntroNarration(event.target.value);
+                          }}
+                        />
+                      </label>
+
+                      <label className="books-field">
+                        {helperLabel(
+                          "Ключевые слова для начала",
+                          "Слова для генерации и связности.",
+                          "Например: девочка, дом, утро",
+                        )}
+                        <input
+                          className="books-input"
+                          value={
+                            keywordDrafts["fragment:intro:narration"] ??
+                            formatKeywords(introNarrationFragment?.fragment.keywords ?? [])
+                          }
+                          placeholder="девочка, дом, утро"
+                          onChange={(event) => {
+                            const rawValue = event.target.value;
+                            setKeywordDrafts((current) => ({
+                              ...current,
+                              "fragment:intro:narration": rawValue,
+                            }));
+                            upsertIntroNarrationKeywords(rawValue);
+                          }}
+                          onBlur={() => {
+                            setKeywordDrafts((current) => ({
+                              ...current,
+                              "fragment:intro:narration": formatKeywords(
+                                introNarrationFragment?.fragment.keywords ?? [],
+                              ),
+                            }));
+                          }}
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+
+                  <label className="books-field">
+                    {helperLabel(
+                      "Вопрос для ребёнка",
+                      "Вопрос, который помогает выбрать следующий шаг истории.",
+                      'Этот вопрос задаётся ребёнку, чтобы он выбрал следующий шаг истории. Пример: "Куда Капи отправится сегодня?"',
+                    )}
+                    <input
+                      className="books-input"
+                      value={activeStep.question}
+                      placeholder="Куда Капи отправится сегодня?"
+                      onChange={(event) => {
+                        updateActiveTemplate((current) => ({
+                          ...current,
+                          steps: current.steps.map((item, index) =>
+                            index === selectedStep
+                              ? { ...item, question: event.target.value }
+                              : item,
+                          ),
+                        }));
+                        markDirty(activeStepKey);
+                      }}
+                    />
+                  </label>
+
+                  <div className="books-subpanel" style={{ marginTop: 16 }}>
+                    <div className="books-section-head">
+                      <div>
+                        <h3 className="books-subpanel__title">Варианты</h3>
+                        <p className="books-section-help">
+                          Загружен только активный шаг, а смонтирован только активный
+                          редактор варианта.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="story-overview-steps">
+                      {activeStep.choices.map((choice, choiceIndex) => {
+                        const isSelected = expandedChoiceIndex === choiceIndex;
+                        const hasFragment = roleFragments.some(
+                          (fragment) =>
+                            fragment.choice_temp_key === String(choiceIndex) &&
+                            fragment.text.trim().length > 0,
+                        );
+                        const isComplete =
+                          choice.text.trim().length > 0 && hasFragment;
+
+                        return (
+                          <button
+                            key={`${activeStep.step_key}:choice:${choiceIndex}`}
+                            type="button"
+                            className={
+                              isSelected
+                                ? "books-button books-button--primary"
+                                : isComplete
+                                  ? "books-button books-button--success"
+                                  : "books-button books-button--ghost"
+                            }
+                            onClick={() => setExpandedChoiceIndex(choiceIndex)}
+                          >
+                            <span
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                gap: 2,
+                              }}
+                            >
+                              <span>Вариант {choiceIndex + 1}</span>
+                              <span style={{ fontSize: 11, opacity: 0.85 }}>
+                                {isComplete ? "готов" : "нужно заполнить"}
+                              </span>
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {activeStep.choices[expandedChoiceIndex] && (
+                      <div className="books-question" style={{ marginTop: 16 }}>
+                        <div className="books-section-head">
+                          <div>
+                            <strong>Вариант {expandedChoiceIndex + 1}</strong>
+                            {similarChoiceIndexes.has(expandedChoiceIndex) ? (
+                              <div className="books-section-help" style={{ color: "#725300" }}>
+                                Вариант слишком похож на другой choice.
+                              </div>
+                            ) : null}
+                          </div>
                           <button
                             type="button"
-                            className="books-collapse"
-                            onClick={() =>
-                              setCollapsedChoices((current) => ({
-                                ...current,
-                                [choiceKey]: !(current[choiceKey] ?? false),
-                              }))
+                            className="books-button books-button--secondary"
+                            disabled={
+                              busyKey ===
+                              `choice-generate:${activeStep.step_key}:${expandedChoiceIndex}`
                             }
+                            onClick={() => {
+                              void generateChoice(expandedChoiceIndex);
+                            }}
                           >
-                            <span>{choiceCollapsed ? "▶" : "▼"}</span>
-                            <span>Вариант {choiceIndex + 1}</span>
+                            {busyKey ===
+                            `choice-generate:${activeStep.step_key}:${expandedChoiceIndex}`
+                              ? "Генерация..."
+                              : "Сгенерировать"}
                           </button>
+                        </div>
 
-                          {!choiceCollapsed && (
-                            <>
+                        <div className="books-grid books-grid--2">
+                          <label className="books-field">
+                            {helperLabel(
+                              "Что произойдёт",
+                              "Введите вариант выбора для ребёнка.",
+                              'Короткое действие или выбор (одна мысль, 5–10 слов). Пример: "Пойдёт к пруду купаться".',
+                            )}
+                            <input
+                              className="books-input"
+                              value={activeStep.choices[expandedChoiceIndex].text}
+                              placeholder="Пойдёт к пруду купаться"
+                              onChange={(event) => {
+                                updateActiveTemplate((current) => ({
+                                  ...current,
+                                  steps: current.steps.map((item, index) =>
+                                    index === selectedStep
+                                      ? {
+                                          ...item,
+                                          choices: item.choices.map(
+                                            (choiceItem, itemIndex) =>
+                                              itemIndex === expandedChoiceIndex
+                                                ? {
+                                                    ...choiceItem,
+                                                    text: event.target.value,
+                                                  }
+                                                : choiceItem,
+                                          ),
+                                        }
+                                      : item,
+                                  ),
+                                }));
+                                markDirty(activeStepKey);
+                              }}
+                            />
+                          </label>
+
+                          <label className="books-field">
+                            {helperLabel(
+                              "Ключевые слова",
+                              "Можно вводить через запятую или пробел.",
+                              "Слова для генерации и связности (3–5 слов через запятую). Пример: вода, пруд, купание",
+                            )}
+                            <input
+                              className="books-input"
+                              value={
+                                keywordDrafts[
+                                  `choice:${activeStep.step_key}:${expandedChoiceIndex}`
+                                ] ??
+                                formatKeywords(
+                                  activeStep.choices[expandedChoiceIndex].keywords,
+                                )
+                              }
+                              placeholder="вода, пруд, купание"
+                              onChange={(event) => {
+                                const rawValue = event.target.value;
+                                setKeywordDrafts((current) => ({
+                                  ...current,
+                                  [`choice:${activeStep.step_key}:${expandedChoiceIndex}`]:
+                                    rawValue,
+                                }));
+                                updateActiveTemplate((current) => ({
+                                  ...current,
+                                  steps: current.steps.map((item, index) =>
+                                    index === selectedStep
+                                      ? {
+                                          ...item,
+                                          choices: item.choices.map(
+                                            (choiceItem, itemIndex) =>
+                                              itemIndex === expandedChoiceIndex
+                                                ? {
+                                                    ...choiceItem,
+                                                    keywords: parseKeywords(rawValue),
+                                                  }
+                                                : choiceItem,
+                                          ),
+                                        }
+                                      : item,
+                                  ),
+                                }));
+                                markDirty(activeStepKey);
+                              }}
+                              onBlur={() => {
+                                setKeywordDrafts((current) => ({
+                                  ...current,
+                                  [`choice:${activeStep.step_key}:${expandedChoiceIndex}`]:
+                                    formatKeywords(
+                                      activeStep.choices[expandedChoiceIndex]
+                                        .keywords,
+                                    ),
+                                }));
+                              }}
+                            />
+                          </label>
+                        </div>
+
+                        <div className="books-subpanel">
+                          <div className="books-section-head">
+                            <div>
+                              <h5 className="books-subpanel__title">
+                                Фрагменты для варианта
+                              </h5>
+                              <button
+                                type="button"
+                                className="books-button books-button--ghost"
+                                style={{ paddingLeft: 0 }}
+                                onClick={() => setShowFragmentHint((current) => !current)}
+                              >
+                                {showFragmentHint ? "Скрыть пояснение" : "Что такое фрагменты?"}
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              className="books-button books-button--ghost"
+                              onClick={() => addFragment(expandedChoiceIndex)}
+                            >
+                              Добавить фрагмент
+                            </button>
+                          </div>
+
+                          {showFragmentHint ? (
+                            <div
+                              className="books-section-help"
+                              style={{
+                                marginBottom: 12,
+                                padding: "10px 12px",
+                                borderRadius: 12,
+                                background: "#f7f4ff",
+                              }}
+                            >
+                              <strong>
+                                Фрагменты — это дополнительные детали, которые добавляются к варианту
+                              </strong>
+                              <div style={{ marginTop: 6 }}>
+                                Пример: Капи прыгнула в прохладную воду и засмеялась
+                              </div>
+                            </div>
+                          ) : null}
+
+                          {choiceFragments.length === 0 ? (
+                            <div className="books-section-help">
+                              Для этого варианта ещё нет фрагментов.
+                            </div>
+                          ) : null}
+
+                          {choiceFragments.map(({ fragment, fragmentIndex }, relatedIndex) => (
+                            <div
+                              key={getFragmentRenderKey(fragment, fragmentIndex)}
+                              className="books-question"
+                            >
                               <div className="books-section-head">
-                                <div />
+                                <strong>Фрагмент {relatedIndex + 1}</strong>
                                 <div className="books-actions books-actions--compact">
                                   <button
                                     type="button"
                                     className="books-button books-button--secondary"
-                                    disabled={busyKey === `choice-generate:${templateIndex}:${stepIndex}:${choiceIndex}`}
+                                    disabled={
+                                      busyKey ===
+                                      `fragment-generate:${activeStep.step_key}:${fragmentIndex}`
+                                    }
                                     onClick={() => {
-                                      void generateChoice(templateIndex, stepIndex, choiceIndex);
+                                      void generateFragment(fragmentIndex);
                                     }}
                                   >
-                                    {busyKey === `choice-generate:${templateIndex}:${stepIndex}:${choiceIndex}` ? "Генерация..." : "Сгенерировать"}
+                                    {busyKey ===
+                                    `fragment-generate:${activeStep.step_key}:${fragmentIndex}`
+                                      ? "Генерация..."
+                                      : "Сгенерировать"}
                                   </button>
                                   <button
                                     type="button"
                                     className="books-button books-button--ghost"
-                                    onClick={() => deleteChoice(templateIndex, stepIndex, choiceIndex)}
+                                    onClick={() => {
+                                      updateActiveTemplate((current) => ({
+                                        ...current,
+                                        fragments: current.fragments.filter(
+                                          (_, index) => index !== fragmentIndex,
+                                        ),
+                                      }));
+                                      markDirty(`fragments:${activeStep.step_key}`);
+                                      markDirty(activeStepKey);
+                                    }}
                                   >
                                     ✖ удалить
                                   </button>
                                 </div>
                               </div>
 
-                              <div className="books-grid books-grid--2">
-                                <label className="books-field">
-                                  {helperLabel("Текст варианта", "Введите вариант выбора для ребёнка.", "Короткая фраза, подходящая для роли шага.")}
-                                  <input
-                                    className="books-input"
-                                    value={choice.text}
-                                    placeholder="Введите вариант выбора"
-                                    onChange={(event) => {
-                                      updateTemplate(templateIndex, {
-                                        ...template,
-                                        steps: template.steps.map((item, index) =>
-                                          index === stepIndex
-                                            ? {
-                                                ...item,
-                                                choices: item.choices.map((choiceItem, itemIndex) =>
-                                                  itemIndex === choiceIndex
-                                                    ? { ...choiceItem, text: event.target.value }
-                                                    : choiceItem,
-                                                ),
-                                              }
-                                            : item,
-                                        ),
-                                      });
-                                      markDirty(stepSaveKey);
-                                    }}
-                                  />
-                                </label>
-
-                                <label className="books-field">
-                                  {helperLabel("Ключевые слова", "Можно вводить через запятую или пробел.", "Пример: радуга, капибара приключение")}
-                                  <input
-                                    className="books-input"
-                                    value={
-                                      keywordDrafts[`choice:${templateIndex}:${stepIndex}:${choiceIndex}`] ??
-                                      formatKeywords(choice.keywords)
-                                    }
-                                    placeholder="радуга, капибара приключение"
-                                    onChange={(event) => {
-                                      const rawValue = event.target.value;
-                                      setKeywordDrafts((current) => ({
-                                        ...current,
-                                        [`choice:${templateIndex}:${stepIndex}:${choiceIndex}`]: rawValue,
-                                      }));
-                                      updateTemplate(templateIndex, {
-                                        ...template,
-                                        steps: template.steps.map((item, index) =>
-                                          index === stepIndex
-                                            ? {
-                                                ...item,
-                                                choices: item.choices.map((choiceItem, itemIndex) =>
-                                                  itemIndex === choiceIndex
-                                                    ? { ...choiceItem, keywords: parseKeywords(rawValue) }
-                                                    : choiceItem,
-                                                ),
-                                              }
-                                            : item,
-                                        ),
-                                      });
-                                      markDirty(stepSaveKey);
-                                    }}
-                                    onBlur={() => {
-                                      setKeywordDrafts((current) => ({
-                                        ...current,
-                                        [`choice:${templateIndex}:${stepIndex}:${choiceIndex}`]: formatKeywords(choice.keywords),
-                                      }));
-                                    }}
-                                  />
-                                </label>
-                              </div>
-
-                              <div className="books-subpanel">
-                                <div className="books-section-head">
-                                  <h5 className="books-subpanel__title">Фрагменты для этого варианта</h5>
-                                  <button
-                                    type="button"
-                                    className="books-button books-button--ghost"
-                                    onClick={() => addFragment(templateIndex, stepIndex, step.step_key, choiceIndex)}
-                                  >
-                                    Добавить фрагмент
-                                  </button>
-                                </div>
-
-                                {relatedFragments.length === 0 && (
-                                  <div className="books-section-help">Фрагменты для этого варианта ещё не добавлены.</div>
+                              <label className="books-field">
+                                {helperLabel(
+                                  "Текст фрагмента",
+                                  "Фраза, которая будет частью истории.",
+                                  "Одна короткая фраза, логически связанная с предыдущим шагом.",
                                 )}
+                                <textarea
+                                  className="books-input books-input--textarea books-input--small-textarea"
+                                  value={fragment.text}
+                                  placeholder="Фраза, которая будет частью истории"
+                                  onChange={(event) => {
+                                    updateActiveTemplate((current) => ({
+                                      ...current,
+                                      fragments: current.fragments.map((item, index) =>
+                                        index === fragmentIndex
+                                          ? { ...item, text: event.target.value }
+                                          : item,
+                                      ),
+                                    }));
+                                    markDirty(`fragments:${activeStep.step_key}`);
+                                    markDirty(activeStepKey);
+                                  }}
+                                />
+                              </label>
 
-                                {relatedFragments.map(({ fragment, fragmentIndex }, relatedIndex) => {
-                                  const fragmentKey = fragmentStateKey(templateIndex, step.step_key, fragmentIndex);
-                                  const fragmentCollapsed = collapsedFragments[fragmentKey] ?? false;
-
-                                  return (
-                                    <div
-                                      key={fragmentKey}
-                                      className="books-question"
-                                      ref={(element) => {
-                                        fragmentRefs.current[fragmentKey] = element;
-                                      }}
-                                    >
-                                      <button
-                                        type="button"
-                                        className="books-collapse"
-                                        onClick={() =>
-                                          setCollapsedFragments((current) => ({
-                                            ...current,
-                                            [fragmentKey]: !(current[fragmentKey] ?? false),
-                                          }))
-                                        }
-                                      >
-                                        <span>{fragmentCollapsed ? "▶" : "▼"}</span>
-                                        <span>Фрагмент {relatedIndex + 1}</span>
-                                      </button>
-
-                                      {!fragmentCollapsed && (
-                                        <>
-                                          <div className="books-section-head">
-                                            <div />
-                                            <div className="books-actions books-actions--compact">
-                                              <button
-                                                type="button"
-                                                className="books-button books-button--secondary"
-                                                disabled={busyKey === `fragment-generate:${templateIndex}:${step.step_key}:${fragmentIndex}`}
-                                                onClick={() => {
-                                                  void generateFragment(templateIndex, step.step_key, fragmentIndex);
-                                                }}
-                                              >
-                                                {busyKey === `fragment-generate:${templateIndex}:${step.step_key}:${fragmentIndex}` ? "Генерация..." : "Сгенерировать"}
-                                              </button>
-                                              <button
-                                                type="button"
-                                                className="books-button books-button--ghost"
-                                                onClick={() => {
-                                                  updateTemplate(templateIndex, {
-                                                    ...template,
-                                                    fragments: template.fragments.filter((_, index) => index !== fragmentIndex),
-                                                  });
-                                                  markDirty(fragmentsSaveKey);
-                                                  markDirty(stepSaveKey);
-                                                }}
-                                              >
-                                                ✖ удалить
-                                              </button>
-                                            </div>
-                                          </div>
-
-                                          <label className="books-field">
-                                            {helperLabel("Текст фрагмента", "Фраза, которая будет частью истории.", "Одна короткая фраза, логически связанная с предыдущим шагом.")}
-                                            <textarea
-                                              className="books-input books-input--textarea books-input--small-textarea"
-                                              value={fragment.text}
-                                              placeholder="Фраза, которая будет частью истории"
-                                              onChange={(event) => {
-                                                updateTemplate(templateIndex, {
-                                                  ...template,
-                                                  fragments: template.fragments.map((item, index) =>
-                                                    index === fragmentIndex ? { ...item, text: event.target.value } : item,
-                                                  ),
-                                                });
-                                                markDirty(fragmentsSaveKey);
-                                                markDirty(stepSaveKey);
-                                              }}
-                                            />
-                                          </label>
-
-                                          <label className="books-field">
-                                            {helperLabel("Ключевые слова", "Можно вводить через запятую или пробел.", "Пример: радуга, карта приключение")}
-                                            <input
-                                              className="books-input"
-                                              value={
-                                                keywordDrafts[fragmentKey] ??
-                                                formatKeywords(fragment.keywords)
-                                              }
-                                              placeholder="радуга, карта приключение"
-                                              onChange={(event) => {
-                                                const rawValue = event.target.value;
-                                                setKeywordDrafts((current) => ({
-                                                  ...current,
-                                                  [fragmentKey]: rawValue,
-                                                }));
-                                                updateTemplate(templateIndex, {
-                                                  ...template,
-                                                  fragments: template.fragments.map((item, index) =>
-                                                    index === fragmentIndex ? { ...item, keywords: parseKeywords(rawValue) } : item,
-                                                  ),
-                                                });
-                                                markDirty(fragmentsSaveKey);
-                                                markDirty(stepSaveKey);
-                                              }}
-                                              onBlur={() => {
-                                                setKeywordDrafts((current) => ({
-                                                  ...current,
-                                                  [fragmentKey]: formatKeywords(fragment.keywords),
-                                                }));
-                                              }}
-                                            />
-                                          </label>
-                                        </>
-                                      )}
-                                    </div>
-                                  );
-                                })}
-                              </div>
-                            </>
-                          )}
+                              <label className="books-field">
+                                {helperLabel(
+                                  "Ключевые слова",
+                                  "Можно вводить через запятую или пробел.",
+                                  "Слова для генерации и связности (3–5 слов через запятую). Пример: вода, пруд, купание",
+                                )}
+                                <input
+                                  className="books-input"
+                                  value={
+                                    keywordDrafts[
+                                      `fragment:${activeStep.step_key}:${fragmentIndex}`
+                                    ] ?? formatKeywords(fragment.keywords)
+                                  }
+                                  placeholder="вода, пруд, купание"
+                                  onChange={(event) => {
+                                    const rawValue = event.target.value;
+                                    setKeywordDrafts((current) => ({
+                                      ...current,
+                                      [`fragment:${activeStep.step_key}:${fragmentIndex}`]:
+                                        rawValue,
+                                    }));
+                                    updateActiveTemplate((current) => ({
+                                      ...current,
+                                      fragments: current.fragments.map((item, index) =>
+                                        index === fragmentIndex
+                                          ? {
+                                              ...item,
+                                              keywords: parseKeywords(rawValue),
+                                            }
+                                          : item,
+                                      ),
+                                    }));
+                                    markDirty(`fragments:${activeStep.step_key}`);
+                                    markDirty(activeStepKey);
+                                  }}
+                                  onBlur={() => {
+                                    setKeywordDrafts((current) => ({
+                                      ...current,
+                                      [`fragment:${activeStep.step_key}:${fragmentIndex}`]:
+                                        formatKeywords(fragment.keywords),
+                                    }));
+                                  }}
+                                />
+                              </label>
+                            </div>
+                          ))}
                         </div>
-                      );
-                    })}
+                      </div>
+                    )}
+                  </div>
 
-                    <div className="books-subpanel">
-                      <div className="books-section-head">
-                        <h5 className="books-subpanel__title">Общие фрагменты шага</h5>
+                  <div className="books-subpanel" style={{ marginTop: 16 }}>
+                    <div className="books-section-head">
+                      <div>
+                        <h3 className="books-subpanel__title">Как сейчас звучит история</h3>
+                        <p className="books-section-help">
+                          Здесь показано, как будет звучать история, если выбрать этот вариант.
+                        </p>
+                      </div>
+                    </div>
+
+                    <div
+                      className="books-section-help"
+                      style={{
+                        marginBottom: 12,
+                        padding: "10px 12px",
+                        borderRadius: 12,
+                        background: "#f6f9ff",
+                      }}
+                    >
+                      Сейчас в редакторе открыт вариант {expandedChoiceIndex + 1}. Предпросмотр синхронизирован с ним.
+                    </div>
+
+                    <div
+                      style={{
+                        display: "grid",
+                        gap: 12,
+                        marginBottom: 12,
+                      }}
+                    >
+                      <div className="story-overview-step">
+                        <div className="books-section-help">
+                          <strong>Что произойдёт:</strong>{" "}
+                          {activeStep.choices[expandedChoiceIndex]?.text.trim() ||
+                            "Текст варианта ещё не заполнен."}
+                        </div>
+                      </div>
+                      <div className="story-overview-step">
+                        <div className="books-section-help">
+                          <strong>Следующая деталь:</strong>{" "}
+                          {activePreviewFragment?.text.trim() ||
+                            "Для этого варианта ещё нет фрагмента."}
+                        </div>
+                      </div>
+                    </div>
+
+                    <label className="books-field" style={{ marginTop: 12 }}>
+                      <span className="books-field__label">
+                        Предпросмотр истории на этом шаге
+                      </span>
+                      <span className="books-field__help">
+                        Текст ниже показан как обычная история, без технических меток шагов.
+                      </span>
+                      <textarea
+                        className="books-input books-input--textarea books-input--small-textarea"
+                        readOnly
+                        value={assembledPreviewProse}
+                        style={{ minHeight: 120 }}
+                      />
+                    </label>
+                  </div>
+
+                  <div className="books-subpanel" style={{ marginTop: 16 }}>
+                    <div className="books-section-head">
+                      <div>
+                        <h3 className="books-subpanel__title">Общие фрагменты</h3>
+                        <p className="books-section-help">
+                          Общие фрагменты — это дополнительные короткие вставки, которые можно
+                          добавить к любому варианту этого шага. Они помогают сделать текст
+                          живее и разнообразнее.
+                        </p>
+                        <p className="books-section-help">
+                          Примеры: &quot;Утро было тихим, и листья едва шевелились.&quot;,
+                          &quot;Где-то неподалёку послышался смешной звук.&quot;,
+                          &quot;Капа вдруг почувствовала, что день будет необычным.&quot;
+                        </p>
+                      </div>
+                      <div className="books-actions books-actions--compact">
                         <button
                           type="button"
                           className="books-button books-button--ghost"
-                          onClick={() => addFragment(templateIndex, stepIndex, step.step_key, null)}
+                          onClick={() => setShowSharedFragments((current) => !current)}
                         >
-                          Добавить фрагмент
+                          {showSharedFragments ? "Скрыть" : "Показать"}
                         </button>
-                      </div>
-
-                      {generalFragments.length === 0 && (
-                        <div className="books-section-help">Общие фрагменты для этого шага ещё не добавлены.</div>
-                      )}
-
-                      {generalFragments.map((fragment, fragmentIndex) => {
-                        const fragmentGlobalIndex = template.fragments.findIndex((item) => item === fragment);
-                        const fragmentKey = fragmentStateKey(templateIndex, step.step_key, fragmentGlobalIndex);
-                        const fragmentCollapsed = collapsedFragments[fragmentKey] ?? false;
-
-                        return (
-                          <div
-                            key={fragmentKey}
-                            className="books-question"
-                            ref={(element) => {
-                              fragmentRefs.current[fragmentKey] = element;
-                            }}
+                        {showSharedFragments ? (
+                          <button
+                            type="button"
+                            className="books-button books-button--ghost"
+                            onClick={() => addFragment(null)}
                           >
-                            <button
-                              type="button"
-                              className="books-collapse"
-                              onClick={() =>
-                                setCollapsedFragments((current) => ({
-                                  ...current,
-                                  [fragmentKey]: !(current[fragmentKey] ?? false),
-                                }))
-                              }
-                            >
-                              <span>{fragmentCollapsed ? "▶" : "▼"}</span>
-                              <span>Общий фрагмент {fragmentIndex + 1}</span>
-                            </button>
-
-                            {!fragmentCollapsed && (
-                              <>
-                                <div className="books-section-head">
-                                  <div />
-                                  <div className="books-actions books-actions--compact">
-                                    <button
-                                      type="button"
-                                      className="books-button books-button--secondary"
-                                      disabled={busyKey === `fragment-generate:${templateIndex}:${step.step_key}:${fragmentGlobalIndex}`}
-                                      onClick={() => {
-                                        void generateFragment(templateIndex, step.step_key, fragmentGlobalIndex);
-                                      }}
-                                    >
-                                      {busyKey === `fragment-generate:${templateIndex}:${step.step_key}:${fragmentGlobalIndex}` ? "Генерация..." : "Сгенерировать"}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      className="books-button books-button--ghost"
-                                      onClick={() => {
-                                        updateTemplate(templateIndex, {
-                                          ...template,
-                                          fragments: template.fragments.filter((_, index) => index !== fragmentGlobalIndex),
-                                        });
-                                        markDirty(fragmentsSaveKey);
-                                        markDirty(stepSaveKey);
-                                      }}
-                                    >
-                                      ✖ удалить
-                                    </button>
-                                  </div>
-                                </div>
-
-                                <label className="books-field">
-                                  {helperLabel("Текст фрагмента", "Фраза, которая будет частью истории.", "Одна короткая фраза, логически связанная с предыдущим шагом.")}
-                                  <textarea
-                                    className="books-input books-input--textarea books-input--small-textarea"
-                                    value={fragment.text}
-                                    placeholder="Фраза, которая будет частью истории"
-                                    onChange={(event) => {
-                                      updateTemplate(templateIndex, {
-                                        ...template,
-                                        fragments: template.fragments.map((item, index) =>
-                                          index === fragmentGlobalIndex ? { ...item, text: event.target.value } : item,
-                                        ),
-                                      });
-                                      markDirty(fragmentsSaveKey);
-                                      markDirty(stepSaveKey);
-                                    }}
-                                  />
-                                </label>
-
-                                <label className="books-field">
-                                  {helperLabel("Ключевые слова", "Можно вводить через запятую или пробел.", "Пример: радуга, карта приключение")}
-                                  <input
-                                    className="books-input"
-                                    value={
-                                      keywordDrafts[fragmentKey] ??
-                                      formatKeywords(fragment.keywords)
-                                    }
-                                    placeholder="радуга, карта приключение"
-                                    onChange={(event) => {
-                                      const rawValue = event.target.value;
-                                      setKeywordDrafts((current) => ({
-                                        ...current,
-                                        [fragmentKey]: rawValue,
-                                      }));
-                                      updateTemplate(templateIndex, {
-                                        ...template,
-                                        fragments: template.fragments.map((item, index) =>
-                                          index === fragmentGlobalIndex ? { ...item, keywords: parseKeywords(rawValue) } : item,
-                                        ),
-                                      });
-                                      markDirty(fragmentsSaveKey);
-                                      markDirty(stepSaveKey);
-                                    }}
-                                    onBlur={() => {
-                                      setKeywordDrafts((current) => ({
-                                        ...current,
-                                        [fragmentKey]: formatKeywords(fragment.keywords),
-                                      }));
-                                    }}
-                                  />
-                                </label>
-                              </>
-                            )}
-                          </div>
-                        );
-                      })}
+                            Добавить фрагмент
+                          </button>
+                        ) : null}
+                      </div>
                     </div>
-                  </>
-                )}
-              </div>
-            );
-          })}
-        </section>
-      ))}
 
-      <section className="books-panel">
-        <div className="books-section-head">
-          <div>
-            <h2 className="books-panel__title">Неожиданные повороты</h2>
-            <p className="books-section-help">Глобальные неожиданные повороты для историй.</p>
-          </div>
-          <div className="books-actions books-actions--compact">
-            <button
-              type="button"
-              className="books-button books-button--ghost"
-              onClick={() => {
-                setTwists((current) => [...current, emptyTwist()]);
-                markDirty("twists");
-              }}
-            >
-              Добавить поворот
-            </button>
-            <button
-              type="button"
-              className={saveButtonClass(saveState, "twists")}
-              disabled={busyKey === "twists-save"}
-              onClick={() => {
-                void saveTwists();
-              }}
-            >
-              {busyKey === "twists-save" ? "Сохранение..." : saveButtonLabel(saveState, "twists")}
-            </button>
-          </div>
-        </div>
+                    {showSharedFragments ? (
+                      advancedGeneralFragments.length === 0 ? (
+                        <div
+                          className="books-section-help"
+                          style={{
+                            padding: "12px 14px",
+                            borderRadius: 12,
+                            background: "#fffdf8",
+                          }}
+                        >
+                          <div>
+                            Пока общих фрагментов нет. Это необязательный расширенный слой:
+                            можно оставить пустым или добавить короткие универсальные вставки
+                            для шага.
+                          </div>
+                          <button
+                            type="button"
+                            className="books-button books-button--ghost"
+                            style={{ marginTop: 10 }}
+                            onClick={() => addFragment(null)}
+                          >
+                            Добавить фрагмент
+                          </button>
+                        </div>
+                      ) : (
+                        advancedGeneralFragments.map((fragment) => {
+                          const fragmentIndex = activeTemplate.fragments.findIndex(
+                            (item) => item === fragment,
+                          );
 
-        {twistsPanel}
-      </section>
+                          return (
+                            <div
+                              key={getFragmentRenderKey(fragment, fragmentIndex)}
+                              className="books-question"
+                            >
+                              <div className="books-section-head">
+                                <strong>Общий фрагмент</strong>
+                                <div className="books-actions books-actions--compact">
+                                  <button
+                                    type="button"
+                                    className="books-button books-button--secondary"
+                                    disabled={
+                                      busyKey ===
+                                      `fragment-generate:${activeStep.step_key}:${fragmentIndex}`
+                                    }
+                                    onClick={() => {
+                                      void generateFragment(fragmentIndex);
+                                    }}
+                                  >
+                                    {busyKey ===
+                                    `fragment-generate:${activeStep.step_key}:${fragmentIndex}`
+                                      ? "Генерация..."
+                                      : "Сгенерировать"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="books-button books-button--ghost"
+                                    onClick={() => {
+                                      updateActiveTemplate((current) => ({
+                                        ...current,
+                                        fragments: current.fragments.filter(
+                                          (_, index) => index !== fragmentIndex,
+                                        ),
+                                      }));
+                                      markDirty(`fragments:${activeStep.step_key}`);
+                                      markDirty(activeStepKey);
+                                    }}
+                                  >
+                                    ✖ удалить
+                                  </button>
+                                </div>
+                              </div>
+
+                              <label className="books-field">
+                                {helperLabel(
+                                  "Текст фрагмента",
+                                  "Фраза, которая будет частью истории.",
+                                  "Одна короткая фраза, логически связанная с предыдущим шагом.",
+                                )}
+                                <textarea
+                                  className="books-input books-input--textarea books-input--small-textarea"
+                                  value={fragment.text}
+                                  placeholder="Фраза, которая будет частью истории"
+                                  onChange={(event) => {
+                                    updateActiveTemplate((current) => ({
+                                      ...current,
+                                      fragments: current.fragments.map((item, index) =>
+                                        index === fragmentIndex
+                                          ? { ...item, text: event.target.value }
+                                          : item,
+                                      ),
+                                    }));
+                                    markDirty(`fragments:${activeStep.step_key}`);
+                                    markDirty(activeStepKey);
+                                  }}
+                                />
+                              </label>
+
+                              <label className="books-field">
+                                {helperLabel(
+                                  "Ключевые слова",
+                                  "Можно вводить через запятую или пробел.",
+                                  "Слова для генерации и связности (3–5 слов через запятую). Пример: вода, пруд, купание",
+                                )}
+                                <input
+                                  className="books-input"
+                                  value={
+                                    keywordDrafts[
+                                      `fragment:${activeStep.step_key}:${fragmentIndex}`
+                                    ] ?? formatKeywords(fragment.keywords)
+                                  }
+                                  placeholder="вода, пруд, купание"
+                                  onChange={(event) => {
+                                    const rawValue = event.target.value;
+                                    setKeywordDrafts((current) => ({
+                                      ...current,
+                                      [`fragment:${activeStep.step_key}:${fragmentIndex}`]:
+                                        rawValue,
+                                    }));
+                                    updateActiveTemplate((current) => ({
+                                      ...current,
+                                      fragments: current.fragments.map((item, index) =>
+                                        index === fragmentIndex
+                                          ? {
+                                              ...item,
+                                              keywords: parseKeywords(rawValue),
+                                            }
+                                          : item,
+                                      ),
+                                    }));
+                                    markDirty(`fragments:${activeStep.step_key}`);
+                                    markDirty(activeStepKey);
+                                  }}
+                                  onBlur={() => {
+                                    setKeywordDrafts((current) => ({
+                                      ...current,
+                                      [`fragment:${activeStep.step_key}:${fragmentIndex}`]:
+                                        formatKeywords(fragment.keywords),
+                                    }));
+                                  }}
+                                />
+                              </label>
+                            </div>
+                          );
+                        })
+                      )
+                    ) : null}
+                  </div>
+                </>
+              )}
+            </div>
+          </section>
+        </>
+      )}
     </div>
   );
 }

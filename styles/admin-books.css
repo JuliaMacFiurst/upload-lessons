@@ -444,8 +444,7 @@
 
 .story-overview-step {
   display: grid;
-  grid-template-columns: 80px 1fr auto;
-  gap: 10px;
+  grid-template-rows: 30px 1fr auto;
   align-items: center;
   font-size: 0.95rem;
 }

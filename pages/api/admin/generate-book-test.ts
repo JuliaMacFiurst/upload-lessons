@@ -1,12 +1,20 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { ZodError, z } from "zod";
 import {
+  detectFormatViolations,
+  logGenerationEvent,
+  logGenerationOk,
+  logZodError,
+  validateQuizDeep,
+  validateWithDiagnostics,
+} from "../../../lib/ai/generationDiagnostics";
+import { canonicalQuizSchema } from "../../../lib/books/contracts";
+import {
   buildTestPrompt,
   normalizeGeneratedQuizPayload,
   requireAdminSession,
   runGeminiJsonPrompt,
 } from "../../../lib/server/book-admin";
-import { bookTestQuestionSchema } from "../../../lib/books/types";
 
 const bodySchema = z.object({
   title: z.string().trim().min(1),
@@ -31,25 +39,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     await requireAdminSession(req, res);
     const body = bodySchema.parse(req.body ?? {});
     const generated = await runGeminiJsonPrompt<unknown>(buildTestPrompt(body));
-    if (process.env.NODE_ENV === "development") {
-      console.info("[generation] single-test.raw", generated);
-    }
+    logGenerationEvent("raw.test.route", generated, {
+      valid: true,
+      level: "success",
+      summary: { book: body.title },
+    });
+    detectFormatViolations(generated, "generate-book-test");
 
-    const data = responseSchema.parse(generated);
-    const normalizedQuiz = z.array(bookTestQuestionSchema).min(1).max(10).parse(
-      normalizeGeneratedQuizPayload(data.quiz),
-    );
-    const normalized = {
+    const data = validateWithDiagnostics(responseSchema, generated, "validation.test.parsed", {
+      book: body.title,
+    });
+    const normalized = validateWithDiagnostics(canonicalQuizSchema.extend({
+      quiz: canonicalQuizSchema.shape.quiz.max(10),
+    }), {
       title: data.title,
       description: data.description ?? null,
-      quiz: normalizedQuiz,
-    };
-    if (process.env.NODE_ENV === "development") {
-      console.info("[generation] single-test.normalized", normalized);
-    }
+      quiz: normalizeGeneratedQuizPayload(data.quiz),
+    }, "validation.test.canonical", {
+      book: body.title,
+    });
+    validateQuizDeep(normalized.quiz);
+    logGenerationEvent("final.test.payload", normalized, {
+      valid: true,
+      level: "success",
+      summary: { book: body.title, quizQuestions: normalized.quiz.length },
+    });
+    logGenerationOk({
+      book: body.title,
+      quizQuestions: normalized.quiz.length,
+      keywords: 0,
+    });
 
     return res.status(200).json(normalized);
   } catch (error) {
+    logZodError("validation.test.error", error, req.body ?? {}, {
+      route: "generate-book-test",
+    });
     if (error instanceof ZodError) {
       return res.status(400).json({ error: error.issues[0]?.message ?? "Validation failed." });
     }
