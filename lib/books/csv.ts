@@ -127,7 +127,7 @@ export function exportStoryTemplateCsv(template: StoryTemplateInput): string {
       parent_step_key: "",
       parent_choice_index: "",
       sort_order: String(step.sort_order),
-      text: step.question,
+      text: step.step_key === "narration" ? step.narration?.trim() || step.question : step.question,
       keywords: "",
       name: "",
       slug: "",
@@ -219,9 +219,11 @@ export function importStoryTemplateCsv(text: string): StoryTemplateInput {
 
   rows.forEach((row) => {
     if (row.entity === "step") {
+      const stepKey = normalizeStoryRole(row.step_key, steps.length);
       const step: StoryStepInput = {
-        step_key: normalizeStoryRole(row.step_key, steps.length),
-        question: row.text.trim(),
+        step_key: stepKey,
+        question: stepKey === "narration" ? "Как начинается история?" : row.text.trim(),
+        narration: stepKey === "narration" ? row.text.trim() : null,
         sort_order: coerceInteger(row.sort_order),
         choices: [],
       };

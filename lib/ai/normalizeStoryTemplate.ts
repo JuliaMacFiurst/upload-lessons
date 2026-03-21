@@ -1,6 +1,7 @@
 import { STORY_ROLE_KEYS, type StoryRoleKey } from "../books/types";
 
 const DEFAULT_STEP_QUESTIONS: Record<StoryRoleKey, string> = {
+  narration: "Как начинается история?",
   intro: "С чего началось приключение?",
   journey: "Куда герой отправляется дальше?",
   problem: "Какая проблема появляется в пути?",
@@ -87,7 +88,7 @@ function normalizeSteps(value: unknown) {
     stepsByRole.set(role, {
       step_key: role,
       question,
-      choices: normalizeChoices(record.choices),
+      choices: role === "narration" ? [] : normalizeChoices(record.choices),
     });
   });
 
@@ -95,7 +96,7 @@ function normalizeSteps(value: unknown) {
     stepsByRole.get(role) ?? {
       step_key: role,
       question: defaultQuestion(role),
-      choices: normalizeChoices([]),
+      choices: role === "narration" ? [] : normalizeChoices([]),
     }
   ));
 }
@@ -119,6 +120,9 @@ function normalizeFragments(
         keywords?: unknown;
       };
       const step_key = normalizeStoryRole(record.step_key, index);
+      if (step_key === "narration") {
+        return null;
+      }
       const text = typeof record.text === "string" ? record.text.trim() : "";
       if (!text) {
         return null;

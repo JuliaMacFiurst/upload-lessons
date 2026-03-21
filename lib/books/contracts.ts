@@ -12,6 +12,7 @@ export const CANONICAL_BOOK_SECTION_KEYS = [
 ] as const;
 
 export const STORY_ROLE_KEYS = [
+  "narration",
   "intro",
   "journey",
   "problem",
@@ -94,7 +95,7 @@ export const canonicalStoryTwistSchema = z.object({
 
 export const canonicalStoryTemplateSchema = z.object({
   title: z.string().trim().min(1).max(120),
-  steps: z.array(canonicalStoryStepSchema).length(5),
+  steps: z.array(canonicalStoryStepSchema).length(6),
   fragments: z.array(canonicalStoryFragmentSchema).max(60),
   twists: z.array(canonicalStoryTwistSchema).max(30),
 });

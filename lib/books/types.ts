@@ -172,4 +172,5 @@ export type StoryTemplateOverviewRow = {
   age_group: string | null;
   step_key: StoryRoleKey;
   choices_count: number;
+  narration_filled?: boolean;
 };

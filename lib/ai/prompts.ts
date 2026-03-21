@@ -69,6 +69,7 @@ const BOOK_SECTION_PROMPTS: Record<string, string> = {
 };
 
 const STORY_ROLE_DESCRIPTIONS: Record<StoryRoleKey, string> = {
+  narration: "Открой историю: представь героя, место и стартовую ситуацию до первого вопроса.",
   intro: "Начни историю: знакомство, находка или приглашение к приключению.",
   journey: "Продолжи историю: путь, исследование или движение к цели.",
   problem: "Покажи препятствие: трудность, помеху или неожиданную проблему.",
@@ -123,7 +124,7 @@ const CANONICAL_STORY_TEMPLATE_FORMAT = formatObject([
     "steps",
     formatArray(
       formatObject([
-        formatField("step_key", '"intro"'),
+        formatField("step_key", '"narration"'),
         formatField("question", '"..."'),
         formatField(
           "choices",
@@ -295,7 +296,7 @@ export function buildStoryPartPrompt(input: {
     "",
     "TASK:",
     "Generate a story fragment.",
-    "This generation is part of a deterministic 5-step path builder.",
+    "This generation is part of a deterministic 6-stage path builder.",
     "You must continue the existing story context, not invent a disconnected scene.",
     "",
     "INPUT:",
@@ -318,11 +319,11 @@ export function buildStoryPartPrompt(input: {
     "- must move the story forward",
     "- must be understandable for a child (age 6–10)",
     "- question MUST be in Russian",
-    "- question MUST refer to the same main hero from the title and intro context",
+    "- question MUST refer to the same main hero from the title and opening context",
     "- do not introduce any predefined hero type if the context does not mention it",
     "- do not replace the existing hero with a new character",
     `- step_key MUST be "${storyRole}"`,
-    '- step_key MUST be one of: ["intro","journey","problem","solution","ending"]',
+    '- step_key MUST be one of: ["narration","intro","journey","problem","solution","ending"]',
     "",
     'IF kind != "step":',
     CANONICAL_STORY_TEXT_FORMAT,
@@ -376,12 +377,18 @@ export function buildStoryPartPrompt(input: {
     input.kind === "choice" && storyRole === "intro"
       ? "- Prefer one exploratory option, one playful/social option, and one unusual/curious option."
       : "- Each choice should feel meaningfully distinct.",
+    input.kind === "fragment" && storyRole === "narration"
+      ? "- For kind \"fragment\" in narration, write the opening narration before the first interactive question."
+      : "- Add one vivid but simple detail when helpful.",
+    input.kind === "fragment" && storyRole === "narration"
+      ? "- Introduce the hero, setting, and starting situation in 1-2 short sentences."
+      : "- Continue the selected choice instead of repeating it.",
     input.kind === "fragment" && storyRole === "intro"
       ? "- For kind \"fragment\" in intro, add one sensory detail, mood, or memorable image."
-      : "- Add one vivid but simple detail when helpful.",
+      : "",
     input.kind === "fragment" && storyRole === "intro"
       ? "- Do not paraphrase the choice text. Continue it naturally."
-      : "- Continue the selected choice instead of repeating it.",
+      : "",
     "",
     "QUALITY RULES:",
     "- no empty fields",
@@ -390,7 +397,7 @@ export function buildStoryPartPrompt(input: {
     "- no random absurdity",
     "- no repetition",
     "- Never assume a predefined hero type.",
-    "- The hero MUST be inferred only from the template title and intro context.",
+    "- The hero MUST be inferred only from the template title and opening context.",
     "- The output MUST continue the previous assembled context naturally.",
     "- The output MUST fit the current step role exactly.",
     "- If the context mentions a selected choice, continue that choice directly.",
@@ -412,7 +419,9 @@ export function buildStoryPartPrompt(input: {
     `Описание роли: ${STORY_ROLE_DESCRIPTIONS[storyRole]}`,
     previousRole ? `Previous story role: ${previousRole.toUpperCase()}` : "Previous story role: none",
     `Next story role: ${
-      storyRole === "intro"
+      storyRole === "narration"
+        ? "intro"
+        : storyRole === "intro"
         ? "journey"
         : storyRole === "journey"
           ? "problem"
@@ -436,7 +445,7 @@ export function buildStoryPartPrompt(input: {
 export function buildMissingStoryChoicesPrompt(input: {
   title: string;
   stepKey: StoryRoleKey;
-  introNarration: string;
+  narrationText: string;
   currentStoryText: string;
   selectedPath: string;
   roleDescription: string;
@@ -483,9 +492,9 @@ export function buildMissingStoryChoicesPrompt(input: {
     `Шаг: ${input.stepKey}`,
     `Роль шага: ${input.roleDescription}`,
     `Название шаблона: ${input.title}`,
-    `Начало истории:\n${input.introNarration || "Начало истории ещё не заполнено."}`,
+    `Начало истории:\n${input.narrationText || "Начало истории ещё не заполнено."}`,
     `Текущая ветка:\n${input.selectedPath}`,
-    `Текущий текст истории:\n${input.currentStoryText || input.introNarration || "Текст истории пока не заполнен."}`,
+    `Текущий текст истории:\n${input.currentStoryText || input.narrationText || "Текст истории пока не заполнен."}`,
     `Вопрос:\n${input.question}`,
     "Уже есть варианты и фрагменты:",
     input.existingChoices.length > 0
@@ -531,8 +540,11 @@ export function buildStoryTemplatePrompt(input: {
     "- Не делай одного и того же героя героем по умолчанию.",
     "- Используй разнообразные миры: животные, дети, фантастические существа, волшебные предметы, необычные места, смешные ситуации.",
     "- Если название истории не задано, придумай оригинальное детское название с лёгкой загадкой, образом или смешной деталью.",
-    "- Ровно 5 шагов: intro, journey, problem, solution, ending.",
-    "- Все step_key MUST быть только из списка: intro, journey, problem, solution, ending.",
+    "- Ровно 6 stages: narration, intro, journey, problem, solution, ending.",
+    "- narration это отдельный открывающий этап до первого вопроса ребёнку.",
+    "- В narration должен быть step_key = narration, короткий opening question/label и пустой массив choices.",
+    "- У intro, journey, problem, solution, ending должно быть по 3 choices.",
+    "- Все step_key MUST быть только из списка: narration, intro, journey, problem, solution, ending.",
     "- На каждый шаг ровно 3 варианта выбора.",
     "- На каждый вариант 1 или 2 фрагмента.",
     "- 3 неожиданных добрых поворота.",

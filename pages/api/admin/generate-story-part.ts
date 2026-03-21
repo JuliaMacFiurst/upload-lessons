@@ -9,6 +9,7 @@ import {
 import {
   canonicalStoryTwistSchema,
 } from "../../../lib/books/contracts";
+import { STORY_ROLE_KEYS } from "../../../lib/books/types";
 import {
   buildStoryPartPrompt,
   requireAdminSession,
@@ -22,8 +23,8 @@ const bodySchema = z.object({
   ageGroup: z.string().trim().optional().nullable(),
   templateName: z.string().trim().optional().nullable(),
   kind: z.enum(["fragment", "twist"]),
-  storyRole: z.enum(["intro", "journey", "problem", "solution", "ending"]),
-  previousRole: z.enum(["intro", "journey", "problem", "solution", "ending"]).optional().nullable(),
+  storyRole: z.enum(STORY_ROLE_KEYS),
+  previousRole: z.enum(STORY_ROLE_KEYS).optional().nullable(),
   context: z.string().trim().optional(),
 });
 
@@ -78,7 +79,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const normalized = normalizeGeneratedStoryPart(generated);
     if (
       body.kind === "fragment" &&
-      body.storyRole !== "intro" &&
+      body.storyRole !== "narration" &&
       body.context?.includes("Полный текущий текст истории:") &&
       looksLikeStoryRestart(normalized.text)
     ) {

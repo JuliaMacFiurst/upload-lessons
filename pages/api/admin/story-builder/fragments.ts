@@ -4,10 +4,11 @@ import {
   requireAdminSession,
   saveStoryFragmentsBlock,
 } from "../../../../lib/server/book-admin";
+import { STORY_ROLE_KEYS } from "../../../../lib/books/types";
 
 const schema = z.object({
   templateId: z.string().uuid(),
-  role: z.enum(["intro", "journey", "problem", "solution", "ending"]),
+  role: z.enum(STORY_ROLE_KEYS),
   fragments: z.array(z.any()),
   steps: z.array(z.any()),
 });

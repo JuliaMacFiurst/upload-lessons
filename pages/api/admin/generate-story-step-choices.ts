@@ -13,7 +13,7 @@ import { STORY_ROLE_KEYS } from "../../../lib/books/types";
 const requestSchema = z.object({
   title: z.string().trim().min(1),
   stepKey: z.enum(STORY_ROLE_KEYS),
-  introNarration: z.string().trim().optional().nullable(),
+  narrationText: z.string().trim().optional().nullable(),
   currentStoryText: z.string().trim().optional().nullable(),
   selectedPath: z.string().trim().optional().nullable(),
   roleDescription: z.string().trim().min(1),
@@ -113,7 +113,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const runGeneration = async (attempt: "initial" | "retry") => {
       const prompt = buildMissingStoryChoicesPrompt({
         ...body,
-        introNarration: body.introNarration ?? "",
+        narrationText: body.narrationText ?? "",
         currentStoryText: body.currentStoryText ?? "",
         selectedPath: body.selectedPath ?? "",
       });
@@ -156,8 +156,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (
-      body.stepKey !== "intro" &&
-      (body.currentStoryText?.trim() || body.introNarration?.trim()) &&
+      body.stepKey !== "narration" &&
+      (body.currentStoryText?.trim() || body.narrationText?.trim()) &&
       normalized.choices.some((choice) => looksLikeStoryRestart(choice.fragment))
     ) {
       console.error("STORY_CONTINUITY_REJECTED", {

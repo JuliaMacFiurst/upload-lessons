@@ -143,6 +143,7 @@ type QuizDbAnswer = {
 };
 
 const STORY_ROLE_QUESTIONS: Record<StoryRoleKey, string> = {
+  narration: "Как начинается история?",
   intro: "С чего началось приключение?",
   journey: "Куда герой отправится дальше?",
   problem: "Что пошло не так в пути?",
@@ -169,7 +170,7 @@ export function createDefaultStorySteps() {
   return STORY_ROLE_KEYS.map((role, index) => ({
     step_key: role,
     question: STORY_ROLE_QUESTIONS[role],
-    narration: role === "intro" ? "" : null,
+    narration: role === "narration" ? "" : null,
     sort_order: index,
     choices: [],
   }));
@@ -255,6 +256,12 @@ async function repairStoryTemplateData(
   const choiceById = new Map(choices.map((choice) => [choice.id, choice]));
   const choicesByRole = new Map<StoryRoleKey, StoryChoiceRow[]>();
 
+  steps.forEach((step) => {
+    if (step.step_key === "narration") {
+      console.log("NARRATION SKIPPED IN REPAIR", step.narration);
+    }
+  });
+
   choices.forEach((choice) => {
     const role = normalizeStoryRole(choice.story_steps?.step_key);
     const bucket = choicesByRole.get(role) ?? [];
@@ -262,42 +269,12 @@ async function repairStoryTemplateData(
     choicesByRole.set(role, bucket);
   });
 
-  const introOrphans = fragments.filter(
-    (fragment) => normalizeStoryRole(fragment.step_key) === "intro" && !fragment.choice_id,
-  );
-  if (introOrphans.length > 0) {
-    const introStep = stepByRole.get("intro");
-    const narrationText = introOrphans.map((fragment) => fragment.text.trim()).filter(Boolean).join(" ").trim();
-
-    if (introStep && narrationText) {
-      const { error: introUpdateError } = await supabase
-        .from("story_steps")
-        .update({ narration: introStep.narration?.trim() || narrationText })
-        .eq("id", introStep.id);
-      if (introUpdateError) {
-        throw new Error(`Failed to repair intro narration: ${introUpdateError.message}`);
-      }
-      console.log("REPAIR_MOVED_INTRO_NARRATION", {
-        template_id: templateId,
-        fragments_moved: introOrphans.length,
-      });
-    }
-
-    const introOrphanIds = introOrphans.map((fragment) => fragment.id);
-    if (introOrphanIds.length > 0) {
-      const { error: deleteIntroFragmentsError } = await supabase
-        .from("story_fragments")
-        .delete()
-        .in("id", introOrphanIds);
-      if (deleteIntroFragmentsError) {
-        throw new Error(`Failed to delete repaired intro fragments: ${deleteIntroFragmentsError.message}`);
-      }
-    }
-  }
-
   for (const fragment of fragments) {
     const role = normalizeStoryRole(fragment.step_key);
     const hasValidChoice = fragment.choice_id && choiceById.has(fragment.choice_id);
+    if (role === "narration") {
+      continue;
+    }
     if (role === "intro" && !fragment.choice_id) {
       continue;
     }
@@ -816,7 +793,7 @@ export async function loadBookEditorData(
         id: step?.id,
         step_key: role,
         question: step?.question ?? STORY_ROLE_QUESTIONS[role],
-        narration: step?.narration ?? (role === "intro" ? "" : null),
+        narration: step?.narration ?? (role === "narration" ? "" : null),
         sort_order: index,
         choices: [] as StoryTemplateInput["steps"][number]["choices"],
       };
@@ -1104,7 +1081,7 @@ export async function saveBookEditorData(
           template_id: templateId,
           step_key: step.step_key,
           question: step.question,
-          narration: step.step_key === "intro" ? step.narration?.trim() ?? "" : null,
+          narration: step.narration?.trim() || null,
           sort_order: step.sort_order ?? index,
         })),
       )
@@ -1713,7 +1690,7 @@ async function loadStoryTemplateDetails(
       id: step?.id,
       step_key: role,
       question: step?.question ?? STORY_ROLE_QUESTIONS[role],
-      narration: step?.narration ?? (role === "intro" ? "" : null),
+      narration: step?.narration ?? (role === "narration" ? "" : null),
       sort_order: index,
       choices: [] as StoryTemplateInput["steps"][number]["choices"],
     };
@@ -1851,7 +1828,7 @@ export async function saveStoryStepBlock(
       template_id: templateId,
       step_key: role,
       question: parsedStep.question,
-      narration: role === "intro" ? parsedStep.narration?.trim() ?? "" : null,
+      narration: parsedStep.narration?.trim() || null,
       sort_order: parsedStep.sort_order,
     })
     .select("*")
@@ -1918,7 +1895,7 @@ export async function saveStoryStepBlock(
     id: savedStep.id,
     step_key: role,
     question: savedStep.question,
-    narration: savedStep.narration ?? (role === "intro" ? "" : null),
+    narration: savedStep.narration ?? (role === "narration" ? "" : null),
     sort_order: savedStep.sort_order ?? 0,
     choices,
   };

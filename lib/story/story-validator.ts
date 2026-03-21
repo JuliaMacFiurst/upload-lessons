@@ -59,12 +59,19 @@ export function validateStoryStructure(
       errors.push(`Step ${stepIndex + 1} must be ${expectedStepKey}, received ${step.step_key}.`);
     }
 
-    if (!step.question.trim()) {
+    if (expectedStepKey !== "narration" && !step.question.trim()) {
       errors.push(`Step ${expectedStepKey} has an empty question.`);
     }
 
-    if (step.choices.length !== 3) {
+    if (expectedStepKey !== "narration" && step.choices.length !== 3) {
       errors.push(`Step ${expectedStepKey} must have exactly 3 choices.`);
+    }
+
+    if (expectedStepKey === "narration") {
+      if (!step.sharedFragment?.text.trim()) {
+        warnings.push("Step narration does not have opening narration yet.");
+      }
+      return;
     }
 
     const choiceSimilarity = new Set<string>();

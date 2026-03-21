@@ -2,6 +2,7 @@ import { calculateCost } from "./pricing";
 import { estimateTokens } from "./tokenEstimator";
 
 export const STORY_OUTPUT = {
+  narration: 60,
   intro: 60,
   journey: 60,
   problem: 60,

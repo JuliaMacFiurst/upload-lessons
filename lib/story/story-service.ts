@@ -53,8 +53,18 @@ export function adaptStoryTemplateToContract(source: StoryTemplateSource): Story
     }
 
     contractStep.question = sourceStep.question.trim();
+    if (sourceStep.narration?.trim()) {
+      contractStep.sharedFragment = toContractFragment(sourceStep.narration, []);
+    }
     contractStep.choices = [0, 1, 2].map((choiceIndex) => {
       const sourceChoice = sourceStep.choices[choiceIndex];
+      if (stepKey === "narration") {
+        return {
+          text: "",
+          keywords: [],
+          fragments: [] as StoryContractFragment[],
+        };
+      }
       if (!sourceChoice) {
         warnings.push(`Step ${stepKey} is missing choice ${choiceIndex + 1}; created empty placeholder.`);
         return {
@@ -126,12 +136,12 @@ export function buildStory(
 
     const choiceIndex = path[stepKey];
     const choice = stepData.choices[choiceIndex];
-    const fragment = choice.fragments[0];
+    const fragment = choice?.fragments[0];
 
     result.push({
       step: stepKey,
       question: stepData.question,
-      choice: choice.text,
+      choice: choice?.text ?? "",
       text: fragment?.text ?? "",
       ...(stepData.sharedFragment?.text ? { sharedText: stepData.sharedFragment.text } : {}),
     });

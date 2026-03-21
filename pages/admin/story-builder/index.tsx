@@ -48,6 +48,7 @@ const DRAFT_TEMPLATE_ID = "__draft__";
 const MAX_TEMPLATE_GENERATION_COST_ILS = 0.25;
 
 const ROLE_HINTS: Record<StoryRoleKey, string> = {
+  narration: "Открытие истории: герой, место и стартовая ситуация до первого вопроса ребёнку.",
   intro: "Начало истории: знакомство с главным героем и отправная точка истории.",
   journey: "Путь героя: куда главный герой отправляется после начала истории.",
   problem: "Проблема: какое препятствие возникает в путешествии.",
@@ -56,6 +57,7 @@ const ROLE_HINTS: Record<StoryRoleKey, string> = {
 };
 
 const ROLE_QUESTIONS_RU: Record<StoryRoleKey, string> = {
+  narration: "Как начинается история?",
   intro: "С чего началось приключение?",
   journey: "Куда герой отправляется дальше?",
   problem: "Какая проблема появляется в пути?",
@@ -64,6 +66,7 @@ const ROLE_QUESTIONS_RU: Record<StoryRoleKey, string> = {
 };
 
 const ROLE_LABELS_RU: Record<StoryRoleKey, string> = {
+  narration: "Наррация",
   intro: "Начало",
   journey: "Путь",
   problem: "Проблема",
@@ -72,6 +75,7 @@ const ROLE_LABELS_RU: Record<StoryRoleKey, string> = {
 };
 
 const ROLE_SUBTITLES_RU: Record<StoryRoleKey, string> = {
+  narration: "Кто герой и с чего всё началось",
   intro: "Кто герой и где он",
   journey: "Что он делает",
   problem: "Что пошло не так",
@@ -83,6 +87,10 @@ const ROLE_EDITOR_HELP: Record<
   StoryRoleKey,
   { description: string; example: string }
 > = {
+  narration: {
+    description: "Открой историю коротким рассказом до первого вопроса",
+    example: "Жила-была Аня, и однажды утром на её окне появился светящийся листок",
+  },
   intro: {
     description: "Опиши героя и начальную ситуацию",
     example: "Жила-была Аня, и она обожала находить странные вещи",
@@ -105,14 +113,14 @@ const ROLE_EDITOR_HELP: Record<
   },
 };
 
-function getIntroNarrationText(template: StoryBuilderTemplate) {
-  return template.steps.find((step) => step.step_key === "intro")?.narration?.trim() ?? "";
+function getNarrationStepText(template: StoryBuilderTemplate) {
+  return template.steps.find((step) => step.step_key === "narration")?.narration ?? "";
 }
 
 function inferHeroContext(template: StoryBuilderTemplate) {
-  const introNarration = getIntroNarrationText(template);
-  if (introNarration) {
-    const firstSentence = introNarration.split(/(?<=[.!?])\s+/)[0]?.trim();
+  const narrationText = getNarrationStepText(template);
+  if (narrationText.trim()) {
+    const firstSentence = narrationText.split(/(?<=[.!?])\s+/)[0]?.trim();
     if (firstSentence) {
       return firstSentence;
     }
@@ -172,10 +180,10 @@ function buildEditorPreviewSegments(
   choiceIndex: number,
 ) {
   const segments: EditorPreviewSegment[] = [];
-  const introNarration = getIntroNarrationText(template);
+  const narrationText = getNarrationStepText(template);
 
-  if (introNarration) {
-    segments.push({ text: introNarration, isActive: stepIndex === 0 });
+  if (narrationText) {
+    segments.push({ text: narrationText, isActive: stepIndex === 0 });
   }
 
   for (let index = 0; index <= stepIndex; index += 1) {
@@ -213,6 +221,7 @@ type StoryTemplateStats = {
   keywords: string[] | null;
   age_group: string | null;
   steps: Record<StoryRoleKey, number>;
+  narrationFilled: boolean;
 };
 
 type StoryTemplateListItem = {
@@ -287,7 +296,7 @@ function normalizeTemplateChoices(
         {
           step_key: role,
           question: ROLE_QUESTIONS_RU[role],
-          narration: role === "intro" ? "" : null,
+          narration: role === "narration" ? "" : null,
           sort_order: roleIndex,
           choices: [],
         };
@@ -297,8 +306,8 @@ function normalizeTemplateChoices(
         step_key: role,
         sort_order: roleIndex,
         question: sourceStep.question || ROLE_QUESTIONS_RU[role],
-        narration: sourceStep.narration ?? (role === "intro" ? "" : null),
-        choices: ensureThreeChoices(sourceStep.choices ?? []),
+        narration: sourceStep.narration ?? (role === "narration" ? "" : null),
+        choices: role === "narration" ? [] : ensureThreeChoices(sourceStep.choices ?? []),
       };
     }),
   };
@@ -312,9 +321,9 @@ function createEmptyTemplate(index: number): StoryBuilderTemplate {
     steps: STORY_ROLE_KEYS.map((role, roleIndex) => ({
       step_key: role,
       question: ROLE_QUESTIONS_RU[role],
-      narration: role === "intro" ? "" : null,
+      narration: role === "narration" ? "" : null,
       sort_order: roleIndex,
-      choices: ensureThreeChoices([]),
+      choices: role === "narration" ? [] : ensureThreeChoices([]),
     })),
     fragments: [],
     twists: [],
@@ -343,7 +352,9 @@ function groupOverviewRows(
       description: null,
       keywords: null,
       age_group: null,
+      narrationFilled: false,
       steps: {
+        narration: 0,
         intro: 0,
         journey: 0,
         problem: 0,
@@ -362,7 +373,9 @@ function groupOverviewRows(
         description: row.description,
         keywords: row.keywords,
         age_group: row.age_group,
+        narrationFilled: false,
         steps: {
+          narration: 0,
           intro: 0,
           journey: 0,
           problem: 0,
@@ -371,7 +384,12 @@ function groupOverviewRows(
         },
       };
 
-    current.steps[row.step_key] = row.choices_count;
+    current.steps[row.step_key] = row.step_key === "narration"
+      ? (row.narration_filled ? 1 : 0)
+      : row.choices_count;
+    if (row.step_key === "narration") {
+      current.narrationFilled = row.narration_filled ?? row.choices_count > 0;
+    }
     grouped.set(row.id, current);
   });
 
@@ -385,7 +403,7 @@ function totalVariants(stats: StoryTemplateStats) {
 }
 
 function completionPercent(stats: StoryTemplateStats) {
-  return Math.round(Math.min(totalVariants(stats) / 15, 1) * 100);
+  return Math.round(Math.min(totalVariants(stats) / 16, 1) * 100);
 }
 
 function progressTone(percent: number) {
@@ -406,6 +424,24 @@ function variantsLabel(count: number) {
     return "варианта";
   }
   return "вариантов";
+}
+
+function overviewStepCountLabel(role: StoryRoleKey, count: number) {
+  if (role === "narration") {
+    return count > 0 ? "1 текст" : "пусто";
+  }
+  return `${count} ${variantsLabel(count)}`;
+}
+
+function showOverviewStepWarning(role: StoryRoleKey, count: number) {
+  if (role === "narration") {
+    return count === 0;
+  }
+  return count < 3;
+}
+
+function overviewStepWarningLabel(role: StoryRoleKey) {
+  return role === "narration" ? "⚠ нет текста" : "⚠ мало вариантов";
 }
 
 function formatIls(value: number) {
@@ -434,6 +470,15 @@ function getStepCompletionStats(
   fragments: StoryBuilderTemplate["fragments"],
 ) {
   const questionComplete = step.question.trim().length > 0;
+  if (step.step_key === "narration") {
+    const narrationComplete = (step.narration?.trim().length ?? 0) > 0;
+    return {
+      questionComplete: narrationComplete,
+      filledChoicesCount: 0,
+      choiceFragmentsCount: 0,
+      stepComplete: narrationComplete,
+    };
+  }
   const filledChoicesCount = step.choices.filter(
     (choice) => choice.text.trim().length > 0,
   ).length;
@@ -470,6 +515,9 @@ function formatStoryWarning(message: string) {
   }
   if (message === "Journey reads too similarly to intro.") {
     return "Шаг journey слишком похож на intro и не двигает историю дальше.";
+  }
+  if (message === "Step narration does not have opening narration yet.") {
+    return "Шаг narration пока не содержит открывающего текста.";
   }
   return message;
 }
@@ -527,6 +575,13 @@ function collectTemplateWarnings(template: StoryBuilderTemplate) {
   template.steps.forEach((step) => {
     const stepLabel = ROLE_LABELS_RU[step.step_key];
     const filledChoices = step.choices.filter((choice) => choice.text.trim().length > 0);
+
+    if (step.step_key === "narration") {
+      if (!(step.narration?.trim().length ?? 0)) {
+        warnings.push(`${stepLabel}: нет открывающего текста.`);
+      }
+      return;
+    }
 
     if (filledChoices.length === 0) {
       warnings.push(`${stepLabel}: нет вариантов в шаге.`);
@@ -940,7 +995,7 @@ export default function StoryBuilderPage() {
       step.step_key === "intro"
         ? "Для intro fragment добавь короткую деталь настроения, образ или ощущение. Не пересказывай choice."
         : null;
-    const introNarration = getIntroNarrationText(template);
+    const narrationText = getNarrationStepText(template);
     const heroContext = inferHeroContext(template);
     const currentStoryText = buildStoryPreviewText(template, path, stepIndex);
     const selectedPath = summarizeSelectedPath(path, stepIndex);
@@ -948,12 +1003,12 @@ export default function StoryBuilderPage() {
     return [
       `Название шаблона: ${template.name || "Новая история"}.`,
       `Главный герой: ${heroContext}.`,
-      `Текст начала истории: ${introNarration || "Начало истории ещё не заполнено."}`,
+      `Текст открытия истории: ${narrationText || "Начало истории ещё не заполнено."}`,
       "Не предполагай заранее тип героя. Опирайся только на название шаблона и текст начала истории.",
       `Текущий шаг: ${step.step_key}.`,
       `Цель шага: ${ROLE_HINTS[step.step_key]}`,
       `Выбранная ветка: ${selectedPath || "ветка пока не выбрана"}.`,
-      `Полный текущий текст истории:\n${currentStoryText || introNarration || "Текст истории пока не заполнен."}`,
+      `Полный текущий текст истории:\n${currentStoryText || narrationText || "Текст истории пока не заполнен."}`,
       `Текущий вопрос шага: ${step.question || "Вопрос ещё не заполнен."}`,
       selectedChoiceText
         ? `Выбранный choice: ${selectedChoiceText}`
@@ -1007,16 +1062,24 @@ export default function StoryBuilderPage() {
         slug: isSlugManuallyEdited ? current.slug : generateSlug(data.title),
         steps: STORY_ROLE_KEYS.map((role, index) => {
           const generatedStep = data.steps.find((item) => item.step_key === role);
+          const currentStep = current.steps.find((item) => item.step_key === role);
           return {
-            id: current.steps.find((item) => item.step_key === role)?.id,
+            id: currentStep?.id,
             step_key: role,
             question: generatedStep?.question ?? ROLE_QUESTIONS_RU[role],
+            narration:
+              role === "narration"
+                ? currentStep?.narration ?? ""
+                : currentStep?.narration ?? null,
             sort_order: index,
-            choices: (generatedStep?.choices ?? []).map((choice, choiceIndex) => ({
-              text: choice.text,
-              keywords: choice.keywords,
-              sort_order: choiceIndex,
-            })),
+            choices:
+              role === "narration"
+                ? []
+                : (generatedStep?.choices ?? []).map((choice, choiceIndex) => ({
+                    text: choice.text,
+                    keywords: choice.keywords,
+                    sort_order: choiceIndex,
+                  })),
           };
         }),
         fragments: data.fragments.map((fragment, index) => ({
@@ -1191,7 +1254,7 @@ export default function StoryBuilderPage() {
           body: JSON.stringify({
             title: activeTemplate.name,
             stepKey: step.step_key,
-            introNarration: getIntroNarrationText(activeTemplate),
+            narrationText: getNarrationStepText(activeTemplate),
             currentStoryText,
             selectedPath,
             roleDescription: ROLE_HINTS[step.step_key],
@@ -1382,30 +1445,36 @@ export default function StoryBuilderPage() {
     markDirty(`step:${step.step_key}`);
   };
 
-  const upsertIntroNarration = (text: string) => {
-    if (!activeTemplate) {
-      return;
-    }
-
-    updateActiveTemplate((current) => ({
-      ...current,
-      steps: current.steps.map((step) =>
-        step.step_key === "intro" ? { ...step, narration: text } : step,
-      ),
-    }));
-
-    markDirty("step:intro");
+  const upsertNarrationStep = (value: string) => {
+    console.log("RAW INPUT", value);
+    setActiveTemplate((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const next = structuredClone(prev);
+      const narrationIndex = next.steps.findIndex((step) => step.step_key === "narration");
+      if (narrationIndex === -1) {
+        return prev;
+      }
+      next.steps[narrationIndex].narration = value;
+      console.log("STATE AFTER SET", next.steps[narrationIndex].narration);
+      return next;
+    });
+    markDirty("step:narration");
   };
 
-  const generateIntroNarration = async () => {
+  const generateNarrationStep = async () => {
     if (!activeTemplate) {
       return;
     }
 
-    setBusyKey("narration-generate:intro");
+    setBusyKey("narration-generate:narration");
     setError(null);
     try {
-      const introStep = activeTemplate.steps[0];
+      const narrationStep = activeTemplate.steps.find((step) => step.step_key === "narration");
+      if (!narrationStep) {
+        throw new Error("Не найден шаг narration.");
+      }
       const data = await fetchJson<{ text: string; keywords: string[] }>(
         "/api/admin/generate-story-part",
         {
@@ -1417,7 +1486,7 @@ export default function StoryBuilderPage() {
             ageGroup: null,
             templateName: activeTemplate.name,
             kind: "fragment",
-            storyRole: "intro",
+            storyRole: "narration",
             previousRole: null,
             context: [
               buildGenerationContext(activeTemplate, 0, previewPath),
@@ -1434,12 +1503,12 @@ export default function StoryBuilderPage() {
       updateActiveTemplate((current) => ({
         ...current,
         steps: current.steps.map((step) =>
-          step.step_key === "intro"
+          step.step_key === "narration"
             ? { ...step, narration: data.text }
             : step,
         ),
       }));
-      markDirty(`step:${introStep.step_key}`);
+      markDirty(`step:${narrationStep.step_key}`);
       showSuccess("Начало истории сгенерировано.");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -1562,7 +1631,7 @@ export default function StoryBuilderPage() {
         ageGroup: null,
         templateName: activeTemplate.name,
         kind: "fragment",
-        storyRole: activeStep?.step_key ?? "intro",
+        storyRole: activeStep?.step_key ?? "narration",
         previousRole: selectedStep > 0 ? STORY_ROLE_KEYS[selectedStep - 1] : null,
         context: "Оцени стоимость генерации одного варианта истории.",
       })
@@ -1600,8 +1669,7 @@ export default function StoryBuilderPage() {
   const generalFragments = roleFragmentEntries.filter(
     ({ fragment }) => !fragment.choice_temp_key,
   );
-  const advancedGeneralFragments =
-    activeStep?.step_key === "intro" ? generalFragments.slice(1) : generalFragments;
+  const advancedGeneralFragments = generalFragments;
   const choiceFragments =
     activeStep === null
       ? []
@@ -1621,7 +1689,7 @@ export default function StoryBuilderPage() {
     activeTemplate && activeStep
       ? buildEditorPreviewSegments(activeTemplate, selectedStep, selectedChoiceIndex)
       : [];
-  const introNarrationValue = activeTemplate ? getIntroNarrationText(activeTemplate) : "";
+  const narrationStepValue = activeTemplate ? getNarrationStepText(activeTemplate) : "";
 
   const twistsPanel = twists.map((twist, twistIndex) => (
     <div className="books-question" key={twist.id ?? `twist-${twistIndex}`}>
@@ -1805,11 +1873,11 @@ export default function StoryBuilderPage() {
                                 {ROLE_LABELS_RU[role]}
                               </span>
                               <span className="story-overview-step__count">
-                                {count} {variantsLabel(count)}
+                                {overviewStepCountLabel(role, count)}
                               </span>
-                              {count < 3 ? (
+                              {showOverviewStepWarning(role, count) ? (
                                 <span className="story-overview-step__warning">
-                                  ⚠ мало вариантов
+                                  {overviewStepWarningLabel(role)}
                                 </span>
                               ) : null}
                             </div>
@@ -1821,7 +1889,7 @@ export default function StoryBuilderPage() {
                         <div className="story-overview-progress__meta">
                           <span>Заполненность</span>
                           <span>
-                            {percent}% · {total}/15
+                            {percent}% · {total}/16
                           </span>
                         </div>
                         <div className="story-progress">
@@ -1917,7 +1985,7 @@ export default function StoryBuilderPage() {
                 Как работает генератор историй
               </h3>
               <div className="books-section-help" style={{ display: "grid", gap: 8 }}>
-                <div>1. История состоит из 5 шагов: Начало, Путь, Проблема, Решение, Финал</div>
+                <div>1. История состоит из 6 этапов: Завязка, Начало, Путь, Проблема, Решение, Финал</div>
                 <div>2. В каждом шаге есть несколько вариантов.</div>
                 <div>
                   3. Генератор выбирает один вариант из каждого шага, добавляет
@@ -2163,7 +2231,9 @@ export default function StoryBuilderPage() {
                         <span style={{ fontSize: 12, opacity: 0.8 }}>
                           {stats.stepComplete
                             ? "готов"
-                            : `${stats.filledChoicesCount}/3 choices · ${stats.choiceFragmentsCount}/3 fragments`}
+                            : step.step_key === "narration"
+                              ? "нужно заполнить открывающий текст"
+                              : `${stats.filledChoicesCount}/3 choices · ${stats.choiceFragmentsCount}/3 fragments`}
                         </span>
                       </span>
                     </button>
@@ -2287,41 +2357,47 @@ export default function StoryBuilderPage() {
                       </div>
                       <div className="story-overview-steps">
                         <div className="story-overview-step">
-                          <span className="story-overview-step__role">Вопрос ребёнку</span>
+                          <span className="story-overview-step__role">
+                            {activeStep.step_key === "narration" ? "Открывающий текст" : "Вопрос ребёнку"}
+                          </span>
                           <span>{stepStats.questionComplete ? "готов" : "пусто"}</span>
                         </div>
-                        <div className="story-overview-step">
-                          <span className="story-overview-step__role">Choices</span>
-                          <span>{stepStats.filledChoicesCount}/3</span>
-                        </div>
-                        <div className="story-overview-step">
-                          <span className="story-overview-step__role">Fragments</span>
-                          <span>{stepStats.choiceFragmentsCount}/3</span>
-                        </div>
+                        {activeStep.step_key === "narration" ? null : (
+                          <>
+                            <div className="story-overview-step">
+                              <span className="story-overview-step__role">Choices</span>
+                              <span>{stepStats.filledChoicesCount}/3</span>
+                            </div>
+                            <div className="story-overview-step">
+                              <span className="story-overview-step__role">Fragments</span>
+                              <span>{stepStats.choiceFragmentsCount}/3</span>
+                            </div>
+                          </>
+                        )}
                       </div>
                     </div>
                   )}
 
-                  {activeStep.step_key === "intro" ? (
+                  {activeStep.step_key === "narration" ? (
                     <div className="books-subpanel" style={{ marginBottom: 16 }}>
                       <div className="books-section-head">
                         <div>
                           <h3 className="books-subpanel__title">
-                            Начало истории (основной текст)
+                            Открытие истории
                           </h3>
                           <p className="books-section-help">
-                            Первое предложение истории. Представляет героя и ситуацию.
+                            Отдельный narration-этап до первого вопроса ребёнку.
                           </p>
                         </div>
                         <button
                           type="button"
                           className="books-button books-button--secondary"
-                          disabled={busyKey === "narration-generate:intro"}
+                          disabled={busyKey === "narration-generate:narration"}
                           onClick={() => {
-                            void generateIntroNarration();
+                            void generateNarrationStep();
                           }}
                         >
-                          {busyKey === "narration-generate:intro"
+                          {busyKey === "narration-generate:narration"
                             ? "Генерация..."
                             : "Сгенерировать"}
                         </button>
@@ -2333,17 +2409,19 @@ export default function StoryBuilderPage() {
                         </span>
                         <textarea
                           className="books-input books-input--textarea books-input--small-textarea"
-                          value={introNarrationValue}
+                          value={narrationStepValue}
                           placeholder="Жила-была Аня, девочка 10 лет. Она очень любила приключения."
                           onChange={(event) => {
-                            upsertIntroNarration(event.target.value);
+                            upsertNarrationStep(event.target.value);
                           }}
                         />
                       </label>
                     </div>
                   ) : null}
 
-                  <label className="books-field">
+                  {activeStep.step_key !== "narration" ? (
+                    <>
+                      <label className="books-field">
                     {helperLabel(
                       "Вопрос для ребёнка",
                       "Вопрос, который помогает выбрать следующий шаг истории.",
@@ -2744,8 +2822,11 @@ export default function StoryBuilderPage() {
                       </div>
                     )}
                   </div>
+                    </>
+                  ) : null}
 
-                  <div className="books-subpanel" style={{ marginTop: 16 }}>
+                  {activeStep.step_key !== "narration" ? (
+                    <div className="books-subpanel" style={{ marginTop: 16 }}>
                     <div className="books-section-head">
                       <div>
                         <h3 className="books-subpanel__title">Общие фрагменты</h3>
@@ -2910,6 +2991,7 @@ export default function StoryBuilderPage() {
                       )
                     ) : null}
                   </div>
+                  ) : null}
                 </>
               )}
             </div>

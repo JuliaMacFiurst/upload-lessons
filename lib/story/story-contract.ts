@@ -1,6 +1,7 @@
 import type { StoryRoleKey, StoryTemplateInput } from "../books/types";
 
 export const STORY_FLOW = [
+  "narration",
   "intro",
   "journey",
   "problem",
@@ -37,6 +38,7 @@ export type StoryContractTwist = {
 
 export type StoryContractTemplate = {
   steps: [
+    StoryContractStep,
     StoryContractStep,
     StoryContractStep,
     StoryContractStep,
@@ -87,6 +89,7 @@ export function createEmptyContractStep(step_key: StoryFlowKey): StoryContractSt
 
 export function createDefaultStoryPath(): StoryPath {
   return {
+    narration: 0,
     intro: 0,
     journey: 0,
     problem: 0,
