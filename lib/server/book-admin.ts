@@ -107,6 +107,7 @@ type StoryStepRow = {
   template_id: string;
   step_key: string;
   question: string;
+  narration: string | null;
   sort_order: number | null;
 };
 
@@ -168,6 +169,7 @@ export function createDefaultStorySteps() {
   return STORY_ROLE_KEYS.map((role, index) => ({
     step_key: role,
     question: STORY_ROLE_QUESTIONS[role],
+    narration: role === "intro" ? "" : null,
     sort_order: index,
     choices: [],
   }));
@@ -208,6 +210,161 @@ export function parseCommaSeparatedKeywords(input: string): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function buildChoiceTextFromFragment(text: string) {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return "Новый вариант сюжета";
+  }
+
+  const words = trimmed.split(/\s+/).slice(0, 8).join(" ");
+  return words.slice(0, 120).trim() || "Новый вариант сюжета";
+}
+
+async function repairStoryTemplateData(
+  supabase: SupabaseClient,
+  templateId: string,
+): Promise<void> {
+  console.log("REPAIRING TEMPLATE", templateId);
+
+  const [stepsRes, choicesRes, fragmentsRes] = await Promise.all([
+    supabase.from("story_steps").select("*").eq("template_id", templateId).order("sort_order", { ascending: true }),
+    supabase
+      .from("story_choices")
+      .select("id,step_id,text,keywords,sort_order,story_steps!inner(template_id,step_key)")
+      .eq("story_steps.template_id", templateId)
+      .order("sort_order", { ascending: true }),
+    supabase.from("story_fragments").select("*").eq("template_id", templateId).order("sort_order", { ascending: true }),
+  ]);
+
+  if (stepsRes.error || choicesRes.error || fragmentsRes.error) {
+    throw new Error(
+      stepsRes.error?.message ??
+      choicesRes.error?.message ??
+      fragmentsRes.error?.message ??
+      "Failed to repair story template.",
+    );
+  }
+
+  const steps = (stepsRes.data as StoryStepRow[] | null) ?? [];
+  const choices = (choicesRes.data as Array<StoryChoiceRow & { story_steps?: { step_key?: string } | null }> | null) ?? [];
+  const fragments = (fragmentsRes.data as StoryFragmentRow[] | null) ?? [];
+
+  const stepByRole = new Map(steps.map((step) => [normalizeStoryRole(step.step_key), step]));
+  const choiceById = new Map(choices.map((choice) => [choice.id, choice]));
+  const choicesByRole = new Map<StoryRoleKey, StoryChoiceRow[]>();
+
+  choices.forEach((choice) => {
+    const role = normalizeStoryRole(choice.story_steps?.step_key);
+    const bucket = choicesByRole.get(role) ?? [];
+    bucket.push(choice);
+    choicesByRole.set(role, bucket);
+  });
+
+  const introOrphans = fragments.filter(
+    (fragment) => normalizeStoryRole(fragment.step_key) === "intro" && !fragment.choice_id,
+  );
+  if (introOrphans.length > 0) {
+    const introStep = stepByRole.get("intro");
+    const narrationText = introOrphans.map((fragment) => fragment.text.trim()).filter(Boolean).join(" ").trim();
+
+    if (introStep && narrationText) {
+      const { error: introUpdateError } = await supabase
+        .from("story_steps")
+        .update({ narration: introStep.narration?.trim() || narrationText })
+        .eq("id", introStep.id);
+      if (introUpdateError) {
+        throw new Error(`Failed to repair intro narration: ${introUpdateError.message}`);
+      }
+      console.log("REPAIR_MOVED_INTRO_NARRATION", {
+        template_id: templateId,
+        fragments_moved: introOrphans.length,
+      });
+    }
+
+    const introOrphanIds = introOrphans.map((fragment) => fragment.id);
+    if (introOrphanIds.length > 0) {
+      const { error: deleteIntroFragmentsError } = await supabase
+        .from("story_fragments")
+        .delete()
+        .in("id", introOrphanIds);
+      if (deleteIntroFragmentsError) {
+        throw new Error(`Failed to delete repaired intro fragments: ${deleteIntroFragmentsError.message}`);
+      }
+    }
+  }
+
+  for (const fragment of fragments) {
+    const role = normalizeStoryRole(fragment.step_key);
+    const hasValidChoice = fragment.choice_id && choiceById.has(fragment.choice_id);
+    if (role === "intro" && !fragment.choice_id) {
+      continue;
+    }
+    if (hasValidChoice) {
+      continue;
+    }
+
+    const roleChoices = choicesByRole.get(role) ?? [];
+    let targetChoice =
+      roleChoices.find((choice) => (choice.sort_order ?? 0) === (fragment.sort_order ?? 0)) ??
+      roleChoices[0] ??
+      null;
+
+    if (!targetChoice) {
+      const step = stepByRole.get(role);
+      if (!step) {
+        continue;
+      }
+      const { data: insertedChoice, error: insertedChoiceError } = await supabase
+        .from("story_choices")
+        .insert({
+          step_id: step.id,
+          text: buildChoiceTextFromFragment(fragment.text),
+          keywords: normalizeKeywords(fragment.keywords),
+          sort_order: roleChoices.length,
+        })
+        .select("*")
+        .single();
+      if (insertedChoiceError || !insertedChoice) {
+        throw new Error(insertedChoiceError?.message ?? "Failed to create repair choice.");
+      }
+      targetChoice = insertedChoice as StoryChoiceRow;
+      roleChoices.push(targetChoice);
+      choicesByRole.set(role, roleChoices);
+      choiceById.set(targetChoice.id, targetChoice);
+      console.log("REPAIR_CREATED_CHOICE", {
+        template_id: templateId,
+        step_key: role,
+        fragment_id: fragment.id,
+        choice_id: targetChoice.id,
+      });
+    }
+
+    const { error: updateFragmentError } = await supabase
+      .from("story_fragments")
+      .update({ choice_id: targetChoice.id })
+      .eq("id", fragment.id);
+    if (updateFragmentError) {
+      throw new Error(`Failed to reassign orphan fragment: ${updateFragmentError.message}`);
+    }
+    console.log("REPAIR_REASSIGNED_FRAGMENT", {
+      template_id: templateId,
+      fragment_id: fragment.id,
+      choice_id: targetChoice.id,
+    });
+  }
+}
+
+export async function repairStoryTemplates(supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase.from("story_templates").select("id");
+  if (error) {
+    throw new Error(`Failed to load story templates for repair: ${error.message}`);
+  }
+
+  for (const template of ((data as Array<{ id: string }> | null) ?? [])) {
+    await repairStoryTemplateData(supabase, template.id);
+  }
 }
 
 export function safeSlug(input: string): string {
@@ -617,6 +774,7 @@ export async function loadBookEditorData(
   let storyTemplate: StoryTemplateInput | null = null;
 
   if (template) {
+    await repairStoryTemplateData(supabase, template.id);
     const [stepsRes, choicesRes, fragmentsRes, twistsRes] = await Promise.all([
       supabase.from("story_steps").select("*").eq("template_id", template.id).order("sort_order", { ascending: true }),
       supabase
@@ -658,6 +816,7 @@ export async function loadBookEditorData(
         id: step?.id,
         step_key: role,
         question: step?.question ?? STORY_ROLE_QUESTIONS[role],
+        narration: step?.narration ?? (role === "intro" ? "" : null),
         sort_order: index,
         choices: [] as StoryTemplateInput["steps"][number]["choices"],
       };
@@ -945,6 +1104,7 @@ export async function saveBookEditorData(
           template_id: templateId,
           step_key: step.step_key,
           question: step.question,
+          narration: step.step_key === "intro" ? step.narration?.trim() ?? "" : null,
           sort_order: step.sort_order ?? index,
         })),
       )
@@ -987,20 +1147,24 @@ export async function saveBookEditorData(
 
     if (parsed.storyTemplate.fragments.length > 0) {
       const { error: fragmentInsertError } = await supabase.from("story_fragments").insert(
-        parsed.storyTemplate.fragments.map((fragment, index) => {
-          const choiceId =
-            fragment.choice_id ??
-            (fragment.choice_temp_key && choiceIdMap.get(`${fragment.step_key}:${fragment.choice_temp_key}`)) ??
-            null;
-          return {
-            template_id: templateId,
-            step_key: fragment.step_key,
-            choice_id: choiceId,
-            text: fragment.text,
-            keywords: fragment.keywords,
-            sort_order: fragment.sort_order ?? index,
-          };
-        }),
+        parsed.storyTemplate.fragments
+          .map((fragment, index) => {
+            const choiceId =
+              (fragment.choice_temp_key && choiceIdMap.get(`${fragment.step_key}:${fragment.choice_temp_key}`)) ??
+              null;
+            if (!choiceId) {
+              return null;
+            }
+            return {
+              template_id: templateId,
+              step_key: fragment.step_key,
+              choice_id: choiceId,
+              text: fragment.text,
+              keywords: fragment.keywords,
+              sort_order: fragment.sort_order ?? index,
+            };
+          })
+          .filter((fragment): fragment is NonNullable<typeof fragment> => fragment !== null),
       );
 
       if (fragmentInsertError) {
@@ -1519,6 +1683,7 @@ async function loadStoryTemplateDetails(
   supabase: SupabaseClient,
   template: StoryTemplateRow,
 ): Promise<StoryBuilderTemplate> {
+  await repairStoryTemplateData(supabase, template.id);
   const [stepsRes, choicesRes, fragmentsRes] = await Promise.all([
     supabase.from("story_steps").select("*").eq("template_id", template.id).order("sort_order", { ascending: true }),
     supabase
@@ -1548,6 +1713,7 @@ async function loadStoryTemplateDetails(
       id: step?.id,
       step_key: role,
       question: step?.question ?? STORY_ROLE_QUESTIONS[role],
+      narration: step?.narration ?? (role === "intro" ? "" : null),
       sort_order: index,
       choices: [] as StoryTemplateInput["steps"][number]["choices"],
     };
@@ -1604,6 +1770,7 @@ export async function loadStoryTemplateById(
 }
 
 export async function loadStoryBuilderData(supabase: SupabaseClient): Promise<StoryBuilderResponse> {
+  await repairStoryTemplates(supabase);
   const [templatesRes, twistsRes] = await Promise.all([
     supabase.from("story_templates").select("*").order("created_at", { ascending: false }),
     supabase.from("story_twists").select("*").order("created_at", { ascending: false }),
@@ -1676,6 +1843,7 @@ export async function saveStoryStepBlock(
 ): Promise<StoryBuilderTemplate["steps"][number]> {
   const parsedStep = storyStepSchema.parse(step);
   const role = normalizeStoryRole(parsedStep.step_key);
+  await repairStoryTemplateData(supabase, templateId);
   const { data: savedStepData, error: stepError } = await supabase
     .from("story_steps")
     .upsert({
@@ -1683,6 +1851,7 @@ export async function saveStoryStepBlock(
       template_id: templateId,
       step_key: role,
       question: parsedStep.question,
+      narration: role === "intro" ? parsedStep.narration?.trim() ?? "" : null,
       sort_order: parsedStep.sort_order,
     })
     .select("*")
@@ -1749,6 +1918,7 @@ export async function saveStoryStepBlock(
     id: savedStep.id,
     step_key: role,
     question: savedStep.question,
+    narration: savedStep.narration ?? (role === "intro" ? "" : null),
     sort_order: savedStep.sort_order ?? 0,
     choices,
   };
@@ -1761,6 +1931,7 @@ export async function saveStoryFragmentsBlock(
   fragments: StoryBuilderTemplate["fragments"],
   steps: StoryBuilderTemplate["steps"],
 ): Promise<StoryBuilderTemplate["fragments"]> {
+  await repairStoryTemplateData(supabase, templateId);
   const parsedSteps = z.array(storyStepSchema).parse(steps);
   const parsedFragments = z.array(storyFragmentSchema).parse(fragments);
   const choiceIdsByRoleAndIndex = new Map<string, string>();
@@ -1803,7 +1974,7 @@ export async function saveStoryFragmentsBlock(
       fallback_choice_id: fallbackChoiceId,
     });
 
-    if (fragment.choice_temp_key && !choiceId) {
+    if (!choiceId) {
       console.warn("Skipping story fragment without valid choice_id", {
         templateId,
         role,

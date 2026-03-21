@@ -60,6 +60,7 @@ export const storyChoiceSchema = canonicalStoryChoiceSchema.extend({
 
 export const storyStepSchema = canonicalStoryStepSchema.extend({
   id: z.string().uuid().optional(),
+  narration: z.string().trim().max(1000).optional().nullable(),
   sort_order: z.number().int().min(0).default(0),
   choices: z.array(storyChoiceSchema).max(8),
 });
