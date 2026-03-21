@@ -35,17 +35,15 @@ function clampStoryPartText(text: string, maxLength: number) {
 function normalizeGeneratedStoryPart(value: unknown) {
   const record = value && typeof value === "object" ? (value as Record<string, unknown>) : {};
 
-  const keywords = Array.isArray(record.keywords)
-    ? record.keywords.map((item) => (typeof item === "string" ? item.trim() : "")).filter(Boolean)
-    : typeof record.keywords === "string" && record.keywords.trim()
-      ? [record.keywords.trim()]
-      : [];
-
   const rawText = typeof record.text === "string" ? record.text.trim() : "";
+  const rawShortText =
+    typeof record.short_text === "string"
+      ? record.short_text.trim()
+      : "";
 
   return {
     text: clampStoryPartText(rawText, 220),
-    keywords,
+    short_text: clampStoryPartText(rawShortText, 220),
   };
 }
 
@@ -99,7 +97,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           })
       : validateWithDiagnostics(z.object({
           text: z.string().trim().min(1),
-          keywords: z.array(z.string().trim().min(1)).max(12),
+          short_text: z.string().trim().min(1).max(220),
         }), validateCanonicalStoryPartText(normalized), "validation.story-part.canonical.text", {
           kind: body.kind,
           role: body.storyRole,

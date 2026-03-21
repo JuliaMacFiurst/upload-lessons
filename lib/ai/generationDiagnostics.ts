@@ -99,12 +99,15 @@ export function logGenerationEvent(stage: string, payload: unknown, meta: Genera
 }
 
 export function validateWithDiagnostics<T>(
-  schema: ZodType<T>,
+  schema: ZodType<T> | undefined,
   payload: unknown,
   stage: string,
   summary?: object,
 ): T {
   try {
+    if (!schema || typeof schema.parse !== "function") {
+      throw new Error("StoryTemplateSchema is undefined");
+    }
     const parsed = schema.parse(payload);
     logGenerationEvent(stage, payload, {
       valid: true,

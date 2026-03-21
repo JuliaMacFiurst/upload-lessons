@@ -32,7 +32,7 @@ const responseSchema = z.object({
     z.object({
       text: z.string().trim().min(1).max(120),
       fragment: z.string().trim().min(1).max(220),
-      keywords: z.array(z.string().trim().min(1).max(60)).min(1).max(12),
+      short_text: z.string().trim().min(1).max(220),
     }),
   ).min(1).max(3),
 });
@@ -65,18 +65,17 @@ function normalizeResponse(value: unknown) {
         const text = typeof choice.text === "string" ? normalizeChoiceSentence(choice.text) : "";
         const fragment =
           typeof choice.fragment === "string" ? normalizeFragmentSentence(choice.fragment) : "";
-        const keywords = Array.isArray(choice.keywords)
-          ? choice.keywords
-              .map((keyword) => (typeof keyword === "string" ? keyword.trim() : ""))
-              .filter(Boolean)
-              .slice(0, 12)
-          : [];
 
-        if (!text || !fragment || keywords.length === 0) {
+        const shortText =
+          typeof choice.short_text === "string" && choice.short_text.trim()
+            ? clampText(choice.short_text.trim(), 220)
+            : "";
+
+        if (!text || !fragment || !shortText) {
           return null;
         }
 
-        return { text, fragment, keywords };
+        return { text, fragment, short_text: shortText };
       })
       .filter((item): item is NonNullable<typeof item> => item !== null),
   };

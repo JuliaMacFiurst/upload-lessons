@@ -17,7 +17,7 @@ const CSV_HEADERS = [
   "parent_choice_index",
   "sort_order",
   "text",
-  "keywords",
+  "short_text",
   "name",
   "slug",
   "age_group",
@@ -79,17 +79,6 @@ function parseCsv(text: string): CsvRow[] {
   });
 }
 
-function joinKeywords(values: string[]): string {
-  return values.join("|");
-}
-
-function splitKeywords(value: string): string[] {
-  return value
-    .split("|")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
 function buildChoiceIndexMap(steps: StoryStepInput[]): Map<string, number> {
   const map = new Map<string, number>();
   steps.forEach((step) => {
@@ -113,7 +102,7 @@ export function exportStoryTemplateCsv(template: StoryTemplateInput): string {
     parent_choice_index: "",
     sort_order: "",
     text: "",
-    keywords: "",
+    short_text: "",
     name: template.name,
     slug: template.slug,
     age_group: "",
@@ -128,7 +117,7 @@ export function exportStoryTemplateCsv(template: StoryTemplateInput): string {
       parent_choice_index: "",
       sort_order: String(step.sort_order),
       text: step.step_key === "narration" ? step.narration?.trim() || step.question : step.question,
-      keywords: "",
+      short_text: "",
       name: "",
       slug: "",
       age_group: "",
@@ -143,7 +132,7 @@ export function exportStoryTemplateCsv(template: StoryTemplateInput): string {
         parent_choice_index: "",
         sort_order: String(choice.sort_order),
         text: choice.text,
-        keywords: joinKeywords(choice.keywords),
+        short_text: choice.short_text ?? "",
         name: "",
         slug: "",
         age_group: "",
@@ -163,7 +152,7 @@ export function exportStoryTemplateCsv(template: StoryTemplateInput): string {
           : "",
       sort_order: String(fragment.sort_order),
       text: fragment.text,
-      keywords: joinKeywords(fragment.keywords),
+      short_text: "",
       name: "",
       slug: "",
       age_group: "",
@@ -179,7 +168,7 @@ export function exportStoryTemplateCsv(template: StoryTemplateInput): string {
       parent_choice_index: "",
       sort_order: "",
       text: twist.text,
-      keywords: joinKeywords(twist.keywords),
+      short_text: "",
       name: "",
       slug: "",
       age_group: twist.age_group ?? "",
@@ -222,7 +211,8 @@ export function importStoryTemplateCsv(text: string): StoryTemplateInput {
       const stepKey = normalizeStoryRole(row.step_key, steps.length);
       const step: StoryStepInput = {
         step_key: stepKey,
-        question: stepKey === "narration" ? "Как начинается история?" : row.text.trim(),
+        question: stepKey === "narration" ? row.name.trim() : row.text.trim(),
+        short_text: null,
         narration: stepKey === "narration" ? row.text.trim() : null,
         sort_order: coerceInteger(row.sort_order),
         choices: [],
@@ -242,7 +232,7 @@ export function importStoryTemplateCsv(text: string): StoryTemplateInput {
       }
       const choice: StoryChoiceInput = {
         text: row.text.trim(),
-        keywords: splitKeywords(row.keywords),
+        short_text: row.short_text.trim(),
         sort_order: coerceInteger(row.sort_order, parent.choices.length),
       };
       parent.choices.push(choice);
@@ -253,14 +243,12 @@ export function importStoryTemplateCsv(text: string): StoryTemplateInput {
         choice_temp_key: row.parent_choice_index.trim() || null,
         choice_id: null,
         text: row.text.trim(),
-        keywords: splitKeywords(row.keywords),
         sort_order: coerceInteger(row.sort_order),
       });
     }
     if (row.entity === "twist") {
       twists.push({
         text: row.text.trim(),
-        keywords: splitKeywords(row.keywords),
         age_group: row.age_group.trim() || null,
         is_published: row.is_published.trim() !== "false",
       });

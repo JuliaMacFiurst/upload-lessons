@@ -67,12 +67,12 @@ export const canonicalStoryPartStepSchema = z.object({
 
 export const canonicalStoryPartTextSchema = z.object({
   text: z.string().trim().min(1).max(500),
-  keywords: z.array(z.string().trim().min(1).max(60)).max(12).default([]),
+  short_text: z.string().trim().min(1).max(220),
 });
 
 export const canonicalStoryChoiceSchema = z.object({
   text: z.string().trim().min(1, "Choice text is required.").max(220),
-  keywords: z.array(z.string().trim().min(1).max(60)).max(12),
+  short_text: z.string().trim().min(1).max(220),
 });
 
 export const canonicalStoryStepSchema = z.object({
@@ -85,12 +85,10 @@ export const canonicalStoryFragmentSchema = z.object({
   step_key: z.enum(STORY_ROLE_KEYS),
   choice_index: z.number().int().min(0).optional().nullable(),
   text: z.string().trim().min(1, "Fragment text is required.").max(500),
-  keywords: z.array(z.string().trim().min(1).max(60)).max(12),
 });
 
 export const canonicalStoryTwistSchema = z.object({
   text: z.string().trim().min(1, "Twist text is required.").max(220),
-  keywords: z.array(z.string().trim().min(1).max(60)).max(12),
 });
 
 export const canonicalStoryTemplateSchema = z.object({
@@ -99,6 +97,41 @@ export const canonicalStoryTemplateSchema = z.object({
   fragments: z.array(canonicalStoryFragmentSchema).max(60),
   twists: z.array(canonicalStoryTwistSchema).max(30),
 });
+
+const generatedNarrationStepSchema = z.object({
+  step_key: z.literal("narration"),
+  question: z.string().trim().min(1).max(220),
+  narration: z.string().trim().min(1).max(500),
+}).strict();
+
+const generatedChoiceWithFragmentsSchema = z.object({
+  text: z.string().trim().min(1).max(220),
+  short_text: z.string().trim().min(1).max(220),
+  fragments: z.array(
+    z.object({
+      text: z.string().trim().min(1).max(500),
+    }).strict(),
+  ).min(1).max(2),
+}).strict();
+
+const generatedInteractiveStepSchema = z.object({
+  step_key: z.enum(["intro", "journey", "problem", "solution", "ending"]),
+  question: z.string().trim().min(1).max(300),
+  choices: z.array(generatedChoiceWithFragmentsSchema).length(3),
+}).strict();
+
+export const strictGeneratedStoryTemplateSchema = z.object({
+  title: z.string().trim().min(1).max(120),
+  steps: z.tuple([
+    generatedNarrationStepSchema,
+    generatedInteractiveStepSchema.extend({ step_key: z.literal("intro") }).strict(),
+    generatedInteractiveStepSchema.extend({ step_key: z.literal("journey") }).strict(),
+    generatedInteractiveStepSchema.extend({ step_key: z.literal("problem") }).strict(),
+    generatedInteractiveStepSchema.extend({ step_key: z.literal("solution") }).strict(),
+    generatedInteractiveStepSchema.extend({ step_key: z.literal("ending") }).strict(),
+  ]),
+  twists: z.array(canonicalStoryTwistSchema.strict()).length(3),
+}).strict();
 
 export type CanonicalSlide = z.infer<typeof canonicalSlideSchema>;
 export type CanonicalExplanationSection = z.infer<typeof canonicalExplanationSectionSchema>;
@@ -112,3 +145,4 @@ export type CanonicalStoryStep = z.infer<typeof canonicalStoryStepSchema>;
 export type CanonicalStoryFragment = z.infer<typeof canonicalStoryFragmentSchema>;
 export type CanonicalStoryTwist = z.infer<typeof canonicalStoryTwistSchema>;
 export type CanonicalStoryTemplate = z.infer<typeof canonicalStoryTemplateSchema>;
+export type StrictGeneratedStoryTemplate = z.infer<typeof strictGeneratedStoryTemplateSchema>;

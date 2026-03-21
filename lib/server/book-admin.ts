@@ -107,6 +107,7 @@ type StoryStepRow = {
   template_id: string;
   step_key: string;
   question: string;
+  short_text: string | null;
   narration: string | null;
   sort_order: number | null;
 };
@@ -115,7 +116,8 @@ type StoryChoiceRow = {
   id: string;
   step_id: string;
   text: string;
-  keywords: string[] | null;
+  short_text: string | null;
+  keywords?: string[] | null;
   sort_order: number | null;
 };
 
@@ -125,14 +127,14 @@ type StoryFragmentRow = {
   step_key: string;
   choice_id: string | null;
   text: string;
-  keywords: string[] | null;
+  short_text: string | null;
   sort_order: number | null;
 };
 
 type StoryTwistRow = {
   id: string;
   text: string;
-  keywords: string[] | null;
+  keywords?: string[] | null;
   age_group: string | null;
   is_published: boolean | null;
 };
@@ -169,7 +171,8 @@ export function getStoryRoleQuestion(role: StoryRoleKey): string {
 export function createDefaultStorySteps() {
   return STORY_ROLE_KEYS.map((role, index) => ({
     step_key: role,
-    question: STORY_ROLE_QUESTIONS[role],
+    question: role === "narration" ? "" : STORY_ROLE_QUESTIONS[role],
+    short_text: null,
     narration: role === "narration" ? "" : null,
     sort_order: index,
     choices: [],
@@ -233,7 +236,7 @@ async function repairStoryTemplateData(
     supabase.from("story_steps").select("*").eq("template_id", templateId).order("sort_order", { ascending: true }),
     supabase
       .from("story_choices")
-      .select("id,step_id,text,keywords,sort_order,story_steps!inner(template_id,step_key)")
+      .select("id,step_id,text,short_text,sort_order,story_steps!inner(template_id,step_key)")
       .eq("story_steps.template_id", templateId)
       .order("sort_order", { ascending: true }),
     supabase.from("story_fragments").select("*").eq("template_id", templateId).order("sort_order", { ascending: true }),
@@ -298,7 +301,7 @@ async function repairStoryTemplateData(
         .insert({
           step_id: step.id,
           text: buildChoiceTextFromFragment(fragment.text),
-          keywords: normalizeKeywords(fragment.keywords),
+          short_text: null,
           sort_order: roleChoices.length,
         })
         .select("*")
@@ -756,7 +759,7 @@ export async function loadBookEditorData(
       supabase.from("story_steps").select("*").eq("template_id", template.id).order("sort_order", { ascending: true }),
       supabase
         .from("story_choices")
-        .select("id,step_id,text,keywords,sort_order,story_steps!inner(template_id)")
+        .select("id,step_id,text,short_text,sort_order,story_steps!inner(template_id)")
         .eq("story_steps.template_id", template.id)
         .order("sort_order", { ascending: true }),
       supabase.from("story_fragments").select("*").eq("template_id", template.id).order("sort_order", { ascending: true }),
@@ -792,7 +795,8 @@ export async function loadBookEditorData(
       return {
         id: step?.id,
         step_key: role,
-        question: step?.question ?? STORY_ROLE_QUESTIONS[role],
+        question: role === "narration" ? (step?.question ?? "") : (step?.question ?? STORY_ROLE_QUESTIONS[role]),
+        short_text: role === "narration" ? null : (step?.short_text ?? null),
         narration: step?.narration ?? (role === "narration" ? "" : null),
         sort_order: index,
         choices: [] as StoryTemplateInput["steps"][number]["choices"],
@@ -811,7 +815,7 @@ export async function loadBookEditorData(
         parent.choices.push({
           id: choice.id,
           text: choice.text,
-          keywords: normalizeKeywords(choice.keywords),
+          short_text: choice.short_text ?? "",
           sort_order: sortOrder,
         });
         choiceSortOrderById.set(choice.id, sortOrder);
@@ -833,13 +837,11 @@ export async function loadBookEditorData(
             ? String(choiceSortOrderById.get(fragment.choice_id))
             : null,
         text: fragment.text,
-        keywords: normalizeKeywords(fragment.keywords),
         sort_order: fragment.sort_order ?? 0,
       })),
       twists: ((twistsRes.data as StoryTwistRow[] | null) ?? []).map((twist) => ({
         id: twist.id,
         text: twist.text,
-        keywords: normalizeKeywords(twist.keywords),
         age_group: twist.age_group,
         is_published: twist.is_published ?? true,
       })),
@@ -1081,6 +1083,7 @@ export async function saveBookEditorData(
           template_id: templateId,
           step_key: step.step_key,
           question: step.question,
+          short_text: step.short_text?.trim() || null,
           narration: step.narration?.trim() || null,
           sort_order: step.sort_order ?? index,
         })),
@@ -1107,7 +1110,6 @@ export async function saveBookEditorData(
           step.choices.map((choice, index) => ({
             step_id: persistedStepId,
             text: choice.text,
-            keywords: choice.keywords,
             sort_order: choice.sort_order ?? index,
           })),
         )
@@ -1137,7 +1139,6 @@ export async function saveBookEditorData(
               step_key: fragment.step_key,
               choice_id: choiceId,
               text: fragment.text,
-              keywords: fragment.keywords,
               sort_order: fragment.sort_order ?? index,
             };
           })
@@ -1154,7 +1155,6 @@ export async function saveBookEditorData(
         parsed.storyTemplate.twists.map((twist) => ({
           id: twist.id,
           text: twist.text,
-          keywords: twist.keywords,
           age_group: twist.age_group || parsed.book.age_group || null,
           is_published: twist.is_published,
         })),
@@ -1665,7 +1665,7 @@ async function loadStoryTemplateDetails(
     supabase.from("story_steps").select("*").eq("template_id", template.id).order("sort_order", { ascending: true }),
     supabase
       .from("story_choices")
-      .select("id,step_id,text,keywords,sort_order,story_steps!inner(template_id)")
+      .select("id,step_id,text,short_text,sort_order,story_steps!inner(template_id)")
       .eq("story_steps.template_id", template.id)
       .order("sort_order", { ascending: true }),
     supabase.from("story_fragments").select("*").eq("template_id", template.id).order("sort_order", { ascending: true }),
@@ -1689,7 +1689,8 @@ async function loadStoryTemplateDetails(
     return {
       id: step?.id,
       step_key: role,
-      question: step?.question ?? STORY_ROLE_QUESTIONS[role],
+      question: role === "narration" ? (step?.question ?? "") : (step?.question ?? STORY_ROLE_QUESTIONS[role]),
+      short_text: role === "narration" ? null : (step?.short_text ?? null),
       narration: step?.narration ?? (role === "narration" ? "" : null),
       sort_order: index,
       choices: [] as StoryTemplateInput["steps"][number]["choices"],
@@ -1707,7 +1708,7 @@ async function loadStoryTemplateDetails(
     parent.choices.push({
       id: choice.id,
       text: choice.text,
-      keywords: normalizeKeywords(choice.keywords),
+      short_text: choice.short_text ?? "",
       sort_order: sortOrder,
     });
     choiceSortOrderById.set(choice.id, sortOrder);
@@ -1728,7 +1729,6 @@ async function loadStoryTemplateDetails(
           ? String(choiceSortOrderById.get(fragment.choice_id))
           : null,
       text: fragment.text,
-      keywords: normalizeKeywords(fragment.keywords),
       sort_order: fragment.sort_order ?? 0,
     })),
     twists: [],
@@ -1770,7 +1770,6 @@ export async function loadStoryBuilderData(supabase: SupabaseClient): Promise<St
     twists: ((twistsRes.data as StoryTwistRow[] | null) ?? []).map((twist) => ({
       id: twist.id,
       text: twist.text,
-      keywords: normalizeKeywords(twist.keywords),
       age_group: twist.age_group,
       is_published: twist.is_published ?? true,
     })),
@@ -1828,6 +1827,7 @@ export async function saveStoryStepBlock(
       template_id: templateId,
       step_key: role,
       question: parsedStep.question,
+      short_text: parsedStep.short_text?.trim() || null,
       narration: parsedStep.narration?.trim() || null,
       sort_order: parsedStep.sort_order,
     })
@@ -1875,7 +1875,7 @@ export async function saveStoryStepBlock(
         parsedStep.choices.map((choice, index) => ({
           step_id: savedStep.id,
           text: choice.text,
-          keywords: choice.keywords,
+          short_text: choice.short_text?.trim() || null,
           sort_order: choice.sort_order ?? index,
         })),
       )
@@ -1886,7 +1886,7 @@ export async function saveStoryStepBlock(
     choices = ((insertedChoices as StoryChoiceRow[] | null) ?? []).map((choice) => ({
       id: choice.id,
       text: choice.text,
-      keywords: normalizeKeywords(choice.keywords),
+      short_text: choice.short_text ?? "",
       sort_order: choice.sort_order ?? 0,
     }));
   }
@@ -1894,7 +1894,8 @@ export async function saveStoryStepBlock(
   return {
     id: savedStep.id,
     step_key: role,
-    question: savedStep.question,
+    question: role === "narration" ? savedStep.question : savedStep.question,
+    short_text: role === "narration" ? null : (savedStep.short_text ?? null),
     narration: savedStep.narration ?? (role === "narration" ? "" : null),
     sort_order: savedStep.sort_order ?? 0,
     choices,
@@ -1965,7 +1966,6 @@ export async function saveStoryFragmentsBlock(
       step_key: normalizeStoryRole(fragment.step_key),
       choice_id: choiceId,
       text: fragment.text,
-      keywords: fragment.keywords,
       sort_order: fragment.sort_order ?? index,
     }];
   });
@@ -1999,7 +1999,6 @@ export async function saveStoryFragmentsBlock(
           ? String(matchedChoice.sort_order)
           : null,
       text: fragment.text,
-      keywords: normalizeKeywords(fragment.keywords),
       sort_order: fragment.sort_order ?? 0,
     };
   });
@@ -2023,7 +2022,6 @@ export async function saveStoryTwists(
         id: twist.id ?? null,
         operation: twist.id ? "update" : "insert",
         textLength: twist.text.length,
-        keywords: twist.keywords.length,
       })),
     },
   });
@@ -2052,7 +2050,6 @@ export async function saveStoryTwists(
       parsedTwists.map((twist) => ({
         ...(twist.id ? { id: twist.id } : {}),
         text: twist.text,
-        keywords: twist.keywords,
         age_group: twist.age_group || null,
         is_published: twist.is_published,
       })),
@@ -2066,7 +2063,6 @@ export async function saveStoryTwists(
   return ((data as StoryTwistRow[] | null) ?? []).map((twist) => ({
     id: twist.id,
     text: twist.text,
-    keywords: normalizeKeywords(twist.keywords),
     age_group: twist.age_group,
     is_published: twist.is_published ?? true,
   }));

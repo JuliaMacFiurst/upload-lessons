@@ -14,10 +14,9 @@ import {
 } from "./story-contract";
 import { validateStoryTemplate, type StoryValidationResult } from "./story-validator";
 
-function toContractFragment(text: string, keywords: string[]): StoryContractFragment {
+function toContractFragment(text: string): StoryContractFragment {
   return {
     text: text.trim(),
-    keywords: keywords.map((keyword) => keyword.trim()).filter(Boolean),
   };
 }
 
@@ -54,14 +53,14 @@ export function adaptStoryTemplateToContract(source: StoryTemplateSource): Story
 
     contractStep.question = sourceStep.question.trim();
     if (sourceStep.narration?.trim()) {
-      contractStep.sharedFragment = toContractFragment(sourceStep.narration, []);
+      contractStep.sharedFragment = toContractFragment(sourceStep.narration);
     }
     contractStep.choices = [0, 1, 2].map((choiceIndex) => {
       const sourceChoice = sourceStep.choices[choiceIndex];
       if (stepKey === "narration") {
         return {
           text: "",
-          keywords: [],
+          short_text: "",
           fragments: [] as StoryContractFragment[],
         };
       }
@@ -69,14 +68,14 @@ export function adaptStoryTemplateToContract(source: StoryTemplateSource): Story
         warnings.push(`Step ${stepKey} is missing choice ${choiceIndex + 1}; created empty placeholder.`);
         return {
           text: "",
-          keywords: [],
+          short_text: "",
           fragments: [],
         };
       }
 
       return {
         text: sourceChoice.text.trim(),
-        keywords: sourceChoice.keywords.map((keyword) => keyword.trim()).filter(Boolean),
+        short_text: sourceChoice.short_text?.trim() ?? "",
         fragments: [] as StoryContractFragment[],
       };
     }) as StoryContractTemplate["steps"][number]["choices"];
@@ -91,7 +90,7 @@ export function adaptStoryTemplateToContract(source: StoryTemplateSource): Story
       return;
     }
 
-    const contractFragment = toContractFragment(fragment.text, fragment.keywords);
+    const contractFragment = toContractFragment(fragment.text);
     const choiceIndex = findChoiceIndex(
       source.steps.find((item) => item.step_key === fragment.step_key),
       fragment,
@@ -114,7 +113,6 @@ export function adaptStoryTemplateToContract(source: StoryTemplateSource): Story
       steps,
       twists: source.twists.map((twist) => ({
         text: twist.text.trim(),
-        keywords: twist.keywords.map((keyword) => keyword.trim()).filter(Boolean),
       })),
     },
     warnings,

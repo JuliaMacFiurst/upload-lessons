@@ -55,11 +55,13 @@ export const bookTestSchema = canonicalQuizSchema.extend({
 
 export const storyChoiceSchema = canonicalStoryChoiceSchema.extend({
   id: z.string().uuid().optional(),
+  short_text: z.string().trim().max(220).optional().nullable(),
   sort_order: z.number().int().min(0).default(0),
 });
 
 export const storyStepSchema = canonicalStoryStepSchema.extend({
   id: z.string().uuid().optional(),
+  short_text: z.string().trim().max(220).optional().nullable(),
   narration: z.string().trim().max(1000).optional().nullable(),
   sort_order: z.number().int().min(0).default(0),
   choices: z.array(storyChoiceSchema).max(8),
@@ -168,9 +170,20 @@ export type StoryTemplateOverviewRow = {
   id: string;
   name: string;
   description: string | null;
-  keywords: string[] | null;
   age_group: string | null;
   step_key: StoryRoleKey;
   choices_count: number;
   narration_filled?: boolean;
+  question?: string | null;
+  short_text?: string | null;
+  narration?: string | null;
+  choices?: Array<{
+    id: string;
+    text: string | null;
+    short_text: string | null;
+    fragments_count: number;
+    fragments?: Array<{
+      text: string | null;
+    }>;
+  }>;
 };

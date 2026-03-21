@@ -23,20 +23,6 @@ function defaultQuestion(role: StoryRoleKey) {
   return DEFAULT_STEP_QUESTIONS[role];
 }
 
-function normalizeKeywords(value: unknown): string[] {
-  if (typeof value === "string") {
-    return value.trim() ? [value.trim()] : [];
-  }
-  if (!Array.isArray(value)) {
-    return [];
-  }
-  return [...new Set(
-    value
-      .map((item) => (typeof item === "string" ? item.trim() : ""))
-      .filter(Boolean),
-  )].slice(0, 12);
-}
-
 function normalizeChoices(value: unknown) {
   const rawChoices = Array.isArray(value) ? value : [];
   const choices = rawChoices
@@ -44,15 +30,13 @@ function normalizeChoices(value: unknown) {
       if (!choice || typeof choice !== "object") {
         return null;
       }
-      const record = choice as { text?: unknown; keywords?: unknown };
+      const record = choice as { text?: unknown; short_text?: unknown };
       const text = typeof record.text === "string" ? record.text.trim() : "";
-      if (!text) {
+      const short_text = typeof record.short_text === "string" ? record.short_text.trim() : "";
+      if (!text || !short_text) {
         return null;
       }
-      return {
-        text,
-        keywords: normalizeKeywords(record.keywords),
-      };
+      return { text, short_text };
     })
     .filter((choice): choice is NonNullable<typeof choice> => choice !== null)
     .slice(0, 3);
@@ -60,7 +44,7 @@ function normalizeChoices(value: unknown) {
   while (choices.length < 3) {
     choices.push({
       text: choices[choices.length - 1]?.text ?? "Герой пробует другой путь.",
-      keywords: [],
+      short_text: choices[choices.length - 1]?.short_text ?? "пробует другой путь",
     });
   }
 
@@ -117,7 +101,6 @@ function normalizeFragments(
         step_key?: unknown;
         choice_index?: unknown;
         text?: unknown;
-        keywords?: unknown;
       };
       const step_key = normalizeStoryRole(record.step_key, index);
       if (step_key === "narration") {
@@ -141,7 +124,6 @@ function normalizeFragments(
         step_key,
         choice_index: Math.max(0, Math.min(maxIndex, rawChoiceIndex)),
         text,
-        keywords: normalizeKeywords(record.keywords),
       };
     })
     .filter((fragment): fragment is NonNullable<typeof fragment> => fragment !== null);
@@ -153,20 +135,17 @@ function normalizeTwists(value: unknown) {
     .map((twist) => {
       if (typeof twist === "string") {
         const text = twist.trim();
-        return text ? { text, keywords: [] } : null;
+        return text ? { text } : null;
       }
       if (!twist || typeof twist !== "object") {
         return null;
       }
-      const record = twist as { text?: unknown; keywords?: unknown };
+      const record = twist as { text?: unknown };
       const text = typeof record.text === "string" ? record.text.trim() : "";
       if (!text) {
         return null;
       }
-      return {
-        text,
-        keywords: normalizeKeywords(record.keywords),
-      };
+      return { text };
     })
     .filter((twist): twist is NonNullable<typeof twist> => twist !== null)
     .slice(0, 3);
@@ -174,7 +153,6 @@ function normalizeTwists(value: unknown) {
   while (twists.length < 3) {
     twists.push({
       text: twists[twists.length - 1]?.text ?? "Но тут случается добрый неожиданный поворот.",
-      keywords: [],
     });
   }
 

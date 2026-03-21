@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import slugify from "slugify";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
@@ -14,7 +14,6 @@ import {
   estimateFullStoryCost,
   estimateStoryVariantCost,
 } from "../../../lib/ai/storyGenerationProfile";
-import { formatKeywords, parseKeywords } from "../../../lib/books/keywords";
 import { slugifyRu } from "../../../lib/books/slugify-ru";
 import type {
   StoryBuilderResponse,
@@ -36,6 +35,7 @@ import {
 } from "../../../lib/story/story-contract";
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
+  console.log("API CALL", url);
   const response = await fetch(url, options);
   const data = (await response.json()) as T & { error?: string };
   if (!response.ok) {
@@ -117,7 +117,15 @@ function getNarrationStepText(template: StoryBuilderTemplate) {
   return template.steps.find((step) => step.step_key === "narration")?.narration ?? "";
 }
 
+function getNarrationHeroText(template: StoryBuilderTemplate) {
+  return template.steps.find((step) => step.step_key === "narration")?.question ?? "";
+}
+
 function inferHeroContext(template: StoryBuilderTemplate) {
+  const heroText = getNarrationHeroText(template).trim();
+  if (heroText) {
+    return heroText;
+  }
   const narrationText = getNarrationStepText(template);
   if (narrationText.trim()) {
     const firstSentence = narrationText.split(/(?<=[.!?])\s+/)[0]?.trim();
@@ -218,10 +226,10 @@ type StoryTemplateStats = {
   id: string;
   name: string;
   description: string | null;
-  keywords: string[] | null;
   age_group: string | null;
   steps: Record<StoryRoleKey, number>;
   narrationFilled: boolean;
+  hasHero: boolean;
 };
 
 type StoryTemplateListItem = {
@@ -277,7 +285,7 @@ function ensureThreeChoices(
 
     return {
       text: "",
-      keywords: [],
+      short_text: "",
       sort_order: index,
     };
   });
@@ -296,6 +304,7 @@ function normalizeTemplateChoices(
         {
           step_key: role,
           question: ROLE_QUESTIONS_RU[role],
+          short_text: null,
           narration: role === "narration" ? "" : null,
           sort_order: roleIndex,
           choices: [],
@@ -305,7 +314,8 @@ function normalizeTemplateChoices(
         ...sourceStep,
         step_key: role,
         sort_order: roleIndex,
-        question: sourceStep.question || ROLE_QUESTIONS_RU[role],
+        question: sourceStep.question || (role === "narration" ? "" : ROLE_QUESTIONS_RU[role]),
+        short_text: role === "narration" ? null : (sourceStep.short_text ?? null),
         narration: sourceStep.narration ?? (role === "narration" ? "" : null),
         choices: role === "narration" ? [] : ensureThreeChoices(sourceStep.choices ?? []),
       };
@@ -320,7 +330,8 @@ function createEmptyTemplate(index: number): StoryBuilderTemplate {
     is_published: true,
     steps: STORY_ROLE_KEYS.map((role, roleIndex) => ({
       step_key: role,
-      question: ROLE_QUESTIONS_RU[role],
+      question: role === "narration" ? "" : ROLE_QUESTIONS_RU[role],
+      short_text: null,
       narration: role === "narration" ? "" : null,
       sort_order: roleIndex,
       choices: role === "narration" ? [] : ensureThreeChoices([]),
@@ -333,7 +344,6 @@ function createEmptyTemplate(index: number): StoryBuilderTemplate {
 function emptyTwist(): StoryTwistInput {
   return {
     text: "",
-    keywords: [],
     age_group: null,
     is_published: true,
   };
@@ -350,9 +360,9 @@ function groupOverviewRows(
       id: template.id,
       name: template.name,
       description: null,
-      keywords: null,
       age_group: null,
       narrationFilled: false,
+      hasHero: false,
       steps: {
         narration: 0,
         intro: 0,
@@ -371,9 +381,9 @@ function groupOverviewRows(
         id: row.id,
         name: row.name,
         description: row.description,
-        keywords: row.keywords,
         age_group: row.age_group,
         narrationFilled: false,
+        hasHero: false,
         steps: {
           narration: 0,
           intro: 0,
@@ -389,7 +399,19 @@ function groupOverviewRows(
       : row.choices_count;
     if (row.step_key === "narration") {
       current.narrationFilled = row.narration_filled ?? row.choices_count > 0;
+      const heroText = row.question?.trim() ?? "";
+      console.log("HERO CHECK", row.question);
+      current.hasHero = Boolean(heroText);
     }
+
+    console.log("OVERVIEW RAW", row);
+    if (row.step_key !== "narration") {
+      const validChoices = (row.choices ?? []).filter((choice) =>
+        Boolean(choice.text?.trim() || choice.short_text?.trim()),
+      );
+      console.log("VALID CHOICES", validChoices);
+    }
+
     grouped.set(row.id, current);
   });
 
@@ -454,6 +476,7 @@ function findFirstIncompleteChoiceIndex(
 ): number {
   return step.choices.findIndex((choice, choiceIndex) => {
     const hasText = choice.text.trim().length > 0;
+    const hasShortText = (choice.short_text?.trim().length ?? 0) > 0;
     const hasFragment = fragments.some(
       (fragment) =>
         fragment.step_key === step.step_key &&
@@ -461,7 +484,7 @@ function findFirstIncompleteChoiceIndex(
         fragment.text.trim().length > 0,
     );
 
-    return !hasText || !hasFragment;
+    return !hasText || !hasShortText || !hasFragment;
   });
 }
 
@@ -471,17 +494,27 @@ function getStepCompletionStats(
 ) {
   const questionComplete = step.question.trim().length > 0;
   if (step.step_key === "narration") {
+    const heroComplete = step.question.trim().length > 0;
     const narrationComplete = (step.narration?.trim().length ?? 0) > 0;
     return {
-      questionComplete: narrationComplete,
+      questionComplete: heroComplete,
+      narrationComplete,
       filledChoicesCount: 0,
       choiceFragmentsCount: 0,
-      stepComplete: narrationComplete,
+      stepComplete: heroComplete && narrationComplete,
     };
   }
-  const filledChoicesCount = step.choices.filter(
-    (choice) => choice.text.trim().length > 0,
-  ).length;
+  const validChoicesCount = step.choices.filter((choice, choiceIndex) => {
+    const hasText = choice.text.trim().length > 0;
+    const hasShortText = (choice.short_text?.trim().length ?? 0) > 0;
+    const hasFragment = fragments.some(
+      (fragment) =>
+        fragment.step_key === step.step_key &&
+        fragment.choice_temp_key === String(choiceIndex) &&
+        fragment.text.trim().length > 0,
+    );
+    return hasText && hasShortText && hasFragment;
+  }).length;
   const choiceFragmentsCount = step.choices.filter((_, choiceIndex) =>
     fragments.some(
       (fragment) =>
@@ -493,10 +526,11 @@ function getStepCompletionStats(
 
   return {
     questionComplete,
-    filledChoicesCount,
+    narrationComplete: false,
+    filledChoicesCount: validChoicesCount,
     choiceFragmentsCount,
     stepComplete:
-      questionComplete && filledChoicesCount === 3 && choiceFragmentsCount === 3,
+      questionComplete && validChoicesCount === 3,
   };
 }
 
@@ -577,8 +611,11 @@ function collectTemplateWarnings(template: StoryBuilderTemplate) {
     const filledChoices = step.choices.filter((choice) => choice.text.trim().length > 0);
 
     if (step.step_key === "narration") {
+      if (!step.question.trim().length) {
+        warnings.push(`${stepLabel}: Не указан герой.`);
+      }
       if (!(step.narration?.trim().length ?? 0)) {
-        warnings.push(`${stepLabel}: нет открывающего текста.`);
+        warnings.push(`${stepLabel}: Нет начала истории.`);
       }
       return;
     }
@@ -608,9 +645,6 @@ function collectTemplateWarnings(template: StoryBuilderTemplate) {
       if (countWords(choice.text) < 3) {
         warnings.push(`${choiceLabel}: текст слишком короткий.`);
       }
-      if (choice.keywords.length === 0) {
-        warnings.push(`${choiceLabel}: пустые ключевые слова.`);
-      }
     });
   });
 
@@ -628,9 +662,12 @@ function getFragmentRenderKey(
 }
 
 export default function StoryBuilderPage() {
+  console.log("RENDER", "StoryBuilderPage");
   const router = useRouter();
   const supabase = createClientComponentClient();
   const activeTemplateRef = useRef<StoryBuilderTemplate | null>(null);
+  const inFlightRequestsRef = useRef(new Map<string, Promise<unknown>>());
+  const initialDataRequestedRef = useRef(false);
 
   const [sessionChecked, setSessionChecked] = useState(false);
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -645,7 +682,6 @@ export default function StoryBuilderPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<Record<string, "saved" | "dirty">>({});
-  const [keywordDrafts, setKeywordDrafts] = useState<Record<string, string>>({});
   const [isSlugManuallyEdited, setIsSlugManuallyEdited] = useState(false);
   const [previewPath, setPreviewPath] = useState<StoryPath>(createDefaultStoryPath());
   const [templateWarnings, setTemplateWarnings] = useState<string[]>([]);
@@ -653,23 +689,39 @@ export default function StoryBuilderPage() {
 
   const isDirty = Object.values(saveState).includes("dirty");
 
+  const runRequestOnce = useCallback(<T,>(key: string, factory: () => Promise<T>): Promise<T> => {
+    const existing = inFlightRequestsRef.current.get(key) as Promise<T> | undefined;
+    if (existing) {
+      return existing;
+    }
+    const next = factory().finally(() => {
+      inFlightRequestsRef.current.delete(key);
+    });
+    inFlightRequestsRef.current.set(key, next);
+    return next;
+  }, []);
+
   const loadOverview = useCallback(async () => {
-    const overview = await fetchJson<{
-      templates: StoryTemplateListItem[];
-      rows: StoryTemplateOverviewRow[];
-    }>(
-      "/api/admin/story-builder/overview",
+    const overview = await runRequestOnce("overview", () =>
+      fetchJson<{
+        templates: StoryTemplateListItem[];
+        rows: StoryTemplateOverviewRow[];
+      }>(
+        "/api/admin/story-builder/overview",
+      ),
     );
     console.log("[StoryBuilder] fetched templates:", overview.templates.length);
     setOverviewStats(groupOverviewRows(overview.templates, overview.rows));
-  }, []);
+  }, [runRequestOnce]);
 
   const loadTwists = useCallback(async () => {
-    const data = await fetchJson<{ twists: StoryBuilderResponse["twists"] }>(
-      "/api/admin/story-builder/twists",
+    const data = await runRequestOnce("twists", () =>
+      fetchJson<{ twists: StoryBuilderResponse["twists"] }>(
+        "/api/admin/story-builder/twists",
+      ),
     );
     setTwists(data.twists);
-  }, []);
+  }, [runRequestOnce]);
 
   const loadInitialData = useCallback(async () => {
     setLoadingOverview(true);
@@ -684,12 +736,15 @@ export default function StoryBuilderPage() {
   }, [loadOverview, loadTwists]);
 
   const loadTemplate = useCallback(async (templateId: string) => {
+    console.log("TEMPLATE LOAD", templateId);
     setEditorLoading(true);
     setError(null);
     setSuccess(null);
     try {
-      const data = await fetchJson<{ template: StoryBuilderTemplate }>(
-        `/api/admin/story-builder/template?id=${encodeURIComponent(templateId)}`,
+      const data = await runRequestOnce(`template:${templateId}`, () =>
+        fetchJson<{ template: StoryBuilderTemplate }>(
+          `/api/admin/story-builder/template?id=${encodeURIComponent(templateId)}`,
+        ),
       );
       const template = normalizeTemplateChoices(data.template);
       setSelectedTemplateId(templateId);
@@ -698,7 +753,6 @@ export default function StoryBuilderPage() {
       setShowSharedFragments(false);
       setIsSlugManuallyEdited(template.slug !== generateSlug(template.name));
       setPreviewPath(createDefaultStoryPath());
-      setKeywordDrafts({});
       setTemplateWarnings([]);
       setShowFragmentHint(false);
     } catch (fetchError) {
@@ -706,7 +760,7 @@ export default function StoryBuilderPage() {
     } finally {
       setEditorLoading(false);
     }
-  }, []);
+  }, [runRequestOnce]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -722,6 +776,10 @@ export default function StoryBuilderPage() {
     if (!sessionChecked) {
       return;
     }
+    if (initialDataRequestedRef.current) {
+      return;
+    }
+    initialDataRequestedRef.current = true;
     void loadInitialData();
   }, [sessionChecked, loadInitialData]);
 
@@ -759,6 +817,15 @@ export default function StoryBuilderPage() {
     closeEditor();
   };
 
+  const switchStep = useCallback((index: number) => {
+    console.log("SWITCH STEP", index);
+    console.log("ACTIVE TEMPLATE BEFORE", activeTemplateRef.current);
+    if (Object.values(saveState).includes("dirty")) {
+      console.log("Unsaved changes preserved in memory");
+    }
+    setSelectedStep(index);
+  }, [saveState]);
+
   useEffect(() => {
     const currentTemplate = activeTemplateRef.current;
     if (!currentTemplate) {
@@ -779,7 +846,7 @@ export default function StoryBuilderPage() {
           0 | 1 | 2,
     }));
     setShowSharedFragments(false);
-  }, [selectedStep, selectedTemplateId]);
+  }, [selectedStep]);
 
   const showSuccess = (message: string) => {
     setSuccess(message);
@@ -815,7 +882,6 @@ export default function StoryBuilderPage() {
     setShowSharedFragments(false);
     setIsSlugManuallyEdited(false);
     setPreviewPath(createDefaultStoryPath());
-    setKeywordDrafts({});
     setSaveState({});
     setTemplateWarnings([]);
     setShowFragmentHint(false);
@@ -830,7 +896,6 @@ export default function StoryBuilderPage() {
     setShowSharedFragments(false);
     setIsSlugManuallyEdited(false);
     setPreviewPath(createDefaultStoryPath());
-    setKeywordDrafts({});
     setSaveState({});
     setTemplateWarnings([]);
     setShowFragmentHint(false);
@@ -1035,15 +1100,17 @@ export default function StoryBuilderPage() {
         title: string;
         steps: Array<{
           step_key: StoryRoleKey;
-          question: string;
-          choices: Array<{ text: string; keywords: string[] }>;
+          question?: string;
+          short_text?: string;
+          narration?: string;
+          choices?: Array<{ text: string; short_text: string }>;
         }>;
         fragments: Array<{
           step_key: StoryRoleKey;
           choice_index: number;
           text: string;
-          keywords: string[];
         }>;
+        twists: Array<{ text: string }>;
       }>("/api/admin/generate-story-template", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1066,10 +1133,17 @@ export default function StoryBuilderPage() {
           return {
             id: currentStep?.id,
             step_key: role,
-            question: generatedStep?.question ?? ROLE_QUESTIONS_RU[role],
+            question:
+              role === "narration"
+                ? generatedStep?.question ?? currentStep?.question ?? ""
+                : generatedStep?.question ?? ROLE_QUESTIONS_RU[role],
+            short_text:
+              role === "narration"
+                ? null
+                : currentStep?.short_text ?? null,
             narration:
               role === "narration"
-                ? currentStep?.narration ?? ""
+                ? generatedStep?.narration ?? currentStep?.narration ?? ""
                 : currentStep?.narration ?? null,
             sort_order: index,
             choices:
@@ -1077,7 +1151,7 @@ export default function StoryBuilderPage() {
                 ? []
                 : (generatedStep?.choices ?? []).map((choice, choiceIndex) => ({
                     text: choice.text,
-                    keywords: choice.keywords,
+                    short_text: choice.short_text,
                     sort_order: choiceIndex,
                   })),
           };
@@ -1087,8 +1161,13 @@ export default function StoryBuilderPage() {
           choice_id: null,
           choice_temp_key: String(fragment.choice_index),
           text: fragment.text,
-          keywords: fragment.keywords,
           sort_order: index,
+        })),
+        twists: data.twists.map((twist, index) => ({
+          id: current.twists[index]?.id,
+          text: twist.text,
+          age_group: current.twists[index]?.age_group ?? null,
+          is_published: current.twists[index]?.is_published ?? true,
         })),
       }));
       markDirty("template");
@@ -1122,12 +1201,13 @@ export default function StoryBuilderPage() {
       const partialStep = {
         ...step,
         question: step.question.trim(),
+        short_text: step.short_text?.trim() ?? null,
         choices: step.choices
           .filter((choice) => choice.text.trim() !== "")
           .map((choice, choiceIndex) => ({
             ...choice,
             text: choice.text.trim(),
-            keywords: choice.keywords.filter((keyword) => keyword.trim().length > 0),
+            short_text: choice.short_text?.trim() ?? "",
             sort_order: choice.sort_order ?? choiceIndex,
           })),
       };
@@ -1137,7 +1217,6 @@ export default function StoryBuilderPage() {
           ...fragment,
           choice_id: null,
           text: fragment.text.trim(),
-          keywords: fragment.keywords.filter((keyword) => keyword.trim().length > 0),
           sort_order: fragment.sort_order ?? fragmentIndex,
         }));
 
@@ -1229,6 +1308,7 @@ export default function StoryBuilderPage() {
       const filledChoices = step.choices
         .map((choice, index) => ({
           text: choice.text.trim(),
+          short_text: choice.short_text?.trim() ?? "",
           fragment:
             roleFragments.find(
               (fragment) =>
@@ -1245,7 +1325,7 @@ export default function StoryBuilderPage() {
       const currentStoryText = buildStoryPreviewText(activeTemplate, previewPath, selectedStep);
       const selectedPath = summarizeSelectedPath(previewPath, selectedStep);
       const data = await fetchJson<{
-        choices: Array<{ text: string; fragment: string; keywords: string[] }>;
+        choices: Array<{ text: string; fragment: string; short_text: string }>;
       }>(
         "/api/admin/generate-story-step-choices",
         {
@@ -1286,9 +1366,8 @@ export default function StoryBuilderPage() {
                         ...choice,
                         text:
                           data.choices[targetChoiceIndexes.indexOf(itemIndex)]?.text ?? choice.text,
-                        keywords:
-                          data.choices[targetChoiceIndexes.indexOf(itemIndex)]?.keywords ??
-                          choice.keywords,
+                        short_text:
+                          data.choices[targetChoiceIndexes.indexOf(itemIndex)]?.short_text ?? choice.short_text,
                       }
                     : choice,
                 ),
@@ -1317,7 +1396,6 @@ export default function StoryBuilderPage() {
               nextFragments[existingFragmentIndex] = {
                 ...nextFragments[existingFragmentIndex],
                 text: generatedChoice.fragment,
-                keywords: generatedChoice.keywords,
               };
               return;
             }
@@ -1327,7 +1405,6 @@ export default function StoryBuilderPage() {
               choice_id: null,
               choice_temp_key: String(targetIndex),
               text: generatedChoice.fragment,
-              keywords: generatedChoice.keywords,
               sort_order: nextSortOrder,
             });
             nextSortOrder += 1;
@@ -1376,7 +1453,7 @@ export default function StoryBuilderPage() {
     setBusyKey(`fragment-generate:${step.step_key}:${fragmentIndex}`);
     setError(null);
     try {
-      const data = await fetchJson<{ text: string; keywords: string[] }>(
+      const data = await fetchJson<{ text: string; short_text: string }>(
         "/api/admin/generate-story-part",
         {
           method: "POST",
@@ -1402,7 +1479,10 @@ export default function StoryBuilderPage() {
         ...current,
         fragments: current.fragments.map((item, index) =>
           index === fragmentIndex
-            ? { ...item, text: data.text, keywords: data.keywords }
+            ? {
+                ...item,
+                text: data.text,
+              }
             : item,
         ),
       }));
@@ -1431,7 +1511,6 @@ export default function StoryBuilderPage() {
       choice_id: null,
       choice_temp_key: choiceIndex === null ? null : String(choiceIndex),
       text: "",
-      keywords: [],
       sort_order: activeTemplate.fragments.filter(
         (fragment) => fragment.step_key === step.step_key,
       ).length,
@@ -1463,6 +1542,22 @@ export default function StoryBuilderPage() {
     markDirty("step:narration");
   };
 
+  const upsertNarrationHero = (value: string) => {
+    setActiveTemplate((prev) => {
+      if (!prev) {
+        return prev;
+      }
+      const next = structuredClone(prev);
+      const narrationIndex = next.steps.findIndex((step) => step.step_key === "narration");
+      if (narrationIndex === -1) {
+        return prev;
+      }
+      next.steps[narrationIndex].question = value;
+      return next;
+    });
+    markDirty("step:narration");
+  };
+
   const generateNarrationStep = async () => {
     if (!activeTemplate) {
       return;
@@ -1475,7 +1570,7 @@ export default function StoryBuilderPage() {
       if (!narrationStep) {
         throw new Error("Не найден шаг narration.");
       }
-      const data = await fetchJson<{ text: string; keywords: string[] }>(
+      const data = await fetchJson<{ text: string; short_text: string }>(
         "/api/admin/generate-story-part",
         {
           method: "POST",
@@ -1504,7 +1599,10 @@ export default function StoryBuilderPage() {
         ...current,
         steps: current.steps.map((step) =>
           step.step_key === "narration"
-            ? { ...step, narration: data.text }
+            ? {
+                ...step,
+                narration: data.text,
+              }
             : step,
         ),
       }));
@@ -1517,26 +1615,11 @@ export default function StoryBuilderPage() {
     }
   };
 
-  const updateTwistKeywordDraft = (index: number, rawValue: string) => {
-    setKeywordDrafts((current) => ({
-      ...current,
-      [`twist:${index}`]: rawValue,
-    }));
-    setTwists((current) =>
-      current.map((item, twistIndex) =>
-        twistIndex === index
-          ? { ...item, keywords: parseKeywords(rawValue) }
-          : item,
-      ),
-    );
-    markDirty("twists");
-  };
-
   const generateTwist = async (index: number) => {
     setBusyKey(`twist-generate:${index}`);
     setError(null);
     try {
-      const data = await fetchJson<{ text: string; keywords: string[] }>(
+      const data = await fetchJson<{ text: string }>(
         "/api/admin/generate-story-part",
         {
           method: "POST",
@@ -1556,7 +1639,7 @@ export default function StoryBuilderPage() {
       setTwists((current) =>
         current.map((twist, twistIndex) =>
           twistIndex === index
-            ? { ...twist, text: data.text, keywords: data.keywords }
+            ? { ...twist, text: data.text }
             : twist,
         ),
       );
@@ -1602,52 +1685,46 @@ export default function StoryBuilderPage() {
     }
   };
 
-  if (!sessionChecked || loadingOverview) {
-    return (
-      <p style={{ padding: 24 }}>
-        {loadingOverview
-          ? "Загрузка конструктора историй..."
-          : "Проверка сессии..."}
-      </p>
-    );
-  }
-
   const activeStep = activeTemplate?.steps[selectedStep] ?? null;
   const selectedChoiceIndex = activeStep ? previewPath[activeStep.step_key] ?? 0 : 0;
   const activeStepKey = activeStep ? `step:${activeStep.step_key}` : "";
-  const fullTemplatePrompt = activeTemplate
-    ? buildStoryTemplatePrompt({
-        title: activeTemplate.name,
-        description: `Шаблон детской интерактивной истории: ${activeTemplate.name}`,
-        ageGroup: null,
-        templateName: activeTemplate.name,
-        templateSlug: activeTemplate.slug,
-      })
-    : "";
-  const variantPrompt = activeTemplate
-    ? buildStoryPartPrompt({
-        title: activeTemplate.name,
-        description: `Шаблон истории ${activeTemplate.name}`,
-        ageGroup: null,
-        templateName: activeTemplate.name,
-        kind: "fragment",
-        storyRole: activeStep?.step_key ?? "narration",
-        previousRole: selectedStep > 0 ? STORY_ROLE_KEYS[selectedStep - 1] : null,
-        context: "Оцени стоимость генерации одного варианта истории.",
-      })
-    : "";
-  const variantEstimate = activeTemplate
-    ? estimateStoryVariantCost(variantPrompt)
-    : null;
-  const fullStoryEstimate = activeTemplate
-    ? estimateFullStoryCost(variantPrompt)
-    : null;
-  const templateEstimate = activeTemplate
-    ? estimateFullStoryCost(fullTemplatePrompt)
-    : null;
+  const fullTemplatePrompt = useMemo(() => (
+    activeTemplate
+      ? buildStoryTemplatePrompt({
+          title: activeTemplate.name,
+          description: `Шаблон детской интерактивной истории: ${activeTemplate.name}`,
+          ageGroup: null,
+          templateName: activeTemplate.name,
+          templateSlug: activeTemplate.slug,
+        })
+      : ""
+  ), [activeTemplate]);
+  const variantPrompt = useMemo(() => (
+    activeTemplate
+      ? buildStoryPartPrompt({
+          title: activeTemplate.name,
+          description: `Шаблон истории ${activeTemplate.name}`,
+          ageGroup: null,
+          templateName: activeTemplate.name,
+          kind: "fragment",
+          storyRole: activeStep?.step_key ?? "narration",
+          previousRole: selectedStep > 0 ? STORY_ROLE_KEYS[selectedStep - 1] : null,
+          context: "Оцени стоимость генерации одного варианта истории.",
+        })
+      : ""
+  ), [activeStep?.step_key, activeTemplate, selectedStep]);
+  const variantEstimate = useMemo(() => (
+    activeTemplate ? estimateStoryVariantCost(variantPrompt) : null
+  ), [activeTemplate, variantPrompt]);
+  const fullStoryEstimate = useMemo(() => (
+    activeTemplate ? estimateFullStoryCost(variantPrompt) : null
+  ), [activeTemplate, variantPrompt]);
+  const templateEstimate = useMemo(() => (
+    activeTemplate ? estimateFullStoryCost(fullTemplatePrompt) : null
+  ), [activeTemplate, fullTemplatePrompt]);
   const isTemplateCostHigh = (templateEstimate?.ils ?? 0) > MAX_TEMPLATE_GENERATION_COST_ILS;
 
-  const stepValidation =
+  const stepValidation = useMemo(() => (
     activeTemplate && activeStep
       ? validateStoryTemplateSource(
           {
@@ -1657,14 +1734,16 @@ export default function StoryBuilderPage() {
           },
           { scope: activeStep.step_key },
         )
-      : null;
+      : null
+  ), [activeStep, activeTemplate]);
 
-  const roleFragmentEntries =
+  const roleFragmentEntries = useMemo(() => (
     activeTemplate && activeStep
       ? activeTemplate.fragments
           .map((fragment, globalIndex) => ({ fragment, globalIndex }))
           .filter(({ fragment }) => fragment.step_key === activeStep.step_key)
-      : [];
+      : []
+  ), [activeStep, activeTemplate]);
   const roleFragments = roleFragmentEntries.map(({ fragment }) => fragment);
   const generalFragments = roleFragmentEntries.filter(
     ({ fragment }) => !fragment.choice_temp_key,
@@ -1678,18 +1757,21 @@ export default function StoryBuilderPage() {
             ({ fragment }) =>
               fragment.choice_temp_key === String(selectedChoiceIndex),
           );
-  const stepStats =
+  const stepStats = useMemo(() => (
     activeTemplate && activeStep
       ? getStepCompletionStats(activeStep, activeTemplate.fragments)
-      : null;
-  const similarChoiceIndexes = activeStep
-    ? getSimilarChoiceIndexes(activeStep)
-    : new Set<number>();
-  const editorPreviewSegments =
+      : null
+  ), [activeStep, activeTemplate]);
+  const similarChoiceIndexes = useMemo(() => (
+    activeStep ? getSimilarChoiceIndexes(activeStep) : new Set<number>()
+  ), [activeStep]);
+  const editorPreviewSegments = useMemo(() => (
     activeTemplate && activeStep
       ? buildEditorPreviewSegments(activeTemplate, selectedStep, selectedChoiceIndex)
-      : [];
+      : []
+  ), [activeStep, activeTemplate, selectedChoiceIndex, selectedStep]);
   const narrationStepValue = activeTemplate ? getNarrationStepText(activeTemplate) : "";
+  const narrationHeroValue = activeTemplate ? getNarrationHeroText(activeTemplate) : "";
 
   const twistsPanel = twists.map((twist, twistIndex) => (
     <div className="books-question" key={twist.id ?? `twist-${twistIndex}`}>
@@ -1736,33 +1818,19 @@ export default function StoryBuilderPage() {
           />
         </label>
 
-        <label className="books-field">
-          {helperLabel(
-            "Ключевые слова",
-            "Можно вводить через запятую или пробел.",
-            "Пример: сюрприз, смешно финал",
-          )}
-          <input
-            className="books-input"
-            value={
-              keywordDrafts[`twist:${twistIndex}`] ??
-              formatKeywords(twist.keywords)
-            }
-            placeholder="сюрприз, смешно финал"
-            onChange={(event) => {
-              updateTwistKeywordDraft(twistIndex, event.target.value);
-            }}
-            onBlur={() => {
-              setKeywordDrafts((current) => ({
-                ...current,
-                [`twist:${twistIndex}`]: formatKeywords(twist.keywords),
-              }));
-            }}
-          />
-        </label>
       </div>
     </div>
   ));
+
+  if (!sessionChecked || loadingOverview) {
+    return (
+      <p style={{ padding: 24 }}>
+        {loadingOverview
+          ? "Загрузка конструктора историй..."
+          : "Проверка сессии..."}
+      </p>
+    );
+  }
 
   return (
     <div className="books-admin-page">
@@ -1845,9 +1913,18 @@ export default function StoryBuilderPage() {
                         <div>
                           <h3 className="books-subpanel__title">{stats.name}</h3>
                           <p className="books-section-help">
-                            {stats.keywords?.length
-                              ? stats.keywords.join(", ")
-                              : "Без ключевых слов"}
+                            {stats.description?.trim() || "Без описания"}
+                          </p>
+                          <p className="books-section-help">
+                            Главный герой:{" "}
+                            <span
+                              style={{
+                                color: stats.hasHero ? "#2e7d32" : "#b23b3b",
+                                fontWeight: 600,
+                              }}
+                            >
+                              {stats.hasHero ? "есть" : "нет"}
+                            </span>
                           </p>
                         </div>
                         <button
@@ -2215,7 +2292,7 @@ export default function StoryBuilderPage() {
                         padding: "12px 14px",
                         textAlign: "left",
                       }}
-                      onClick={() => setSelectedStep(index)}
+                      onClick={() => switchStep(index)}
                       >
                       <span
                         style={{
@@ -2232,7 +2309,11 @@ export default function StoryBuilderPage() {
                           {stats.stepComplete
                             ? "готов"
                             : step.step_key === "narration"
-                              ? "нужно заполнить открывающий текст"
+                              ? `${
+                                  stats.questionComplete ? "герой готов" : "нужен герой"
+                                } · ${
+                                  stats.narrationComplete ? "начало готово" : "нет начала истории"
+                                }`
                               : `${stats.filledChoicesCount}/3 choices · ${stats.choiceFragmentsCount}/3 fragments`}
                         </span>
                       </span>
@@ -2358,11 +2439,16 @@ export default function StoryBuilderPage() {
                       <div className="story-overview-steps">
                         <div className="story-overview-step">
                           <span className="story-overview-step__role">
-                            {activeStep.step_key === "narration" ? "Открывающий текст" : "Вопрос ребёнку"}
+                            {activeStep.step_key === "narration" ? "Главный герой" : "Вопрос ребёнку"}
                           </span>
                           <span>{stepStats.questionComplete ? "готов" : "пусто"}</span>
                         </div>
-                        {activeStep.step_key === "narration" ? null : (
+                        {activeStep.step_key === "narration" ? (
+                          <div className="story-overview-step">
+                            <span className="story-overview-step__role">Начало истории</span>
+                            <span>{stepStats.narrationComplete ? "готово" : "пусто"}</span>
+                          </div>
+                        ) : (
                           <>
                             <div className="story-overview-step">
                               <span className="story-overview-step__role">Choices</span>
@@ -2402,6 +2488,22 @@ export default function StoryBuilderPage() {
                             : "Сгенерировать"}
                         </button>
                       </div>
+
+                      <label className="books-field">
+                        {helperLabel(
+                          "Кто главный герой?",
+                          "Короткое имя или описание главного героя.",
+                          "Например: Аня, маленький лисёнок, смелый поварёнок",
+                        )}
+                        <input
+                          className="books-input"
+                          value={narrationHeroValue}
+                          placeholder="Аня"
+                          onChange={(event) => {
+                            upsertNarrationHero(event.target.value);
+                          }}
+                        />
+                      </label>
 
                       <label className="books-field">
                         <span className="books-field__help">
@@ -2567,11 +2669,11 @@ export default function StoryBuilderPage() {
                         </label>
 
                         <div className="books-grid books-grid--2">
-                          <label className="books-field">
-                            {helperLabel(
-                              "Что произойдёт",
-                              "Введите вариант выбора для ребёнка.",
-                              'Короткое действие или выбор (одна мысль, 5–10 слов). Пример: "Пойдёт к пруду купаться".',
+                        <label className="books-field">
+                          {helperLabel(
+                            "Что произойдёт",
+                            "Введите вариант выбора для ребёнка.",
+                            'Короткое действие или выбор (одна мысль, 5–10 слов). Пример: "Пойдёт к пруду купаться".',
                             )}
                             <input
                               className="books-input"
@@ -2597,68 +2699,37 @@ export default function StoryBuilderPage() {
                                       : item,
                                   ),
                                 }));
-                                markDirty(activeStepKey);
-                              }}
-                            />
-                          </label>
+                              markDirty(activeStepKey);
+                            }}
+                          />
+                        </label>
 
-                          <label className="books-field">
-                            {helperLabel(
-                              "Ключевые слова",
-                              "Можно вводить через запятую или пробел.",
-                              "Слова для генерации и связности (3–5 слов через запятую). Пример: вода, пруд, купание",
-                            )}
-                            <input
-                              className="books-input"
-                              value={
-                                keywordDrafts[
-                                  `choice:${activeStep.step_key}:${selectedChoiceIndex}`
-                                ] ??
-                                formatKeywords(
-                                  activeStep.choices[selectedChoiceIndex].keywords,
-                                )
-                              }
-                              placeholder="вода, пруд, купание"
-                              onChange={(event) => {
-                                const rawValue = event.target.value;
-                                setKeywordDrafts((current) => ({
-                                  ...current,
-                                  [`choice:${activeStep.step_key}:${selectedChoiceIndex}`]:
-                                    rawValue,
-                                }));
-                                updateActiveTemplate((current) => ({
-                                  ...current,
-                                  steps: current.steps.map((item, index) =>
-                                    index === selectedStep
-                                      ? {
-                                          ...item,
-                                          choices: item.choices.map(
-                                            (choiceItem, itemIndex) =>
-                                              itemIndex === selectedChoiceIndex
-                                                ? {
-                                                    ...choiceItem,
-                                                    keywords: parseKeywords(rawValue),
-                                                  }
-                                                : choiceItem,
-                                          ),
-                                        }
-                                      : item,
-                                  ),
-                                }));
-                                markDirty(activeStepKey);
-                              }}
-                              onBlur={() => {
-                                setKeywordDrafts((current) => ({
-                                  ...current,
-                                  [`choice:${activeStep.step_key}:${selectedChoiceIndex}`]:
-                                    formatKeywords(
-                                      activeStep.choices[selectedChoiceIndex]
-                                        .keywords,
-                                    ),
-                                }));
-                              }}
-                            />
-                          </label>
+                        <label className="books-field">
+                          {helperLabel(
+                            "Короткий ответ",
+                            "Краткий ответ ребёнка к этому варианту.",
+                            "Краткий ответ ребёнка (1 действие, 3–6 слов)",
+                          )}
+                          <input
+                            className="books-input"
+                            value={activeStep.choices[selectedChoiceIndex].short_text ?? ""}
+                            placeholder="пойдёт к пруду"
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              updateActiveTemplate((current) => {
+                                const next = structuredClone(current);
+                                const targetChoice =
+                                  next.steps[selectedStep]?.choices[selectedChoiceIndex];
+                                if (targetChoice) {
+                                  targetChoice.short_text = value;
+                                }
+                                return next;
+                              });
+                              markDirty(activeStepKey);
+                            }}
+                          />
+                        </label>
+
                         </div>
 
                         <div className="books-subpanel">
@@ -2750,7 +2821,7 @@ export default function StoryBuilderPage() {
 
                               <label className="books-field">
                                 {helperLabel(
-                                  "Текст фрагмента",
+                                  "Фрагменты",
                                   "Фраза, которая будет частью истории.",
                                   "Одна короткая фраза, логически связанная с предыдущим шагом.",
                                 )}
@@ -2770,49 +2841,6 @@ export default function StoryBuilderPage() {
                                     );
                                     markDirty(`fragments:${activeStep.step_key}`);
                                     markDirty(activeStepKey);
-                                  }}
-                                />
-                              </label>
-
-                              <label className="books-field">
-                                {helperLabel(
-                                  "Ключевые слова",
-                                  "Можно вводить через запятую или пробел.",
-                                  "Слова для генерации и связности (3–5 слов через запятую). Пример: вода, пруд, купание",
-                                )}
-                                <input
-                                  className="books-input"
-                                  value={
-                                    keywordDrafts[
-                                      `fragment:${activeStep.step_key}:${fragmentIndex}`
-                                    ] ?? formatKeywords(fragment.keywords)
-                                  }
-                                  placeholder="вода, пруд, купание"
-                                  onChange={(event) => {
-                                    const rawValue = event.target.value;
-                                    setKeywordDrafts((current) => ({
-                                      ...current,
-                                      [`fragment:${activeStep.step_key}:${fragmentIndex}`]:
-                                        rawValue,
-                                    }));
-                                    updateChoiceFragment(
-                                      selectedStep,
-                                      selectedChoiceIndex,
-                                      fragmentIndex,
-                                      (currentFragment) => ({
-                                        ...currentFragment,
-                                        keywords: parseKeywords(rawValue),
-                                      }),
-                                    );
-                                    markDirty(`fragments:${activeStep.step_key}`);
-                                    markDirty(activeStepKey);
-                                  }}
-                                  onBlur={() => {
-                                    setKeywordDrafts((current) => ({
-                                      ...current,
-                                      [`fragment:${activeStep.step_key}:${fragmentIndex}`]:
-                                        formatKeywords(fragment.keywords),
-                                    }));
                                   }}
                                 />
                               </label>
@@ -2919,7 +2947,7 @@ export default function StoryBuilderPage() {
 
                               <label className="books-field">
                                 {helperLabel(
-                                  "Текст фрагмента",
+                                  "Фрагменты",
                                   "Фраза, которая будет частью истории.",
                                   "Одна короткая фраза, логически связанная с предыдущим шагом.",
                                 )}
@@ -2939,49 +2967,6 @@ export default function StoryBuilderPage() {
                                     );
                                     markDirty(`fragments:${activeStep.step_key}`);
                                     markDirty(activeStepKey);
-                                  }}
-                                />
-                              </label>
-
-                              <label className="books-field">
-                                {helperLabel(
-                                  "Ключевые слова",
-                                  "Можно вводить через запятую или пробел.",
-                                  "Слова для генерации и связности (3–5 слов через запятую). Пример: вода, пруд, купание",
-                                )}
-                                <input
-                                  className="books-input"
-                                  value={
-                                    keywordDrafts[
-                                      `fragment:${activeStep.step_key}:${fragmentIndex}`
-                                    ] ?? formatKeywords(fragment.keywords)
-                                  }
-                                  placeholder="вода, пруд, купание"
-                                  onChange={(event) => {
-                                    const rawValue = event.target.value;
-                                    setKeywordDrafts((current) => ({
-                                      ...current,
-                                      [`fragment:${activeStep.step_key}:${fragmentIndex}`]:
-                                        rawValue,
-                                    }));
-                                    updateChoiceFragment(
-                                      selectedStep,
-                                      null,
-                                      fragmentIndex,
-                                      (currentFragment) => ({
-                                        ...currentFragment,
-                                        keywords: parseKeywords(rawValue),
-                                      }),
-                                    );
-                                    markDirty(`fragments:${activeStep.step_key}`);
-                                    markDirty(activeStepKey);
-                                  }}
-                                  onBlur={() => {
-                                    setKeywordDrafts((current) => ({
-                                      ...current,
-                                      [`fragment:${activeStep.step_key}:${fragmentIndex}`]:
-                                        formatKeywords(fragment.keywords),
-                                    }));
                                   }}
                                 />
                               </label>

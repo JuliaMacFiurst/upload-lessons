@@ -115,42 +115,18 @@ const CANONICAL_QUIZ_FORMAT = formatObject([
 
 const CANONICAL_STORY_TEXT_FORMAT = formatObject([
   formatField("text", '"..."'),
-  formatField("keywords", formatArray('"..."')),
+  formatField("short_text", '"..."'),
 ]);
 
-const CANONICAL_STORY_TEMPLATE_FORMAT = formatObject([
-  formatField("title", '"..."'),
-  formatField(
-    "steps",
-    formatArray(
-      formatObject([
-        formatField("step_key", '"narration"'),
-        formatField("question", '"..."'),
-        formatField(
-          "choices",
-          formatArray(
-            formatObject([
-              formatField("text", '"..."'),
-              formatField("keywords", formatArray('"..."')),
-            ]),
-          ),
-        ),
-      ]),
-    ),
-  ),
-  formatField(
-    "fragments",
-    formatArray(
-      formatObject([
-        formatField("step_key", '"intro"'),
-        formatField("choice_index", "0"),
-        formatField("text", '"..."'),
-        formatField("keywords", formatArray('"..."')),
-      ]),
-    ),
-  ),
-  formatField("twists", formatArray(CANONICAL_STORY_TEXT_FORMAT)),
+const CANONICAL_STORY_FRAGMENT_ONLY_FORMAT = formatObject([formatField("text", '"..."')]);
+
+const CANONICAL_STORY_TEMPLATE_CHOICE_WITH_FRAGMENTS_FORMAT = formatObject([
+  formatField("text", '"..."'),
+  formatField("short_text", '"..."'),
+  formatField("fragments", formatArray(CANONICAL_STORY_FRAGMENT_ONLY_FORMAT)),
 ]);
+
+const CANONICAL_STORY_TEMPLATE_FORMAT = `{"title":"...","steps":[{"step_key":"narration","question":"...","narration":"..."},{"step_key":"intro","question":"...","choices":[${CANONICAL_STORY_TEMPLATE_CHOICE_WITH_FRAGMENTS_FORMAT}]},{"step_key":"journey","question":"...","choices":[${CANONICAL_STORY_TEMPLATE_CHOICE_WITH_FRAGMENTS_FORMAT}]},{"step_key":"problem","question":"...","choices":[${CANONICAL_STORY_TEMPLATE_CHOICE_WITH_FRAGMENTS_FORMAT}]},{"step_key":"solution","question":"...","choices":[${CANONICAL_STORY_TEMPLATE_CHOICE_WITH_FRAGMENTS_FORMAT}]},{"step_key":"ending","question":"...","choices":[${CANONICAL_STORY_TEMPLATE_CHOICE_WITH_FRAGMENTS_FORMAT}]}],"twists":[{"text":"..."}]}`;
 
 const CANONICAL_FULL_BOOK_FORMAT = formatObject([
   formatField("description", '"..."'),
@@ -326,7 +302,14 @@ export function buildStoryPartPrompt(input: {
     '- step_key MUST be one of: ["narration","intro","journey","problem","solution","ending"]',
     "",
     'IF kind != "step":',
-    CANONICAL_STORY_TEXT_FORMAT,
+    input.kind === "fragment"
+      ? formatObject([
+          formatField("text", '"..."'),
+          formatField("short_text", '"..."'),
+        ])
+      : formatObject([
+          formatField("text", '"..."'),
+        ]),
     "",
     "RULES:",
     input.kind === "choice"
@@ -343,27 +326,32 @@ export function buildStoryPartPrompt(input: {
       : "- no contradictions",
     input.kind === "choice"
       ? "- For kind \"choice\", do not write multiple sentences."
-      : "- keywords MUST be an array of strings",
+      : input.kind === "fragment"
+        ? '- short_text MUST be a short answer string.'
+        : "- Return only one text field.",
     input.kind === "choice"
       ? "- For kind \"choice\", do not write scene setup, background, weather, or narration."
-      : "- keywords: 3–8 items",
+      : input.kind === "fragment"
+        ? "- short_text should be 2-6 words."
+        : "- No short_text or keywords for twists.",
     input.kind === "choice"
       ? "- For kind \"choice\", do not write descriptions before the action."
-      : "- keywords: lowercase",
+      : input.kind === "fragment"
+        ? "- short_text should briefly summarize what happened."
+        : "- Keep the twist compact and readable.",
     input.kind === "choice"
       ? "- Correct examples: \"Пойдёт к старому дереву\", \"Откроет странную коробку\", \"Поговорит с незнакомцем\", \"Побежит за странным звуком\"."
-      : "- keywords: no duplicates",
+      : input.kind === "fragment"
+        ? "- short_text must stay simple and child-friendly."
+        : "- Do not add extra fields.",
     input.kind === "choice"
       ? "- Incorrect examples: \"Яркое солнце грело...\", \"Она сидела и думала...\", \"Вдруг произошло что-то...\"."
-      : "- keywords: no empty strings",
+      : input.kind === "fragment"
+        ? "- Do not return keywords for fragments."
+        : "- Do not return short_text for twists."
+    ,
     input.kind === "choice"
-      ? "- keywords MUST be an array of strings."
-      : "",
-    input.kind === "choice"
-      ? "- keywords: 3–8 items."
-      : "",
-    input.kind === "choice"
-      ? "- keywords: lowercase, no duplicates, no empty strings."
+      ? "- Return only the text field for choices."
       : "",
     input.kind === "twist"
       ? "- For kind \"twist\", text MUST be short and no longer than 220 characters."
@@ -383,6 +371,12 @@ export function buildStoryPartPrompt(input: {
     input.kind === "fragment" && storyRole === "narration"
       ? "- Introduce the hero, setting, and starting situation in 1-2 short sentences."
       : "- Continue the selected choice instead of repeating it.",
+    input.kind === "fragment" && storyRole === "narration"
+      ? "- For narration, the hero is provided separately in the dedicated hero field."
+      : "",
+    input.kind === "fragment" && storyRole === "narration"
+      ? "- Do not generate a separate short_text field for narration."
+      : "",
     input.kind === "fragment" && storyRole === "intro"
       ? "- For kind \"fragment\" in intro, add one sensory detail, mood, or memorable image."
       : "",
@@ -408,7 +402,7 @@ export function buildStoryPartPrompt(input: {
     "- Does it match schema exactly?",
     "- Are all required fields present?",
     "- Are values non-empty?",
-    "- Are keywords array of strings?",
+    input.kind === "fragment" ? "- Is short_text present?" : "- Is only the text field present?",
     "- Does the story make sense?",
     "- If ANY answer is NO -> FIX before returning.",
     "",
@@ -467,7 +461,7 @@ export function buildMissingStoryChoicesPrompt(input: {
     "Нельзя менять уже существующие варианты.",
     "Нужно сгенерировать только недостающие варианты для этого шага.",
     `Нужно вернуть ровно ${input.count} новых вариантов.`,
-    'Формат ответа: {"choices":[{"text":"...","fragment":"...","keywords":["..."]}]}',
+    'Формат ответа: {"choices":[{"text":"...","fragment":"...","short_text":"..."}]}',
     "Требования к choices:",
     "- Каждый choice должен быть коротким действием героя.",
     "- Только одна короткая фраза.",
@@ -475,6 +469,7 @@ export function buildMissingStoryChoicesPrompt(input: {
     "- Не длиннее 120 символов.",
     "- Без описаний, без вступления, без нескольких предложений.",
     "- Каждый новый choice должен вести историю в другую сторону и не повторять существующие варианты.",
+    "- Для каждого choice добавь short_text: краткий ответ ребёнка в 3-6 слов.",
     "Требования к fragments:",
     "- Каждый fragment должен быть одним коротким предложением.",
     "- Fragment должен развивать choice, а не повторять его.",
@@ -542,20 +537,25 @@ export function buildStoryTemplatePrompt(input: {
     "- Если название истории не задано, придумай оригинальное детское название с лёгкой загадкой, образом или смешной деталью.",
     "- Ровно 6 stages: narration, intro, journey, problem, solution, ending.",
     "- narration это отдельный открывающий этап до первого вопроса ребёнку.",
-    "- В narration должен быть step_key = narration, короткий opening question/label и пустой массив choices.",
-    "- У intro, journey, problem, solution, ending должно быть по 3 choices.",
+    "- Первый шаг MUST быть exactly: { step_key: \"narration\", question: string, narration: string }.",
+    "- narration.question MUST содержать героя.",
+    "- narration.narration MUST содержать открывающий текст.",
+    "- У intro, journey, problem, solution, ending должно быть ровно по 3 choices.",
     "- Все step_key MUST быть только из списка: narration, intro, journey, problem, solution, ending.",
-    "- На каждый шаг ровно 3 варианта выбора.",
+    "- У каждого step MUST быть question.",
+    "- У каждого choice MUST быть text, short_text и fragments.",
+    "- У каждого choice.fragments MUST быть минимум 1 объект с полем text.",
     "- На каждый вариант 1 или 2 фрагмента.",
     "- 3 неожиданных добрых поворота.",
     "- История должна оставаться связной при любом выборе.",
     "- Для intro три choice должны вести историю в разные стороны, а не повторять одну и ту же идею.",
     "- Для intro сделай: один исследовательский вариант, один игровой или социальный вариант, один необычный или любопытный вариант.",
     "- Для intro fragments должны добавлять короткую деталь, настроение или образ, а не пересказывать choice.",
-    "- Каждый choice MUST быть объектом с полями text и keywords.",
-    "- keywords MUST всегда быть массивом строк.",
-    "- fragments MUST использовать поле choice_index.",
-    "- twists MUST быть массивом объектов с полями text и keywords.",
+    "- В output НЕ ДОЛЖНО быть отдельного верхнеуровневого массива fragments.",
+    "- Каждый choice MUST быть объектом с полями text, short_text, fragments.",
+    "- Каждый fragment MUST быть объектом только с полем text.",
+    "- twists MUST быть массивом объектов только с полем text.",
+    "- Никаких keywords нигде.",
     "- Не переименовывай поля.",
     "- Не добавляй лишние поля.",
     "- Если структура отличается, ответ считается неверным.",

@@ -14,11 +14,6 @@ function normalizeText(value: string) {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function hasDuplicateKeywords(values: string[]) {
-  const normalized = values.map(normalizeText).filter(Boolean);
-  return new Set(normalized).size !== normalized.length;
-}
-
 function similarityKey(choice: StoryContractChoice) {
   return normalizeText(choice.text)
     .replace(/[.,!?;:]/g, "")
@@ -68,8 +63,11 @@ export function validateStoryStructure(
     }
 
     if (expectedStepKey === "narration") {
+      if (!step.question.trim()) {
+        errors.push("Не указан герой");
+      }
       if (!step.sharedFragment?.text.trim()) {
-        warnings.push("Step narration does not have opening narration yet.");
+        errors.push("Step narration does not have opening narration yet.");
       }
       return;
     }
@@ -79,24 +77,18 @@ export function validateStoryStructure(
       if (!choice.text.trim()) {
         errors.push(`Step ${expectedStepKey}, choice ${choiceIndex + 1} has empty text.`);
       }
+      if (!choice.short_text.trim()) {
+        errors.push(`Step ${expectedStepKey}, choice ${choiceIndex + 1} has empty short_text.`);
+      }
 
       if (choice.fragments.length < 1) {
         errors.push(`Step ${expectedStepKey}, choice ${choiceIndex + 1} must have at least 1 fragment.`);
-      }
-
-      if (hasDuplicateKeywords(choice.keywords)) {
-        warnings.push(`Step ${expectedStepKey}, choice ${choiceIndex + 1} has duplicate keywords.`);
       }
 
       choice.fragments.forEach((fragment, fragmentIndex) => {
         if (!fragment.text.trim()) {
           errors.push(
             `Step ${expectedStepKey}, choice ${choiceIndex + 1}, fragment ${fragmentIndex + 1} has empty text.`,
-          );
-        }
-        if (hasDuplicateKeywords(fragment.keywords)) {
-          warnings.push(
-            `Step ${expectedStepKey}, choice ${choiceIndex + 1}, fragment ${fragmentIndex + 1} has duplicate keywords.`,
           );
         }
       });

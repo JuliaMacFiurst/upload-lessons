@@ -15,25 +15,24 @@ export type StoryPath = Record<StoryFlowKey, 0 | 1 | 2>;
 
 export type StoryContractFragment = {
   text: string;
-  keywords: string[];
 };
 
 export type StoryContractChoice = {
   text: string;
-  keywords: string[];
+  short_text: string;
   fragments: StoryContractFragment[];
 };
 
 export type StoryContractStep = {
   step_key: StoryFlowKey;
   question: string;
+  short_text?: string;
   choices: [StoryContractChoice, StoryContractChoice, StoryContractChoice];
   sharedFragment?: StoryContractFragment;
 };
 
 export type StoryContractTwist = {
   text: string;
-  keywords: string[];
 };
 
 export type StoryContractTemplate = {
@@ -68,11 +67,11 @@ export type StoryContractAdaptation = {
 export type StoryTemplateSource = Pick<StoryTemplateInput, "steps" | "fragments" | "twists">;
 
 export function createEmptyContractFragment(): StoryContractFragment {
-  return { text: "", keywords: [] };
+  return { text: "" };
 }
 
 export function createEmptyContractChoice(): StoryContractChoice {
-  return { text: "", keywords: [], fragments: [] };
+  return { text: "", short_text: "", fragments: [] };
 }
 
 export function createEmptyContractStep(step_key: StoryFlowKey): StoryContractStep {

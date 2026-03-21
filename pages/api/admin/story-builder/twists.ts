@@ -1,7 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { z, ZodError } from "zod";
 import {
-  normalizeKeywords,
   requireAdminSession,
   saveStoryTwists,
 } from "../../../../lib/server/book-admin";
@@ -24,13 +23,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         twists: ((data ?? []) as Array<{
           id: string;
           text: string;
-          keywords: string[] | null;
           age_group: string | null;
           is_published: boolean | null;
         }>).map((twist) => ({
           id: twist.id,
           text: twist.text,
-          keywords: normalizeKeywords(twist.keywords),
           age_group: twist.age_group,
           is_published: twist.is_published ?? true,
         })),
