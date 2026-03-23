@@ -59,6 +59,13 @@ export const storyChoiceSchema = canonicalStoryChoiceSchema.extend({
   sort_order: z.number().int().min(0).default(0),
 });
 
+export const storyChoiceDraftSchema = z.object({
+  id: z.string().uuid().optional(),
+  text: z.string().trim().max(220).optional().default(""),
+  short_text: z.string().trim().max(220).optional().nullable(),
+  sort_order: z.number().int().min(0).default(0),
+});
+
 export const storyStepSchema = canonicalStoryStepSchema.extend({
   id: z.string().uuid().optional(),
   short_text: z.string().trim().max(220).optional().nullable(),
@@ -67,12 +74,31 @@ export const storyStepSchema = canonicalStoryStepSchema.extend({
   choices: z.array(storyChoiceSchema).max(8),
 });
 
+export const storyStepDraftSchema = z.object({
+  id: z.string().uuid().optional(),
+  step_key: z.enum(STORY_ROLE_KEYS),
+  question: z.string().trim().max(300).optional().default(""),
+  short_text: z.string().trim().max(220).optional().nullable(),
+  narration: z.string().trim().max(1000).optional().nullable(),
+  sort_order: z.number().int().min(0).default(0),
+  choices: z.array(storyChoiceDraftSchema).max(8),
+});
+
 export const storyFragmentSchema = canonicalStoryFragmentSchema.extend({
   id: z.string().uuid().optional(),
   choice_id: z.string().uuid().optional().nullable(),
   choice_temp_key: z.string().trim().optional().nullable(),
   sort_order: z.number().int().min(0).default(0),
 }).omit({ choice_index: true });
+
+export const storyFragmentDraftSchema = z.object({
+  id: z.string().uuid().optional(),
+  step_key: z.enum(STORY_ROLE_KEYS),
+  choice_id: z.string().uuid().optional().nullable(),
+  choice_temp_key: z.string().trim().optional().nullable(),
+  text: z.string().trim().max(500).optional().default(""),
+  sort_order: z.number().int().min(0).default(0),
+});
 
 export const storyTwistSchema = canonicalStoryTwistSchema.extend({
   id: z.string().uuid().optional(),
@@ -88,11 +114,28 @@ export const storyTemplateSchema = z.object({
     .trim()
     .min(1, "Template slug is required.")
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Template slug must use lowercase letters, numbers, and hyphens."),
+  description: z.string().trim().max(1200).optional().nullable(),
+  keywords: z.array(z.string().trim().min(1).max(60)).max(30).optional().default([]),
+  age_group: z.string().trim().max(120).optional().nullable(),
   hero_name: z.string().trim().max(220).optional().nullable(),
   is_published: z.boolean().default(true),
   steps: z.array(storyStepSchema).max(12),
   fragments: z.array(storyFragmentSchema).max(60),
   twists: z.array(storyTwistSchema).max(30),
+});
+
+export const storyTemplateDraftSchema = z.object({
+  id: z.string().uuid().optional(),
+  name: z.string().trim().max(160).optional().default(""),
+  slug: z.string().trim().max(160).optional().default(""),
+  description: z.string().trim().max(1200).optional().nullable(),
+  keywords: z.array(z.string().trim().min(1).max(60)).max(30).optional().default([]),
+  age_group: z.string().trim().max(120).optional().nullable(),
+  hero_name: z.string().trim().max(220).optional().nullable(),
+  is_published: z.boolean().default(true),
+  steps: z.array(storyStepDraftSchema).max(12).default([]),
+  fragments: z.array(storyFragmentDraftSchema).max(60).default([]),
+  twists: z.array(storyTwistSchema).max(30).default([]),
 });
 
 export const bookEditorPayloadSchema = z.object({

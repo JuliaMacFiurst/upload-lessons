@@ -5,6 +5,8 @@ import { requireAdminSession } from "../../../../lib/server/book-admin";
 type TemplateRow = {
   id: string;
   name: string;
+  description: string | null;
+  age_group: string | null;
   hero_name: string | null;
 };
 
@@ -39,7 +41,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const supabase = await requireAdminSession(req, res);
     const [templatesRes, stepsRes, choicesRes, fragmentsRes] = await Promise.all([
-      supabase.from("story_templates").select("id,name,hero_name").order("name"),
+      supabase.from("story_templates").select("id,name,description,age_group,hero_name").order("name"),
       supabase.from("story_steps").select("id,template_id,step_key,question,short_text,narration"),
       supabase
         .from("story_choices")
@@ -134,8 +136,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           id: template.id,
           name: template.name,
           hero_name: template.hero_name,
-          description: null,
-          age_group: null,
+          description: template.description,
+          age_group: template.age_group,
           step_key,
           choices_count: step_key === "narration" ? (narrationFilled ? 1 : 0) : validChoices.length,
           narration_filled: narrationFilled,

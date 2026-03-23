@@ -20,6 +20,13 @@ function toContractFragment(text: string): StoryContractFragment {
   };
 }
 
+function getChoiceStoryText(choice: StoryTemplateInput["steps"][number]["choices"][number] | undefined) {
+  if (!choice) {
+    return "История продолжается...";
+  }
+  return choice.short_text?.trim() || choice.text.trim() || "История продолжается...";
+}
+
 function findChoiceIndex(step: StoryTemplateInput["steps"][number] | undefined, fragment: StoryTemplateInput["fragments"][number]) {
   if (!step) {
     return null;
@@ -108,6 +115,21 @@ export function adaptStoryTemplateToContract(source: StoryTemplateSource): Story
     step.choices[choiceIndex].fragments.push(contractFragment);
   });
 
+  steps.forEach((step, stepIndex) => {
+    if (step.step_key === "narration") {
+      return;
+    }
+    step.choices.forEach((choice, choiceIndex) => {
+      if (choice.fragments.length > 0) {
+        return;
+      }
+      const sourceStep = source.steps.find((item) => item.step_key === step.step_key);
+      const sourceChoice = sourceStep?.choices[choiceIndex];
+      console.warn("[Story Builder] No fragments for choice", sourceChoice?.id ?? `${step.step_key}:${choiceIndex}`);
+      choice.fragments.push(toContractFragment(getChoiceStoryText(sourceChoice)));
+    });
+  });
+
   return {
     template: {
       steps,
@@ -135,12 +157,13 @@ export function buildStory(
     const choiceIndex = path[stepKey];
     const choice = stepData.choices[choiceIndex];
     const fragment = choice?.fragments[0];
+    const fallbackText = choice?.short_text?.trim() || choice?.text?.trim() || "История продолжается...";
 
     result.push({
       step: stepKey,
       question: stepData.question,
       choice: choice?.text ?? "",
-      text: fragment?.text ?? "",
+      text: fragment?.text || fallbackText,
       ...(stepData.sharedFragment?.text ? { sharedText: stepData.sharedFragment.text } : {}),
     });
 

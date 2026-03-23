@@ -24,7 +24,12 @@ function similarityKey(choice: StoryContractChoice) {
 
 function collectStepNarrativeText(template: StoryContractTemplate, stepIndex: number) {
   const step = template.steps[stepIndex];
-  const fragmentsText = step.choices.flatMap((choice) => choice.fragments.map((fragment) => fragment.text));
+  const fragmentsText = step.choices.flatMap((choice) => {
+    if (choice.fragments.length > 0) {
+      return choice.fragments.map((fragment) => fragment.text);
+    }
+    return [choice.short_text || choice.text || "История продолжается..."];
+  });
   const shared = step.sharedFragment?.text ? [step.sharedFragment.text] : [];
   return [step.question, ...fragmentsText, ...shared].join(" ").trim();
 }
@@ -81,8 +86,8 @@ export function validateStoryStructure(
         errors.push(`Step ${expectedStepKey}, choice ${choiceIndex + 1} has empty short_text.`);
       }
 
-      if (choice.fragments.length < 1) {
-        errors.push(`Step ${expectedStepKey}, choice ${choiceIndex + 1} must have at least 1 fragment.`);
+      if (choice.fragments.length === 0) {
+        warnings.push(`Step ${expectedStepKey}, choice ${choiceIndex + 1} has no fragments. Fragments are optional, but make the story richer.`);
       }
 
       choice.fragments.forEach((fragment, fragmentIndex) => {

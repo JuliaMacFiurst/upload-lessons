@@ -219,6 +219,12 @@
   color: #1f7a38;
 }
 
+.books-button--delete {
+  background: #fff1f0;
+  border-color: #f0c2c2;
+  color: #9a2e2e;
+}
+
 .books-collapse {
   width: 100%;
   border: 0;

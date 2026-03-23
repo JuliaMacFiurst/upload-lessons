@@ -257,6 +257,14 @@ function saveButtonClass(state: Record<string, "saved" | "dirty">, key: string) 
     : "books-button books-button--primary";
 }
 
+function stripNullId<T extends { id?: string | null }>(item: T): Omit<T, "id"> | T {
+  if (item.id == null || item.id === "") {
+    const { ...rest } = item;
+    return rest;
+  }
+  return item;
+}
+
 function generateSlug(title: string) {
   return (
     slugifyRu(title) ||
@@ -326,6 +334,9 @@ function createEmptyTemplate(index: number): StoryBuilderTemplate {
   return normalizeTemplateChoices({
     name: `Шаблон истории ${index + 1}`,
     slug: `story-template-${index + 1}`,
+    description: null,
+    keywords: [],
+    age_group: null,
     hero_name: "",
     is_published: true,
     steps: STORY_ROLE_KEYS.map((role, roleIndex) => ({
@@ -462,19 +473,12 @@ function formatIls(value: number) {
 
 function findFirstIncompleteChoiceIndex(
   step: StoryBuilderTemplate["steps"][number],
-  fragments: StoryBuilderTemplate["fragments"],
 ): number {
-  return step.choices.findIndex((choice, choiceIndex) => {
+  return step.choices.findIndex((choice) => {
     const hasText = choice.text.trim().length > 0;
     const hasShortText = (choice.short_text?.trim().length ?? 0) > 0;
-    const hasFragment = fragments.some(
-      (fragment) =>
-        fragment.step_key === step.step_key &&
-        fragment.choice_temp_key === String(choiceIndex) &&
-        fragment.text.trim().length > 0,
-    );
 
-    return !hasText || !hasShortText || !hasFragment;
+    return !hasText || !hasShortText;
   });
 }
 
@@ -495,16 +499,10 @@ function getStepCompletionStats(
       stepComplete: heroComplete && narrationComplete,
     };
   }
-  const validChoicesCount = step.choices.filter((choice, choiceIndex) => {
+  const validChoicesCount = step.choices.filter((choice) => {
     const hasText = choice.text.trim().length > 0;
     const hasShortText = (choice.short_text?.trim().length ?? 0) > 0;
-    const hasFragment = fragments.some(
-      (fragment) =>
-        fragment.step_key === step.step_key &&
-        fragment.choice_temp_key === String(choiceIndex) &&
-        fragment.text.trim().length > 0,
-    );
-    return hasText && hasShortText && hasFragment;
+    return hasText && hasShortText;
   }).length;
   const choiceFragmentsCount = step.choices.filter((_, choiceIndex) =>
     fragments.some(
@@ -800,10 +798,7 @@ export default function StoryBuilderPage() {
     if (!nextStep) {
       return;
     }
-    const firstProblemChoiceIndex = findFirstIncompleteChoiceIndex(
-      nextStep,
-      currentTemplate.fragments,
-    );
+    const firstProblemChoiceIndex = findFirstIncompleteChoiceIndex(nextStep);
     setPreviewPath((current) => ({
       ...current,
       [nextStep.step_key]:
@@ -868,23 +863,68 @@ export default function StoryBuilderPage() {
     setSuccess(null);
   };
 
-  const buildTemplateMetaPayload = (template: StoryBuilderTemplate) => ({
-    id: template.id,
+  const buildStoryTemplatePayload = (template: StoryBuilderTemplate) => ({
+    ...template,
     name: template.name.trim(),
     slug: generateSlug(template.slug || template.name),
+    description: template.description?.trim() || null,
+    keywords: template.keywords ?? [],
+    age_group: template.age_group?.trim() || null,
     hero_name: template.hero_name?.trim() || null,
-    is_published: template.is_published,
+    is_published: template.is_published ?? true,
+    steps: STORY_ROLE_KEYS.map((role, index) => {
+      const step = template.steps.find((item) => item.step_key === role);
+      return stripNullId({
+        id: step?.id ?? null,
+        step_key: role,
+        question: role === "narration" ? NARRATION_QUESTION : (step?.question?.trim() || ROLE_QUESTIONS_RU[role]),
+        short_text: role === "narration" ? null : (step?.short_text?.trim() || null),
+        narration: step?.narration?.trim() || null,
+        sort_order: index,
+        choices: role === "narration"
+          ? []
+          : (step?.choices ?? []).map((choice, choiceIndex) => stripNullId({
+              id: choice.id ?? null,
+              text: choice.text,
+              short_text: choice.short_text ?? "",
+              sort_order: choice.sort_order ?? choiceIndex,
+            })),
+      });
+    }),
+    fragments: template.fragments
+      .filter((fragment) => fragment.text.trim().length > 0)
+      .map((fragment, index) => stripNullId({
+        ...fragment,
+        id: fragment.id ?? null,
+        sort_order: fragment.sort_order ?? index,
+      })),
   });
 
-  const persistTemplateMeta = async (template: StoryBuilderTemplate) =>
-    fetchJson<{ template: StoryBuilderTemplate }>(
+  const persistStoryTemplate = async (template: StoryBuilderTemplate) =>
+    fetchJson<{ ok: true; template: StoryBuilderTemplate; warnings: string[] }>(
       "/api/admin/story-builder/template",
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildTemplateMetaPayload(template)),
+        body: JSON.stringify({
+          ...buildStoryTemplatePayload(template),
+          mode: "draft",
+        }),
       },
     );
+
+  const markStoryTemplateSaved = () => {
+    setSaveState((current) => ({
+      ...current,
+      template: "saved",
+      ...Object.fromEntries(
+        STORY_ROLE_KEYS.flatMap((role) => [
+          [`step:${role}`, "saved"],
+          [`fragments:${role}`, "saved"],
+        ]),
+      ),
+    }));
+  };
 
   const isStepDirty = (stepKey: StoryRoleKey) =>
     saveState[`step:${stepKey}`] === "dirty" || saveState[`fragments:${stepKey}`] === "dirty";
@@ -894,26 +934,22 @@ export default function StoryBuilderPage() {
     if (!templateSnapshot) {
       return null;
     }
-    if (!templateSnapshot.name.trim()) {
-      throw new Error("Не удалось сохранить шаблон. Заполните название.");
-    }
 
     setBusyKey("template-save");
     setError(null);
     try {
-      const data = await persistTemplateMeta(templateSnapshot);
-      updateActiveTemplate((current) => ({
-        ...current,
-        id: data.template.id,
-        slug: data.template.slug,
-        name: data.template.name,
-        hero_name: data.template.hero_name ?? "",
-      }));
+      const data = await persistStoryTemplate(templateSnapshot);
+      setActiveTemplate(normalizeTemplateChoices(data.template));
       setSelectedTemplateId(data.template.id ?? DRAFT_TEMPLATE_ID);
-      markSaved("template");
+      markStoryTemplateSaved();
+      setTemplateWarnings(data.warnings);
       await loadOverview();
       if (!options?.silent) {
-        showSuccess("Шаблон сохранён: название, slug и герой.");
+        showSuccess(
+          data.warnings.length > 0
+            ? "Черновик сохранён с предупреждениями."
+            : "Шаблон сохранён: название, slug и герой.",
+        );
       }
       return data.template;
     } catch (fetchError) {
@@ -939,94 +975,30 @@ export default function StoryBuilderPage() {
       return null;
     }
 
-    const stepSaveKey = `step:${step.step_key}`;
-    const fragmentsSaveKey = `fragments:${step.step_key}`;
     setBusyKey(`step-save:${step.step_key}`);
     setError(null);
     try {
-      const roleFragments = templateSnapshot.fragments.filter(
-        (fragment) => fragment.step_key === step.step_key,
-      );
-      const partialStep = {
-        ...step,
-        question: step.step_key === "narration"
-          ? NARRATION_QUESTION
-          : step.question.trim(),
-        short_text: step.short_text?.trim() ?? null,
-        choices: step.choices
-          .filter((choice) => choice.text.trim() !== "")
-          .map((choice, choiceIndex) => ({
-            ...choice,
-            text: choice.text.trim(),
-            short_text: choice.short_text?.trim() ?? "",
-            sort_order: choice.sort_order ?? choiceIndex,
-          })),
-      };
-      const nonEmptyFragments = roleFragments
-        .filter((fragment) => fragment.text.trim() !== "")
-        .map((fragment, fragmentIndex) => ({
-          ...fragment,
-          choice_id: null,
-          text: fragment.text.trim(),
-          sort_order: fragment.sort_order ?? fragmentIndex,
-        }));
+      const result = await persistStoryTemplate(templateSnapshot);
+      const persisted = result.template;
 
-      if (step.step_key !== "narration" && !partialStep.question) {
-        throw new Error("Заполните вопрос для ребёнка перед сохранением шага.");
-      }
-
-      const savedTemplate = (await persistTemplateMeta(templateSnapshot)).template;
-      if (!savedTemplate?.id) {
-        throw new Error("Сначала сохраните шаблон истории.");
-      }
-
-      const stepResponse = await fetchJson<{ step: StoryBuilderTemplate["steps"][number] }>(
-        "/api/admin/story-builder/step",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            templateId: savedTemplate.id,
-            step: partialStep,
-          }),
-        },
-      );
-
-      await fetchJson<{ fragments: StoryBuilderTemplate["fragments"] }>(
-        "/api/admin/story-builder/fragments",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            templateId: savedTemplate.id,
-            role: step.step_key,
-            fragments: nonEmptyFragments,
-            steps: [stepResponse.step],
-          }),
-        },
-      );
-
-      const persistedTemplate = await fetchJson<{ template: StoryBuilderTemplate }>(
-        `/api/admin/story-builder/template?id=${encodeURIComponent(savedTemplate.id)}`,
-      );
-
-      setActiveTemplate(normalizeTemplateChoices(persistedTemplate.template));
+      setActiveTemplate(normalizeTemplateChoices(persisted));
       setIsSlugManuallyEdited(
-        persistedTemplate.template.slug !== generateSlug(persistedTemplate.template.name),
+        persisted.slug !== generateSlug(persisted.name),
       );
 
-      markSaved(stepSaveKey);
-      markSaved(fragmentsSaveKey);
-      markSaved("template");
+      markStoryTemplateSaved();
+      setTemplateWarnings(result.warnings);
       await loadOverview();
       if (!options?.silent) {
         showSuccess(
-          step.step_key === "narration"
-            ? "Сохранено вступление: герой и начало истории."
-            : `Сохранён шаг ${ROLE_LABELS_RU[step.step_key].toLowerCase()} и его фрагменты.`,
+          result.warnings.length > 0
+            ? "Черновик шага сохранён с предупреждениями."
+            : step.step_key === "narration"
+              ? "Сохранено вступление: герой и начало истории."
+              : `Сохранён шаг ${ROLE_LABELS_RU[step.step_key].toLowerCase()} и его фрагменты.`,
         );
       }
-      return persistedTemplate.template;
+      return persisted;
     } catch (fetchError) {
       const message = fetchError instanceof Error ? fetchError.message : String(fetchError);
       showSaveError(message);
@@ -1053,6 +1025,39 @@ export default function StoryBuilderPage() {
 
     if (saveState.template === "dirty") {
       await saveTemplateMetaState(options);
+    }
+  };
+
+  const deleteActiveTemplate = async () => {
+    const templateSnapshot = activeTemplateRef.current;
+    if (!templateSnapshot?.id || templateSnapshot.id === DRAFT_TEMPLATE_ID) {
+      closeEditor();
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Удалить шаблон и все связанные данные? Это действие нельзя отменить.",
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setBusyKey("template-delete");
+    setError(null);
+    try {
+      await fetchJson<{ ok: true }>(
+        `/api/admin/story-builder/template?id=${encodeURIComponent(templateSnapshot.id)}`,
+        {
+          method: "DELETE",
+        },
+      );
+      await loadOverview();
+      closeEditor();
+      showSuccess("Шаблон удалён вместе со связанными шагами, вариантами и фрагментами.");
+    } catch (fetchError) {
+      showSaveError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setBusyKey(null);
     }
   };
 
@@ -1140,7 +1145,11 @@ export default function StoryBuilderPage() {
   };
 
   const saveTemplate = async () => {
-    await saveTemplateMetaState();
+    try {
+      await saveTemplateMetaState();
+    } catch {
+      // errors are handled inside saveTemplateMetaState
+    }
   };
 
   const buildGenerationContext = (
@@ -1296,7 +1305,11 @@ export default function StoryBuilderPage() {
   };
 
   const saveStep = async () => {
-    await saveStepState(selectedStep);
+    try {
+      await saveStepState(selectedStep);
+    } catch {
+      // errors are handled inside saveStepState
+    }
   };
 
   const generateChoice = async (choiceIndex: number) => {
@@ -2106,7 +2119,7 @@ export default function StoryBuilderPage() {
                 <button
                   type="button"
                   className={saveButtonClass(saveState, "template")}
-                  disabled={busyKey === "template-save"}
+                  disabled={busyKey === "template-save" || busyKey === "template-delete"}
                   onClick={() => {
                     void saveTemplate();
                   }}
@@ -2116,6 +2129,16 @@ export default function StoryBuilderPage() {
                     : saveState.template === "saved"
                       ? "Шаблон сохранён"
                       : "Сохранить шаблон"}
+                </button>
+                <button
+                  type="button"
+                  className="books-button books-button--delete"
+                  disabled={busyKey === "template-delete" || busyKey === "template-save"}
+                  onClick={() => {
+                    void deleteActiveTemplate();
+                  }}
+                >
+                  {busyKey === "template-delete" ? "Удаляю шаблон..." : "Удалить шаблон"}
                 </button>
               </div>
             </div>

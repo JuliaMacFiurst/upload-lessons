@@ -38,6 +38,8 @@ import {
   bookTestSchema,
   storyFragmentSchema,
   storyStepSchema,
+  storyTemplateDraftSchema,
+  storyTemplateSchema,
   storyTwistSchema,
   type BookEditorPayload,
   type BookEditorResponse,
@@ -99,6 +101,9 @@ type StoryTemplateRow = {
   id: string;
   name: string;
   slug: string;
+  description: string | null;
+  keywords: string[] | null;
+  age_group: string | null;
   hero_name: string | null;
   is_published: boolean | null;
 };
@@ -152,6 +157,14 @@ const STORY_ROLE_QUESTIONS: Record<StoryRoleKey, string> = {
   problem: "Что пошло не так в пути?",
   solution: "Как герой справится с проблемой?",
   ending: "Чем закончится эта история?",
+};
+const STORY_ROLE_LABELS_RU: Record<StoryRoleKey, string> = {
+  narration: "Наррация",
+  intro: "Начало",
+  journey: "Путь",
+  problem: "Проблема",
+  solution: "Решение",
+  ending: "Финал",
 };
 const NARRATION_QUESTION = "Кто главный герой истории?";
 
@@ -357,6 +370,48 @@ export function safeSlug(input: string): string {
   });
 }
 
+function stripNullId<T extends { id?: string | null }>(item: T): Omit<T, "id"> | T {
+  if (item.id == null || item.id === "") {
+    const { id, ...rest } = item;
+    return rest;
+  }
+  return item;
+}
+
+function shouldPreserveNullableId(key: string | null | undefined) {
+  if (!key) {
+    return false;
+  }
+  return key === "id" || key.endsWith("_id");
+}
+
+function normalizeStrings<T>(obj: T, parentKey?: string): T {
+  if (Array.isArray(obj)) {
+    return obj.map((item) => normalizeStrings(item, parentKey)) as T;
+  }
+
+  if (obj && typeof obj === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      if (value === null) {
+        if (shouldPreserveNullableId(key)) {
+          continue;
+        }
+        result[key] = "";
+      } else {
+        result[key] = normalizeStrings(value, key);
+      }
+    }
+    return result as T;
+  }
+
+  if (obj === null) {
+    return (shouldPreserveNullableId(parentKey) ? undefined : "") as T;
+  }
+
+  return obj;
+}
+
 function logGenerationDebug(stage: string, payload: unknown) {
   logGenerationEvent(stage, payload, {
     valid: true,
@@ -381,6 +436,32 @@ export async function createUniqueBookSlug(
     const { data, error } = await query.maybeSingle();
     if (error) {
       throw new Error(`Failed to check existing slug: ${error.message}`);
+    }
+    if (!data?.id) {
+      return candidate;
+    }
+    attempt += 1;
+    candidate = `${base}-${attempt}`;
+  }
+}
+
+export async function createUniqueStoryTemplateSlug(
+  supabase: SupabaseClient,
+  input: string,
+  excludeTemplateId?: string,
+): Promise<string> {
+  const base = safeSlug(input) || "story-template";
+  let candidate = base;
+  let attempt = 1;
+
+  while (true) {
+    let query = supabase.from("story_templates").select("id").eq("slug", candidate).limit(1);
+    if (excludeTemplateId) {
+      query = query.neq("id", excludeTemplateId);
+    }
+    const { data, error } = await query.maybeSingle();
+    if (error) {
+      throw new Error(`Failed to check existing story template slug: ${error.message}`);
     }
     if (!data?.id) {
       return candidate;
@@ -700,6 +781,10 @@ function defaultStoryTemplate(book: BookTableRow): StoryTemplateInput {
   return {
     name: `${book.title} Story`,
     slug: `${baseSlug}-story`,
+    description: null,
+    keywords: [],
+    age_group: null,
+    hero_name: null,
     is_published: true,
     steps: createDefaultStorySteps(),
     fragments: [],
@@ -830,6 +915,10 @@ export async function loadBookEditorData(
       id: template.id,
       name: template.name,
       slug: template.slug,
+      description: template.description,
+      keywords: normalizeKeywords(template.keywords),
+      age_group: template.age_group,
+      hero_name: template.hero_name,
       is_published: template.is_published ?? true,
       steps,
       fragments: ((fragmentsRes.data as StoryFragmentRow[] | null) ?? []).map((fragment) => ({
@@ -1724,6 +1813,9 @@ async function loadStoryTemplateDetails(
     id: template.id,
     name: template.name,
     slug: template.slug,
+    description: template.description,
+    keywords: normalizeKeywords(template.keywords),
+    age_group: template.age_group,
     hero_name: template.hero_name ?? "",
     is_published: template.is_published ?? true,
     steps,
@@ -1787,30 +1879,42 @@ export async function saveStoryTemplateMeta(
   supabase: SupabaseClient,
   template: StoryBuilderTemplate,
 ): Promise<StoryBuilderTemplate> {
+  const normalized = normalizeStrings(template);
+  console.log("[NORMALIZED DATA]", normalized);
   const parsed = z
     .object({
       id: z.string().uuid().optional(),
       name: z.string().trim().min(1, "Template name is required.").max(160),
       slug: z.string().trim().min(1, "Template slug is required."),
+      description: z.string().trim().max(1200).optional().nullable(),
+      keywords: z.array(z.string().trim().min(1).max(60)).max(30).optional().default([]),
+      age_group: z.string().trim().max(120).optional().nullable(),
       hero_name: z.string().trim().max(220).optional().nullable(),
       is_published: z.boolean().default(true),
     })
-    .parse(template);
+    .parse(normalized);
+  const originalSlug = parsed.slug;
+  const uniqueSlug = await createUniqueStoryTemplateSlug(supabase, parsed.slug, parsed.id);
+  const sanitizedTemplateMeta = stripNullId({
+    id: parsed.id ?? null,
+    name: parsed.name,
+    slug: uniqueSlug,
+    description: parsed.description?.trim() || null,
+    keywords: normalizeKeywords(parsed.keywords),
+    age_group: parsed.age_group?.trim() || null,
+    hero_name: parsed.hero_name?.trim() || null,
+    is_published: parsed.is_published,
+  });
   const { data, error } = await supabase
     .from("story_templates")
-    .upsert({
-      id: parsed.id,
-      name: parsed.name,
-      slug: safeSlug(parsed.slug) || "story-template",
-      hero_name: parsed.hero_name?.trim() || null,
-      is_published: parsed.is_published,
-    })
+    .upsert(sanitizedTemplateMeta)
     .select("*")
     .single();
 
   if (error || !data) {
     throw new Error(error?.message ?? "Failed to save story template.");
   }
+  console.log("[SLUG FIX]", { original: originalSlug, final: uniqueSlug });
 
   const templateId = (data as StoryTemplateRow).id;
   const { error: normalizeNarrationQuestionError } = await supabase
@@ -1825,196 +1929,305 @@ export async function saveStoryTemplateMeta(
   return loadStoryTemplateDetails(supabase, data as StoryTemplateRow);
 }
 
-export async function saveStoryStepBlock(
+export async function saveStoryTemplate(
   supabase: SupabaseClient,
-  templateId: string,
-  step: StoryBuilderTemplate["steps"][number],
-): Promise<StoryBuilderTemplate["steps"][number]> {
-  const parsedStep = storyStepSchema.parse(step);
-  const role = normalizeStoryRole(parsedStep.step_key);
-  await repairStoryTemplateData(supabase, templateId);
-  const { data: savedStepData, error: stepError } = await supabase
-    .from("story_steps")
-    .upsert({
-      id: parsedStep.id,
-      template_id: templateId,
-      step_key: role,
-      question: role === "narration" ? NARRATION_QUESTION : parsedStep.question,
-      short_text: parsedStep.short_text?.trim() || null,
-      narration: parsedStep.narration?.trim() || null,
-      sort_order: parsedStep.sort_order,
-    })
+  template: StoryBuilderTemplate,
+  options?: { mode?: "draft" | "strict" },
+): Promise<{ ok: true; template: StoryBuilderTemplate; warnings: string[] }> {
+  const mode = options?.mode ?? "draft";
+  const normalized = normalizeStrings({
+    ...template,
+    description: template.description ?? null,
+    keywords: normalizeKeywords(template.keywords),
+    age_group: template.age_group ?? null,
+    hero_name: template.hero_name ?? null,
+    is_published: template.is_published ?? true,
+    steps: STORY_ROLE_KEYS.map((role, index) => {
+      const step = template.steps.find((item) => normalizeStoryRole(item.step_key) === role);
+      return {
+        id: step?.id,
+        step_key: role,
+        question: role === "narration" ? NARRATION_QUESTION : (step?.question ?? ""),
+        short_text: role === "narration" ? null : (step?.short_text ?? null),
+        narration: role === "narration" ? (step?.narration ?? "") : (step?.narration ?? null),
+        sort_order: index,
+        choices: role === "narration"
+          ? []
+          : (step?.choices ?? []).map((choice, choiceIndex) => ({
+              id: choice.id,
+              text: choice.text,
+              short_text: choice.short_text ?? "",
+              sort_order: choice.sort_order ?? choiceIndex,
+            })),
+      };
+    }),
+    fragments: template.fragments.map((fragment, index) => ({
+      ...fragment,
+      step_key: normalizeStoryRole(fragment.step_key),
+        sort_order: fragment.sort_order ?? index,
+      })),
+  });
+  console.log("[NORMALIZED DATA]", normalized);
+  const parsed = (mode === "strict" ? storyTemplateSchema : storyTemplateDraftSchema).parse(normalized);
+  const warnings: string[] = [];
+  const normalizedName = parsed.name.trim() || "Черновик истории";
+  const originalSlug = parsed.slug || parsed.name || "story-template";
+  const normalizedSlug = await createUniqueStoryTemplateSlug(
+    supabase,
+    originalSlug,
+    parsed.id,
+  );
+
+  const before = parsed.id ? await loadStoryTemplateById(supabase, parsed.id).catch(() => null) : null;
+  const sanitizedTemplateRow = stripNullId({
+    id: parsed.id ?? null,
+    name: normalizedName,
+    slug: normalizedSlug,
+    description: parsed.description?.trim() || null,
+    keywords: normalizeKeywords(parsed.keywords),
+    age_group: parsed.age_group?.trim() || null,
+    hero_name: parsed.hero_name?.trim() || null,
+    is_published: parsed.is_published,
+  });
+  const { data: templateRow, error: templateError } = await supabase
+    .from("story_templates")
+    .upsert(sanitizedTemplateRow)
     .select("*")
     .single();
+  if (templateError || !templateRow) {
+    throw new Error(templateError?.message ?? "Failed to save story template.");
+  }
+  console.log("[SLUG FIX]", { original: originalSlug, final: normalizedSlug });
 
-  if (stepError || !savedStepData) {
-    throw new Error(stepError?.message ?? "Failed to save story step.");
+  const templateId = (templateRow as StoryTemplateRow).id;
+  const { data: existingStepsData, error: existingStepsError } = await supabase
+    .from("story_steps")
+    .select("id,step_key")
+    .eq("template_id", templateId);
+  if (existingStepsError) {
+    throw new Error(existingStepsError.message);
   }
 
-  const savedStep = savedStepData as StoryStepRow;
-  const { data: existingChoices, error: existingChoicesError } = await supabase
-    .from("story_choices")
-    .select("id")
-    .eq("step_id", savedStep.id);
-
+  const existingSteps = (existingStepsData as Array<{ id: string; step_key: string }> | null) ?? [];
+  const existingStepIdByRole = new Map(
+    existingSteps.map((step) => [normalizeStoryRole(step.step_key), step.id]),
+  );
+  const existingStepIds = existingSteps.map((step) => step.id);
+  const { data: existingChoicesData, error: existingChoicesError } = existingStepIds.length > 0
+    ? await supabase
+        .from("story_choices")
+        .select("id,step_id")
+        .in("step_id", existingStepIds)
+    : { data: [], error: null };
   if (existingChoicesError) {
-    throw new Error(`Failed to load existing story choices: ${existingChoicesError.message}`);
+    throw new Error(existingChoicesError.message);
   }
+  const existingChoiceIds = ((existingChoicesData as Array<{ id: string; step_id: string }> | null) ?? [])
+    .map((choice) => choice.id);
 
-  const existingChoiceIds = ((existingChoices as Array<{ id: string }> | null) ?? []).map((choice) => choice.id);
-  if (existingChoiceIds.length > 0) {
-    const { error: unlinkFragmentsError } = await supabase
-      .from("story_fragments")
-      .update({ choice_id: null })
-      .eq("template_id", templateId)
-      .eq("step_key", role)
-      .in("choice_id", existingChoiceIds);
+  const stepRows = parsed.steps.map((step, index) =>
+    stripNullId({
+      id: step.id ?? existingStepIdByRole.get(normalizeStoryRole(step.step_key)),
+      template_id: templateId,
+      step_key: normalizeStoryRole(step.step_key),
+      question:
+        normalizeStoryRole(step.step_key) === "narration"
+          ? NARRATION_QUESTION
+          : step.question.trim(),
+      short_text:
+        normalizeStoryRole(step.step_key) === "narration"
+        ? null
+        : step.short_text?.trim() || null,
+      narration: step.narration?.trim() || null,
+      sort_order: step.sort_order ?? index,
+    }),
+  );
 
-    if (unlinkFragmentsError) {
-      throw new Error(`Failed to unlink story fragments from old choices: ${unlinkFragmentsError.message}`);
-    }
-  }
+  const stepRowsWithId = stepRows.filter((step) => "id" in step && typeof step.id === "string");
+  const stepRowsWithoutId = stepRows.filter((step) => !("id" in step));
 
-  const { error: deleteChoicesError } = await supabase.from("story_choices").delete().eq("step_id", savedStep.id);
-  if (deleteChoicesError) {
-    throw new Error(`Failed to reset story choices: ${deleteChoicesError.message}`);
-  }
-
-  let choices: StoryBuilderTemplate["steps"][number]["choices"] = [];
-  if (parsedStep.choices.length > 0) {
-    const { data: insertedChoices, error: choiceError } = await supabase
-      .from("story_choices")
-      .insert(
-        parsedStep.choices.map((choice, index) => ({
-          step_id: savedStep.id,
-          text: choice.text,
-          short_text: choice.short_text?.trim() || null,
-          sort_order: choice.sort_order ?? index,
-        })),
-      )
+  const savedSteps: StoryStepRow[] = [];
+  if (stepRowsWithId.length > 0) {
+    const { data: updatedStepsData, error: updateStepsError } = await supabase
+      .from("story_steps")
+      .upsert(stepRowsWithId)
       .select("*");
-    if (choiceError) {
-      throw new Error(`Failed to save story choices: ${choiceError.message}`);
+    if (updateStepsError) {
+      throw new Error(updateStepsError.message);
     }
-    choices = ((insertedChoices as StoryChoiceRow[] | null) ?? []).map((choice) => ({
-      id: choice.id,
-      text: choice.text,
-      short_text: choice.short_text ?? "",
-      sort_order: choice.sort_order ?? 0,
-    }));
+    savedSteps.push(...(((updatedStepsData as StoryStepRow[] | null) ?? [])));
   }
 
-  return {
-    id: savedStep.id,
-    step_key: role,
-    question: role === "narration" ? NARRATION_QUESTION : savedStep.question,
-    short_text: role === "narration" ? null : (savedStep.short_text ?? null),
-    narration: savedStep.narration ?? (role === "narration" ? "" : null),
-    sort_order: savedStep.sort_order ?? 0,
-    choices,
-  };
-}
+  if (stepRowsWithoutId.length > 0) {
+    const { data: insertedStepsData, error: insertStepsError } = await supabase
+      .from("story_steps")
+      .insert(stepRowsWithoutId)
+      .select("*");
+    if (insertStepsError) {
+      throw new Error(insertStepsError.message);
+    }
+    savedSteps.push(...(((insertedStepsData as StoryStepRow[] | null) ?? [])));
+  }
+  const savedStepIdByRole = new Map(
+    savedSteps.map((step) => [normalizeStoryRole(step.step_key), step.id]),
+  );
 
-export async function saveStoryFragmentsBlock(
-  supabase: SupabaseClient,
-  templateId: string,
-  role: StoryRoleKey,
-  fragments: StoryBuilderTemplate["fragments"],
-  steps: StoryBuilderTemplate["steps"],
-): Promise<StoryBuilderTemplate["fragments"]> {
-  await repairStoryTemplateData(supabase, templateId);
-  const parsedSteps = z.array(storyStepSchema).parse(steps);
-  const parsedFragments = z.array(storyFragmentSchema).parse(fragments);
-  const choiceIdsByRoleAndIndex = new Map<string, string>();
-  const validChoiceIds = new Set<string>();
-  parsedSteps.forEach((step) => {
+  const { error: deleteFragmentsError } = await supabase
+    .from("story_fragments")
+    .delete()
+    .eq("template_id", templateId);
+  if (deleteFragmentsError) {
+    throw new Error(deleteFragmentsError.message);
+  }
+  if (existingChoiceIds.length > 0) {
+    const { error: deleteFragmentsByChoiceError } = await supabase
+      .from("story_fragments")
+      .delete()
+      .in("choice_id", existingChoiceIds);
+    if (deleteFragmentsByChoiceError) {
+      throw new Error(deleteFragmentsByChoiceError.message);
+    }
+  }
+
+  const incomingStepIds = new Set(savedSteps.map((step) => step.id));
+  const removedSteps = existingSteps.filter((step) => !incomingStepIds.has(step.id));
+  if (removedSteps.length > 0) {
+    const removedStepIds = removedSteps.map((step) => step.id);
+    const { error: deleteRemovedChoicesError } = await supabase
+      .from("story_choices")
+      .delete()
+      .in("step_id", removedStepIds);
+    if (deleteRemovedChoicesError) {
+      throw new Error(deleteRemovedChoicesError.message);
+    }
+    const { error: deleteRemovedStepsError } = await supabase
+      .from("story_steps")
+      .delete()
+      .in("id", removedStepIds);
+    if (deleteRemovedStepsError) {
+      throw new Error(deleteRemovedStepsError.message);
+    }
+  }
+
+  if (savedSteps.length > 0) {
+    const { error: deleteChoicesError } = await supabase
+      .from("story_choices")
+      .delete()
+      .in("step_id", savedSteps.map((step) => step.id));
+    if (deleteChoicesError) {
+      throw new Error(deleteChoicesError.message);
+    }
+  }
+
+  const choiceRows = parsed.steps.flatMap((step) => {
+    const role = normalizeStoryRole(step.step_key);
+    const stepId = savedStepIdByRole.get(role);
+    if (!stepId || role === "narration") {
+      return [];
+    }
+    return step.choices
+      .map((choice, index) => stripNullId({
+        id: choice.id ?? null,
+        step_id: stepId,
+        text: choice.text.trim(),
+        short_text: choice.short_text?.trim() || null,
+        sort_order: choice.sort_order ?? index,
+      }));
+  });
+
+  const choiceIdByRoleAndIndex = new Map<string, string>();
+  if (choiceRows.length > 0) {
+    const { data: insertedChoicesData, error: insertChoicesError } = await supabase
+      .from("story_choices")
+      .insert(choiceRows)
+      .select("*");
+    if (insertChoicesError) {
+      throw new Error(insertChoicesError.message);
+    }
+    ((insertedChoicesData as StoryChoiceRow[] | null) ?? []).forEach((choice) => {
+      const role = Array.from(savedStepIdByRole.entries()).find(([, stepId]) => stepId === choice.step_id)?.[0];
+      if (!role) {
+        return;
+      }
+      choiceIdByRoleAndIndex.set(`${role}:${choice.sort_order ?? 0}`, choice.id);
+    });
+  }
+
+  const fragmentRows = parsed.fragments
+    .filter((fragment) => fragment.text.trim())
+    .map((fragment, index) => {
+      const role = normalizeStoryRole(fragment.step_key);
+      const choiceId =
+        fragment.choice_temp_key !== null &&
+        fragment.choice_temp_key !== undefined &&
+        fragment.choice_temp_key !== ""
+          ? choiceIdByRoleAndIndex.get(`${role}:${fragment.choice_temp_key}`) ?? null
+          : null;
+      return stripNullId({
+        id: fragment.id ?? null,
+        template_id: templateId,
+        step_key: role,
+        choice_id: choiceId,
+        text: fragment.text.trim(),
+        short_text: null,
+        sort_order: fragment.sort_order ?? index,
+      });
+    });
+
+  console.log("[TEMPLATE SAVE SANITIZED]", JSON.stringify({
+    template: sanitizedTemplateRow,
+    steps: stepRows,
+    choices: choiceRows,
+    fragments: fragmentRows,
+  }, null, 2));
+
+  if (fragmentRows.length > 0) {
+    const { error: insertFragmentsError } = await supabase
+      .from("story_fragments")
+      .insert(fragmentRows);
+    if (insertFragmentsError) {
+      throw new Error(insertFragmentsError.message);
+    }
+  }
+
+  parsed.steps.forEach((step) => {
+    const role = normalizeStoryRole(step.step_key);
+    if (role === "narration") {
+      return;
+    }
+    if (!step.question.trim()) {
+      warnings.push(`${STORY_ROLE_LABELS_RU[role]}: не заполнен вопрос.`);
+    }
     step.choices.forEach((choice, index) => {
-      if (choice.id) {
-        validChoiceIds.add(choice.id);
-        choiceIdsByRoleAndIndex.set(`${step.step_key}:${choice.sort_order ?? index}`, choice.id);
+      if (!choice.text.trim()) {
+        warnings.push(`${STORY_ROLE_LABELS_RU[role]}: Не заполнен вариант ${index + 1}.`);
+      }
+      if (!(choice.short_text?.trim() ?? "")) {
+        warnings.push(`${STORY_ROLE_LABELS_RU[role]}: нет краткого текста у варианта ${index + 1}.`);
       }
     });
   });
-
-  const { error: deleteError } = await supabase
-    .from("story_fragments")
-    .delete()
-    .eq("template_id", templateId)
-    .eq("step_key", role);
-  if (deleteError) {
-    throw new Error(`Failed to reset story fragments: ${deleteError.message}`);
-  }
-
-  if (parsedFragments.length === 0) {
-    return [];
-  }
-
-  const fragmentsToInsert = parsedFragments.flatMap((fragment, index) => {
-    const mappedChoiceId =
-      fragment.choice_temp_key !== null && fragment.choice_temp_key !== undefined && fragment.choice_temp_key !== ""
-        ? choiceIdsByRoleAndIndex.get(`${normalizeStoryRole(fragment.step_key)}:${fragment.choice_temp_key}`) ?? null
-        : null;
-    const fallbackChoiceId =
-      fragment.choice_id && validChoiceIds.has(fragment.choice_id) ? fragment.choice_id : null;
-    const choiceId = mappedChoiceId ?? fallbackChoiceId;
-
-    console.log("FRAGMENT SAVE", {
-      fragment,
-      choice_id: choiceId,
-      mapped_choice_id: mappedChoiceId,
-      fallback_choice_id: fallbackChoiceId,
-    });
-
-    if (!choiceId) {
-      console.warn("Skipping story fragment without valid choice_id", {
-        templateId,
-        role,
-        fragment,
-      });
-      return [];
+  parsed.fragments.forEach((fragment) => {
+    if (!fragment.text.trim()) {
+      warnings.push(`${STORY_ROLE_LABELS_RU[normalizeStoryRole(fragment.step_key)]}: Нет текста фрагмента.`);
     }
-
-    return [{
-      template_id: templateId,
-      step_key: normalizeStoryRole(fragment.step_key),
-      choice_id: choiceId,
-      text: fragment.text,
-      sort_order: fragment.sort_order ?? index,
-    }];
   });
 
-  if (fragmentsToInsert.length === 0) {
-    return [];
-  }
+  const after = await loadStoryTemplateById(supabase, templateId);
+  console.log("[TEMPLATE SAVE]", { before, after });
+  return { ok: true, template: after, warnings };
+}
 
-  const { data, error } = await supabase
-    .from("story_fragments")
-    .insert(fragmentsToInsert)
-    .select("*");
-
+export async function deleteStoryTemplate(
+  supabase: SupabaseClient,
+  templateId: string,
+): Promise<void> {
+  const { error } = await supabase.rpc("delete_story_template", {
+    p_template_id: templateId,
+  });
   if (error) {
-    throw new Error(`Failed to save story fragments: ${error.message}`);
+    throw new Error(error.message);
   }
-
-  return ((data as StoryFragmentRow[] | null) ?? []).map((fragment) => {
-    const role = normalizeStoryRole(fragment.step_key);
-    const step = parsedSteps.find((item) => item.step_key === role);
-    const matchedChoice =
-      fragment.choice_id && step
-        ? step.choices.find((choice) => choice.id === fragment.choice_id)
-        : undefined;
-    return {
-      id: fragment.id,
-      step_key: role,
-      choice_id: fragment.choice_id,
-      choice_temp_key:
-        matchedChoice && typeof matchedChoice.sort_order === "number"
-          ? String(matchedChoice.sort_order)
-          : null,
-      text: fragment.text,
-      sort_order: fragment.sort_order ?? 0,
-    };
-  });
 }
 
 export async function saveStoryTwists(
