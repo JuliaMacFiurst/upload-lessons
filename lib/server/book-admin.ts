@@ -1812,14 +1812,17 @@ export async function saveStoryTemplateMeta(
     throw new Error(error?.message ?? "Failed to save story template.");
   }
 
-  return {
-    ...parsed,
-    id: (data as StoryTemplateRow).id,
-    hero_name: (data as StoryTemplateRow).hero_name ?? "",
-    steps: createDefaultStorySteps(),
-    fragments: [],
-    twists: [],
-  };
+  const templateId = (data as StoryTemplateRow).id;
+  const { error: normalizeNarrationQuestionError } = await supabase
+    .from("story_steps")
+    .update({ question: NARRATION_QUESTION })
+    .eq("template_id", templateId)
+    .eq("step_key", "narration");
+  if (normalizeNarrationQuestionError) {
+    throw new Error(normalizeNarrationQuestionError.message);
+  }
+
+  return loadStoryTemplateDetails(supabase, data as StoryTemplateRow);
 }
 
 export async function saveStoryStepBlock(

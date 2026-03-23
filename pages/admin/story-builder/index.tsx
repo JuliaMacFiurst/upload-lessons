@@ -35,7 +35,6 @@ import {
 } from "../../../lib/story/story-contract";
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
-  console.log("API CALL", url);
   const response = await fetch(url, options);
   const data = (await response.json()) as T & { error?: string };
   if (!response.ok) {
@@ -258,10 +257,6 @@ function saveButtonClass(state: Record<string, "saved" | "dirty">, key: string) 
     : "books-button books-button--primary";
 }
 
-function saveButtonLabel(state: Record<string, "saved" | "dirty">, key: string) {
-  return state[key] === "saved" ? "✔ Сохранено" : "Сохранить";
-}
-
 function generateSlug(title: string) {
   return (
     slugifyRu(title) ||
@@ -404,17 +399,7 @@ function groupOverviewRows(
       : row.choices_count;
     if (row.step_key === "narration") {
       current.narrationFilled = row.narration_filled ?? row.choices_count > 0;
-      const heroText = row.hero_name?.trim() ?? "";
-      console.log("HERO CHECK", row.hero_name);
-      current.hasHero = Boolean(heroText);
-    }
-
-    console.log("OVERVIEW RAW", row);
-    if (row.step_key !== "narration") {
-      const validChoices = (row.choices ?? []).filter((choice) =>
-        Boolean(choice.text?.trim() || choice.short_text?.trim()),
-      );
-      console.log("VALID CHOICES", validChoices);
+      current.hasHero = Boolean(row.hero_name?.trim());
     }
 
     grouped.set(row.id, current);
@@ -668,7 +653,6 @@ function getFragmentRenderKey(
 }
 
 export default function StoryBuilderPage() {
-  console.log("RENDER", "StoryBuilderPage");
   const router = useRouter();
   const supabase = createClientComponentClient();
   const activeTemplateRef = useRef<StoryBuilderTemplate | null>(null);
@@ -716,7 +700,6 @@ export default function StoryBuilderPage() {
         "/api/admin/story-builder/overview",
       ),
     );
-    console.log("[StoryBuilder] fetched templates:", overview.templates.length);
     setOverviewStats(groupOverviewRows(overview.templates, overview.rows));
   }, [runRequestOnce]);
 
@@ -742,7 +725,6 @@ export default function StoryBuilderPage() {
   }, [loadOverview, loadTwists]);
 
   const loadTemplate = useCallback(async (templateId: string) => {
-    console.log("TEMPLATE LOAD", templateId);
     setEditorLoading(true);
     setError(null);
     setSuccess(null);
@@ -808,29 +790,6 @@ export default function StoryBuilderPage() {
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [isDirty]);
-
-  const safeReturnToTemplateList = () => {
-    if (isDirty) {
-      const confirmLeave = window.confirm(
-        "У вас есть несохранённые изменения. Вы уверены, что хотите уйти?",
-      );
-
-      if (!confirmLeave) {
-        return;
-      }
-    }
-
-    closeEditor();
-  };
-
-  const switchStep = useCallback((index: number) => {
-    console.log("SWITCH STEP", index);
-    console.log("ACTIVE TEMPLATE BEFORE", activeTemplateRef.current);
-    if (Object.values(saveState).includes("dirty")) {
-      console.log("Unsaved changes preserved in memory");
-    }
-    setSelectedStep(index);
-  }, [saveState]);
 
   useEffect(() => {
     const currentTemplate = activeTemplateRef.current;
@@ -909,19 +868,226 @@ export default function StoryBuilderPage() {
     setSuccess(null);
   };
 
-  const sanitizeTemplateForRequest = (
-    template: StoryBuilderTemplate,
-  ): StoryBuilderTemplate => ({
-    ...template,
+  const buildTemplateMetaPayload = (template: StoryBuilderTemplate) => ({
+    id: template.id,
+    name: template.name.trim(),
     slug: generateSlug(template.slug || template.name),
     hero_name: template.hero_name?.trim() || null,
-    fragments: template.fragments
-      .filter((fragment) => fragment.text.trim().length > 0)
-      .map((fragment, index) => ({
-        ...fragment,
-        sort_order: index,
-      })),
+    is_published: template.is_published,
   });
+
+  const persistTemplateMeta = async (template: StoryBuilderTemplate) =>
+    fetchJson<{ template: StoryBuilderTemplate }>(
+      "/api/admin/story-builder/template",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(buildTemplateMetaPayload(template)),
+      },
+    );
+
+  const isStepDirty = (stepKey: StoryRoleKey) =>
+    saveState[`step:${stepKey}`] === "dirty" || saveState[`fragments:${stepKey}`] === "dirty";
+
+  const saveTemplateMetaState = async (options?: { silent?: boolean }) => {
+    const templateSnapshot = activeTemplateRef.current;
+    if (!templateSnapshot) {
+      return null;
+    }
+    if (!templateSnapshot.name.trim()) {
+      throw new Error("Не удалось сохранить шаблон. Заполните название.");
+    }
+
+    setBusyKey("template-save");
+    setError(null);
+    try {
+      const data = await persistTemplateMeta(templateSnapshot);
+      updateActiveTemplate((current) => ({
+        ...current,
+        id: data.template.id,
+        slug: data.template.slug,
+        name: data.template.name,
+        hero_name: data.template.hero_name ?? "",
+      }));
+      setSelectedTemplateId(data.template.id ?? DRAFT_TEMPLATE_ID);
+      markSaved("template");
+      await loadOverview();
+      if (!options?.silent) {
+        showSuccess("Шаблон сохранён: название, slug и герой.");
+      }
+      return data.template;
+    } catch (fetchError) {
+      const message = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      showSaveError(message);
+      throw fetchError;
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const saveStepState = async (
+    stepIndex: number,
+    options?: { silent?: boolean },
+  ) => {
+    const templateSnapshot = activeTemplateRef.current;
+    if (!templateSnapshot) {
+      return null;
+    }
+
+    const step = templateSnapshot.steps[stepIndex];
+    if (!step) {
+      return null;
+    }
+
+    const stepSaveKey = `step:${step.step_key}`;
+    const fragmentsSaveKey = `fragments:${step.step_key}`;
+    setBusyKey(`step-save:${step.step_key}`);
+    setError(null);
+    try {
+      const roleFragments = templateSnapshot.fragments.filter(
+        (fragment) => fragment.step_key === step.step_key,
+      );
+      const partialStep = {
+        ...step,
+        question: step.step_key === "narration"
+          ? NARRATION_QUESTION
+          : step.question.trim(),
+        short_text: step.short_text?.trim() ?? null,
+        choices: step.choices
+          .filter((choice) => choice.text.trim() !== "")
+          .map((choice, choiceIndex) => ({
+            ...choice,
+            text: choice.text.trim(),
+            short_text: choice.short_text?.trim() ?? "",
+            sort_order: choice.sort_order ?? choiceIndex,
+          })),
+      };
+      const nonEmptyFragments = roleFragments
+        .filter((fragment) => fragment.text.trim() !== "")
+        .map((fragment, fragmentIndex) => ({
+          ...fragment,
+          choice_id: null,
+          text: fragment.text.trim(),
+          sort_order: fragment.sort_order ?? fragmentIndex,
+        }));
+
+      if (step.step_key !== "narration" && !partialStep.question) {
+        throw new Error("Заполните вопрос для ребёнка перед сохранением шага.");
+      }
+
+      const savedTemplate = (await persistTemplateMeta(templateSnapshot)).template;
+      if (!savedTemplate?.id) {
+        throw new Error("Сначала сохраните шаблон истории.");
+      }
+
+      const stepResponse = await fetchJson<{ step: StoryBuilderTemplate["steps"][number] }>(
+        "/api/admin/story-builder/step",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            templateId: savedTemplate.id,
+            step: partialStep,
+          }),
+        },
+      );
+
+      await fetchJson<{ fragments: StoryBuilderTemplate["fragments"] }>(
+        "/api/admin/story-builder/fragments",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            templateId: savedTemplate.id,
+            role: step.step_key,
+            fragments: nonEmptyFragments,
+            steps: [stepResponse.step],
+          }),
+        },
+      );
+
+      const persistedTemplate = await fetchJson<{ template: StoryBuilderTemplate }>(
+        `/api/admin/story-builder/template?id=${encodeURIComponent(savedTemplate.id)}`,
+      );
+
+      setActiveTemplate(normalizeTemplateChoices(persistedTemplate.template));
+      setIsSlugManuallyEdited(
+        persistedTemplate.template.slug !== generateSlug(persistedTemplate.template.name),
+      );
+
+      markSaved(stepSaveKey);
+      markSaved(fragmentsSaveKey);
+      markSaved("template");
+      await loadOverview();
+      if (!options?.silent) {
+        showSuccess(
+          step.step_key === "narration"
+            ? "Сохранено вступление: герой и начало истории."
+            : `Сохранён шаг ${ROLE_LABELS_RU[step.step_key].toLowerCase()} и его фрагменты.`,
+        );
+      }
+      return persistedTemplate.template;
+    } catch (fetchError) {
+      const message = fetchError instanceof Error ? fetchError.message : String(fetchError);
+      showSaveError(message);
+      throw fetchError;
+    } finally {
+      setBusyKey(null);
+    }
+  };
+
+  const saveCurrentEditorState = async (options?: { silent?: boolean }) => {
+    const templateSnapshot = activeTemplateRef.current;
+    if (!templateSnapshot) {
+      return;
+    }
+    const currentStep = templateSnapshot.steps[selectedStep];
+    if (!currentStep) {
+      return;
+    }
+
+    if (isStepDirty(currentStep.step_key)) {
+      await saveStepState(selectedStep, options);
+      return;
+    }
+
+    if (saveState.template === "dirty") {
+      await saveTemplateMetaState(options);
+    }
+  };
+
+  const safeReturnToTemplateList = async () => {
+    if (!isDirty) {
+      closeEditor();
+      return;
+    }
+
+    try {
+      await saveCurrentEditorState({ silent: true });
+      closeEditor();
+    } catch {
+      const confirmLeave = window.confirm(
+        "Не удалось автосохранить изменения. Всё равно закрыть редактор?",
+      );
+
+      if (confirmLeave) {
+        closeEditor();
+      }
+    }
+  };
+
+  const switchStep = async (index: number) => {
+    if (index === selectedStep) {
+      return;
+    }
+
+    try {
+      await saveCurrentEditorState({ silent: true });
+      setSelectedStep(index);
+    } catch {
+      // keep the current step selected when autosave fails
+    }
+  };
 
   const setSelectedChoiceIndex = (stepKey: StoryRoleKey, choiceIndex: number) => {
     setPreviewPath((current) => ({
@@ -957,7 +1123,6 @@ export default function StoryBuilderPage() {
     choiceIndex: number | null,
     fragmentGlobalIndex: number,
   ) => {
-    console.log("DELETE", stepIndex, choiceIndex, fragmentGlobalIndex);
     updateActiveTemplate((current) => {
       const next = structuredClone(current);
       const step = next.steps[stepIndex];
@@ -975,42 +1140,7 @@ export default function StoryBuilderPage() {
   };
 
   const saveTemplate = async () => {
-    if (!activeTemplate) {
-      return;
-    }
-
-    setBusyKey("template-save");
-    setError(null);
-    try {
-      if (!activeTemplate.name.trim()) {
-        throw new Error("Не удалось сохранить шаблон. Заполните название.");
-      }
-
-      const data = await fetchJson<{ template: StoryBuilderTemplate }>(
-        "/api/admin/story-builder/template",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(sanitizeTemplateForRequest(activeTemplate)),
-        },
-      );
-
-      updateActiveTemplate((current) => ({
-        ...current,
-        id: data.template.id,
-        slug: data.template.slug,
-        name: data.template.name,
-        hero_name: data.template.hero_name ?? current.hero_name ?? "",
-      }));
-      setSelectedTemplateId(data.template.id ?? DRAFT_TEMPLATE_ID);
-      markSaved("template");
-      await loadOverview();
-      showSuccess("Шаблон истории сохранён.");
-    } catch (fetchError) {
-      showSaveError(fetchError instanceof Error ? fetchError.message : String(fetchError));
-    } finally {
-      setBusyKey(null);
-    }
+    await saveTemplateMetaState();
   };
 
   const buildGenerationContext = (
@@ -1150,7 +1280,13 @@ export default function StoryBuilderPage() {
         })),
       }));
       markDirty("template");
-      markDirty(`step:${STORY_ROLE_KEYS[selectedStep]}`);
+      STORY_ROLE_KEYS.forEach((role) => {
+        markDirty(`step:${role}`);
+        if (role !== "narration") {
+          markDirty(`fragments:${role}`);
+        }
+      });
+      markDirty("twists");
       showSuccess("Шаблон истории сгенерирован.");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
@@ -1160,121 +1296,7 @@ export default function StoryBuilderPage() {
   };
 
   const saveStep = async () => {
-    if (!activeTemplate) {
-      return;
-    }
-
-    const step = activeTemplate.steps[selectedStep];
-    if (!step) {
-      return;
-    }
-
-    const stepSaveKey = `step:${step.step_key}`;
-    const fragmentsSaveKey = `fragments:${step.step_key}`;
-    setBusyKey(`step-save:${step.step_key}`);
-    setError(null);
-    try {
-      const roleFragments = activeTemplate.fragments.filter(
-        (fragment) => fragment.step_key === step.step_key,
-      );
-      const partialStep = {
-        ...step,
-        question: step.step_key === "narration"
-          ? NARRATION_QUESTION
-          : step.question.trim(),
-        short_text: step.short_text?.trim() ?? null,
-        choices: step.choices
-          .filter((choice) => choice.text.trim() !== "")
-          .map((choice, choiceIndex) => ({
-            ...choice,
-            text: choice.text.trim(),
-            short_text: choice.short_text?.trim() ?? "",
-            sort_order: choice.sort_order ?? choiceIndex,
-          })),
-      };
-      const nonEmptyFragments = roleFragments
-        .filter((fragment) => fragment.text.trim() !== "")
-        .map((fragment, fragmentIndex) => ({
-          ...fragment,
-          choice_id: null,
-          text: fragment.text.trim(),
-          sort_order: fragment.sort_order ?? fragmentIndex,
-        }));
-
-      if (step.step_key !== "narration" && !partialStep.question) {
-        throw new Error("Заполните вопрос для ребёнка перед сохранением шага.");
-      }
-
-      const savedTemplate = await fetchJson<{ template: StoryBuilderTemplate }>(
-        "/api/admin/story-builder/template",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(sanitizeTemplateForRequest(activeTemplate)),
-        },
-      ).then((data) => data.template);
-      if (!savedTemplate?.id) {
-        throw new Error("Сначала сохраните шаблон истории.");
-      }
-
-      const stepPayload = {
-        templateId: savedTemplate.id,
-        step: partialStep,
-      };
-      const fragmentsPayload = {
-        templateId: savedTemplate.id,
-        role: step.step_key,
-        fragments: nonEmptyFragments,
-        steps: [partialStep],
-      };
-
-      console.log("SAVE PAYLOAD", { stepPayload, fragmentsPayload });
-      console.log("STEP SAVE PAYLOAD", stepPayload);
-      console.log("FRAGMENTS SAVE PAYLOAD", fragmentsPayload);
-
-      const stepResponse = await fetchJson<{ step: StoryBuilderTemplate["steps"][number] }>(
-        "/api/admin/story-builder/step",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(stepPayload),
-        },
-      );
-      console.log("STEP SAVE RESPONSE", stepResponse);
-
-      const fragmentsResponse = await fetchJson<{ fragments: StoryBuilderTemplate["fragments"] }>(
-        "/api/admin/story-builder/fragments",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...fragmentsPayload,
-            steps: [stepResponse.step],
-          }),
-        },
-      );
-      console.log("FRAGMENTS SAVE RESPONSE", fragmentsResponse);
-
-      const persistedTemplate = await fetchJson<{ template: StoryBuilderTemplate }>(
-        `/api/admin/story-builder/template?id=${encodeURIComponent(savedTemplate.id)}`,
-      );
-      console.log("REFETCHED TEMPLATE AFTER SAVE", persistedTemplate);
-
-      setActiveTemplate(normalizeTemplateChoices(persistedTemplate.template));
-      setIsSlugManuallyEdited(
-        persistedTemplate.template.slug !== generateSlug(persistedTemplate.template.name),
-      );
-
-      markSaved(stepSaveKey);
-      markSaved(fragmentsSaveKey);
-      markSaved("template");
-      await loadOverview();
-      showSuccess(`Шаг ${step.step_key} и связанные фрагменты сохранены.`);
-    } catch (fetchError) {
-      showSaveError(fetchError instanceof Error ? fetchError.message : String(fetchError));
-    } finally {
-      setBusyKey(null);
-    }
+    await saveStepState(selectedStep);
   };
 
   const generateChoice = async (choiceIndex: number) => {
@@ -1513,7 +1535,6 @@ export default function StoryBuilderPage() {
   };
 
   const upsertNarrationStep = (value: string) => {
-    console.log("RAW INPUT", value);
     setActiveTemplate((prev) => {
       if (!prev) {
         return prev;
@@ -1524,7 +1545,6 @@ export default function StoryBuilderPage() {
         return prev;
       }
       next.steps[narrationIndex].narration = value;
-      console.log("STATE AFTER SET", next.steps[narrationIndex].narration);
       return next;
     });
     markDirty("step:narration");
@@ -1544,7 +1564,6 @@ export default function StoryBuilderPage() {
       return next;
     });
     markDirty("template");
-    markDirty("step:narration");
   };
 
   const generateNarrationStep = async () => {
@@ -1853,7 +1872,9 @@ export default function StoryBuilderPage() {
             <button
               type="button"
               className="books-button books-button--ghost"
-              onClick={safeReturnToTemplateList}
+              onClick={() => {
+                void safeReturnToTemplateList();
+              }}
             >
               ← К списку шаблонов
             </button>
@@ -2004,8 +2025,10 @@ export default function StoryBuilderPage() {
                   }}
                 >
                   {busyKey === "twists-save"
-                    ? "Сохранение..."
-                    : saveButtonLabel(saveState, "twists")}
+                    ? "Сохраняю повороты..."
+                    : saveState.twists === "saved"
+                      ? "Повороты сохранены"
+                      : "Сохранить повороты"}
                 </button>
               </div>
             </div>
@@ -2064,8 +2087,7 @@ export default function StoryBuilderPage() {
               <div>
                 <h2 className="books-panel__title">Информация о шаблоне</h2>
                 <p className="books-section-help">
-                  Один шаблон открыт, одна форма meta, один блок стоимости
-                  генерации.
+                  Эта кнопка сохраняет только поля шаблона: название, slug и героя.
                 </p>
               </div>
               <div className="books-actions books-actions--compact">
@@ -2090,8 +2112,10 @@ export default function StoryBuilderPage() {
                   }}
                 >
                   {busyKey === "template-save"
-                    ? "Сохранение..."
-                    : saveButtonLabel(saveState, "template")}
+                    ? "Сохраняю шаблон..."
+                    : saveState.template === "saved"
+                      ? "Шаблон сохранён"
+                      : "Сохранить шаблон"}
                 </button>
               </div>
             </div>
@@ -2117,20 +2141,12 @@ export default function StoryBuilderPage() {
                     onChange={(event) => {
                       const nextName = event.target.value;
                       const nextSlug = generateSlug(nextName);
-                      console.log("TITLE CHANGE", nextName);
-                      console.log("GENERATED SLUG", nextSlug);
-
                       updateActiveTemplate((current) => {
-                        const nextTemplate = {
+                        return {
                           ...current,
                           name: nextName,
                           slug: isSlugManuallyEdited ? current.slug : nextSlug,
                         };
-                        console.log("FINAL SLUG", nextTemplate.slug);
-                        setTimeout(() => {
-                          console.log("ACTUAL SLUG IN STATE:", nextTemplate.slug);
-                        }, 0);
-                        return nextTemplate;
                       });
                       markDirty("template");
                     }}
@@ -2151,28 +2167,20 @@ export default function StoryBuilderPage() {
                       const rawValue = event.target.value;
                       setIsSlugManuallyEdited(true);
                       updateActiveTemplate((current) => {
-                        const nextTemplate = {
+                        return {
                           ...current,
                           slug: generateSlug(rawValue),
                         };
-                        setTimeout(() => {
-                          console.log("ACTUAL SLUG IN STATE:", nextTemplate.slug);
-                        }, 0);
-                        return nextTemplate;
                       });
                       markDirty("template");
                     }}
                     onBlur={() => {
                       const normalized = generateSlug(activeTemplate.slug);
                       updateActiveTemplate((current) => {
-                        const nextTemplate = {
+                        return {
                           ...current,
                           slug: normalized,
                         };
-                        setTimeout(() => {
-                          console.log("ACTUAL SLUG IN STATE:", nextTemplate.slug);
-                        }, 0);
-                        return nextTemplate;
                       });
                     }}
                   />
@@ -2282,7 +2290,9 @@ export default function StoryBuilderPage() {
                         padding: "12px 14px",
                         textAlign: "left",
                       }}
-                      onClick={() => switchStep(index)}
+                      onClick={() => {
+                        void switchStep(index);
+                      }}
                       >
                       <span
                         style={{
@@ -2322,7 +2332,7 @@ export default function StoryBuilderPage() {
                         {ROLE_LABELS_RU[activeStep.step_key]}
                       </h2>
                       <p className="books-section-help">
-                        {ROLE_SUBTITLES_RU[activeStep.step_key]}
+                        {ROLE_SUBTITLES_RU[activeStep.step_key]}. При переходе на другой шаг текущий шаг сохраняется автоматически.
                       </p>
                     </div>
                     <div className="books-actions books-actions--compact">
@@ -2342,8 +2352,12 @@ export default function StoryBuilderPage() {
                         }}
                       >
                         {busyKey === `step-save:${activeStep.step_key}`
-                          ? "Сохранение..."
-                          : saveButtonLabel(saveState, activeStepKey)}
+                          ? "Сохраняю шаг..."
+                          : saveState[activeStepKey] === "saved"
+                            ? "Шаг сохранён"
+                            : activeStep.step_key === "narration"
+                              ? "Сохранить вступление"
+                              : "Сохранить шаг"}
                       </button>
                     </div>
                   </div>
