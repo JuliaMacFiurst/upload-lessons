@@ -99,6 +99,7 @@ type StoryTemplateRow = {
   id: string;
   name: string;
   slug: string;
+  hero_name: string | null;
   is_published: boolean | null;
 };
 
@@ -152,6 +153,7 @@ const STORY_ROLE_QUESTIONS: Record<StoryRoleKey, string> = {
   solution: "Как герой справится с проблемой?",
   ending: "Чем закончится эта история?",
 };
+const NARRATION_QUESTION = "Кто главный герой истории?";
 
 export function isStoryRoleKey(value: string): value is StoryRoleKey {
   return STORY_ROLE_KEYS.includes(value as StoryRoleKey);
@@ -171,7 +173,7 @@ export function getStoryRoleQuestion(role: StoryRoleKey): string {
 export function createDefaultStorySteps() {
   return STORY_ROLE_KEYS.map((role, index) => ({
     step_key: role,
-    question: role === "narration" ? "" : STORY_ROLE_QUESTIONS[role],
+    question: role === "narration" ? NARRATION_QUESTION : STORY_ROLE_QUESTIONS[role],
     short_text: null,
     narration: role === "narration" ? "" : null,
     sort_order: index,
@@ -795,7 +797,9 @@ export async function loadBookEditorData(
       return {
         id: step?.id,
         step_key: role,
-        question: role === "narration" ? (step?.question ?? "") : (step?.question ?? STORY_ROLE_QUESTIONS[role]),
+        question: role === "narration"
+          ? NARRATION_QUESTION
+          : (step?.question ?? STORY_ROLE_QUESTIONS[role]),
         short_text: role === "narration" ? null : (step?.short_text ?? null),
         narration: step?.narration ?? (role === "narration" ? "" : null),
         sort_order: index,
@@ -1689,7 +1693,9 @@ async function loadStoryTemplateDetails(
     return {
       id: step?.id,
       step_key: role,
-      question: role === "narration" ? (step?.question ?? "") : (step?.question ?? STORY_ROLE_QUESTIONS[role]),
+      question: role === "narration"
+        ? NARRATION_QUESTION
+        : (step?.question ?? STORY_ROLE_QUESTIONS[role]),
       short_text: role === "narration" ? null : (step?.short_text ?? null),
       narration: step?.narration ?? (role === "narration" ? "" : null),
       sort_order: index,
@@ -1718,6 +1724,7 @@ async function loadStoryTemplateDetails(
     id: template.id,
     name: template.name,
     slug: template.slug,
+    hero_name: template.hero_name ?? "",
     is_published: template.is_published ?? true,
     steps,
     fragments: ((fragmentsRes.data as StoryFragmentRow[] | null) ?? []).map((fragment) => ({
@@ -1785,6 +1792,7 @@ export async function saveStoryTemplateMeta(
       id: z.string().uuid().optional(),
       name: z.string().trim().min(1, "Template name is required.").max(160),
       slug: z.string().trim().min(1, "Template slug is required."),
+      hero_name: z.string().trim().max(220).optional().nullable(),
       is_published: z.boolean().default(true),
     })
     .parse(template);
@@ -1794,6 +1802,7 @@ export async function saveStoryTemplateMeta(
       id: parsed.id,
       name: parsed.name,
       slug: safeSlug(parsed.slug) || "story-template",
+      hero_name: parsed.hero_name?.trim() || null,
       is_published: parsed.is_published,
     })
     .select("*")
@@ -1806,6 +1815,7 @@ export async function saveStoryTemplateMeta(
   return {
     ...parsed,
     id: (data as StoryTemplateRow).id,
+    hero_name: (data as StoryTemplateRow).hero_name ?? "",
     steps: createDefaultStorySteps(),
     fragments: [],
     twists: [],
@@ -1826,7 +1836,7 @@ export async function saveStoryStepBlock(
       id: parsedStep.id,
       template_id: templateId,
       step_key: role,
-      question: parsedStep.question,
+      question: role === "narration" ? NARRATION_QUESTION : parsedStep.question,
       short_text: parsedStep.short_text?.trim() || null,
       narration: parsedStep.narration?.trim() || null,
       sort_order: parsedStep.sort_order,
@@ -1894,7 +1904,7 @@ export async function saveStoryStepBlock(
   return {
     id: savedStep.id,
     step_key: role,
-    question: role === "narration" ? savedStep.question : savedStep.question,
+    question: role === "narration" ? NARRATION_QUESTION : savedStep.question,
     short_text: role === "narration" ? null : (savedStep.short_text ?? null),
     narration: savedStep.narration ?? (role === "narration" ? "" : null),
     sort_order: savedStep.sort_order ?? 0,

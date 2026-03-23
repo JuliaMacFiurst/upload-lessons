@@ -5,6 +5,7 @@ import { requireAdminSession } from "../../../../lib/server/book-admin";
 type TemplateRow = {
   id: string;
   name: string;
+  hero_name: string | null;
 };
 
 type StepRow = {
@@ -38,7 +39,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const supabase = await requireAdminSession(req, res);
     const [templatesRes, stepsRes, choicesRes, fragmentsRes] = await Promise.all([
-      supabase.from("story_templates").select("id,name").order("name"),
+      supabase.from("story_templates").select("id,name,hero_name").order("name"),
       supabase.from("story_steps").select("id,template_id,step_key,question,short_text,narration"),
       supabase
         .from("story_choices")
@@ -110,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const narration = step?.narration ?? null;
         const question = step?.question ?? null;
         const narrationFilled = step_key === "narration"
-          ? Boolean(narration?.trim()) && Boolean(question?.trim())
+          ? Boolean(narration?.trim()) && Boolean(template.hero_name?.trim())
           : undefined;
         const validChoices = step_key === "narration"
           ? []
@@ -132,6 +133,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         const row: StoryTemplateOverviewRow = {
           id: template.id,
           name: template.name,
+          hero_name: template.hero_name,
           description: null,
           age_group: null,
           step_key,

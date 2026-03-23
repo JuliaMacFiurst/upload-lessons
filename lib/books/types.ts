@@ -88,6 +88,7 @@ export const storyTemplateSchema = z.object({
     .trim()
     .min(1, "Template slug is required.")
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Template slug must use lowercase letters, numbers, and hyphens."),
+  hero_name: z.string().trim().max(220).optional().nullable(),
   is_published: z.boolean().default(true),
   steps: z.array(storyStepSchema).max(12),
   fragments: z.array(storyFragmentSchema).max(60),
@@ -169,6 +170,7 @@ export type StoryBuilderResponse = {
 export type StoryTemplateOverviewRow = {
   id: string;
   name: string;
+  hero_name?: string | null;
   description: string | null;
   age_group: string | null;
   step_key: StoryRoleKey;

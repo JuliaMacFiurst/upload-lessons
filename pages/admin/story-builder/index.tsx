@@ -46,6 +46,7 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 const DRAFT_TEMPLATE_ID = "__draft__";
 const MAX_TEMPLATE_GENERATION_COST_ILS = 0.25;
+const NARRATION_QUESTION = "Кто главный герой истории?";
 
 const ROLE_HINTS: Record<StoryRoleKey, string> = {
   narration: "Открытие истории: герой, место и стартовая ситуация до первого вопроса ребёнку.",
@@ -118,7 +119,7 @@ function getNarrationStepText(template: StoryBuilderTemplate) {
 }
 
 function getNarrationHeroText(template: StoryBuilderTemplate) {
-  return template.steps.find((step) => step.step_key === "narration")?.question ?? "";
+  return template.hero_name ?? "";
 }
 
 function inferHeroContext(template: StoryBuilderTemplate) {
@@ -303,7 +304,7 @@ function normalizeTemplateChoices(
         template.steps.find((step) => step.step_key === role) ??
         {
           step_key: role,
-          question: ROLE_QUESTIONS_RU[role],
+          question: role === "narration" ? NARRATION_QUESTION : ROLE_QUESTIONS_RU[role],
           short_text: null,
           narration: role === "narration" ? "" : null,
           sort_order: roleIndex,
@@ -314,12 +315,15 @@ function normalizeTemplateChoices(
         ...sourceStep,
         step_key: role,
         sort_order: roleIndex,
-        question: sourceStep.question || (role === "narration" ? "" : ROLE_QUESTIONS_RU[role]),
+        question: role === "narration"
+          ? NARRATION_QUESTION
+          : (sourceStep.question || ROLE_QUESTIONS_RU[role]),
         short_text: role === "narration" ? null : (sourceStep.short_text ?? null),
         narration: sourceStep.narration ?? (role === "narration" ? "" : null),
         choices: role === "narration" ? [] : ensureThreeChoices(sourceStep.choices ?? []),
       };
     }),
+    hero_name: template.hero_name ?? "",
   };
 }
 
@@ -327,10 +331,11 @@ function createEmptyTemplate(index: number): StoryBuilderTemplate {
   return normalizeTemplateChoices({
     name: `Шаблон истории ${index + 1}`,
     slug: `story-template-${index + 1}`,
+    hero_name: "",
     is_published: true,
     steps: STORY_ROLE_KEYS.map((role, roleIndex) => ({
       step_key: role,
-      question: role === "narration" ? "" : ROLE_QUESTIONS_RU[role],
+      question: role === "narration" ? NARRATION_QUESTION : ROLE_QUESTIONS_RU[role],
       short_text: null,
       narration: role === "narration" ? "" : null,
       sort_order: roleIndex,
@@ -399,8 +404,8 @@ function groupOverviewRows(
       : row.choices_count;
     if (row.step_key === "narration") {
       current.narrationFilled = row.narration_filled ?? row.choices_count > 0;
-      const heroText = row.question?.trim() ?? "";
-      console.log("HERO CHECK", row.question);
+      const heroText = row.hero_name?.trim() ?? "";
+      console.log("HERO CHECK", row.hero_name);
       current.hasHero = Boolean(heroText);
     }
 
@@ -491,10 +496,11 @@ function findFirstIncompleteChoiceIndex(
 function getStepCompletionStats(
   step: StoryBuilderTemplate["steps"][number],
   fragments: StoryBuilderTemplate["fragments"],
+  heroName?: string | null,
 ) {
   const questionComplete = step.question.trim().length > 0;
   if (step.step_key === "narration") {
-    const heroComplete = step.question.trim().length > 0;
+    const heroComplete = Boolean(heroName?.trim().length);
     const narrationComplete = (step.narration?.trim().length ?? 0) > 0;
     return {
       questionComplete: heroComplete,
@@ -611,7 +617,7 @@ function collectTemplateWarnings(template: StoryBuilderTemplate) {
     const filledChoices = step.choices.filter((choice) => choice.text.trim().length > 0);
 
     if (step.step_key === "narration") {
-      if (!step.question.trim().length) {
+      if (!template.hero_name?.trim().length) {
         warnings.push(`${stepLabel}: Не указан герой.`);
       }
       if (!(step.narration?.trim().length ?? 0)) {
@@ -908,6 +914,7 @@ export default function StoryBuilderPage() {
   ): StoryBuilderTemplate => ({
     ...template,
     slug: generateSlug(template.slug || template.name),
+    hero_name: template.hero_name?.trim() || null,
     fragments: template.fragments
       .filter((fragment) => fragment.text.trim().length > 0)
       .map((fragment, index) => ({
@@ -967,36 +974,6 @@ export default function StoryBuilderPage() {
     });
   };
 
-  const ensureTemplateSaved = async (): Promise<StoryBuilderTemplate | null> => {
-    if (!activeTemplate) {
-      return null;
-    }
-    if (activeTemplate.id) {
-      return activeTemplate;
-    }
-
-    const data = await fetchJson<{ template: StoryBuilderTemplate }>(
-      "/api/admin/story-builder/template",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(sanitizeTemplateForRequest(activeTemplate)),
-      },
-    );
-
-    const merged = {
-      ...activeTemplate,
-      id: data.template.id,
-      slug: data.template.slug,
-      name: data.template.name,
-    };
-
-    setActiveTemplate(normalizeTemplateChoices(merged));
-    setSelectedTemplateId(data.template.id ?? DRAFT_TEMPLATE_ID);
-    markSaved("template");
-    return merged;
-  };
-
   const saveTemplate = async () => {
     if (!activeTemplate) {
       return;
@@ -1023,6 +1000,7 @@ export default function StoryBuilderPage() {
         id: data.template.id,
         slug: data.template.slug,
         name: data.template.name,
+        hero_name: data.template.hero_name ?? current.hero_name ?? "",
       }));
       setSelectedTemplateId(data.template.id ?? DRAFT_TEMPLATE_ID);
       markSaved("template");
@@ -1135,7 +1113,7 @@ export default function StoryBuilderPage() {
             step_key: role,
             question:
               role === "narration"
-                ? generatedStep?.question ?? currentStep?.question ?? ""
+                ? NARRATION_QUESTION
                 : generatedStep?.question ?? ROLE_QUESTIONS_RU[role],
             short_text:
               role === "narration"
@@ -1163,6 +1141,7 @@ export default function StoryBuilderPage() {
           text: fragment.text,
           sort_order: index,
         })),
+        hero_name: data.steps.find((item) => item.step_key === "narration")?.question ?? current.hero_name ?? "",
         twists: data.twists.map((twist, index) => ({
           id: current.twists[index]?.id,
           text: twist.text,
@@ -1200,7 +1179,9 @@ export default function StoryBuilderPage() {
       );
       const partialStep = {
         ...step,
-        question: step.question.trim(),
+        question: step.step_key === "narration"
+          ? NARRATION_QUESTION
+          : step.question.trim(),
         short_text: step.short_text?.trim() ?? null,
         choices: step.choices
           .filter((choice) => choice.text.trim() !== "")
@@ -1220,11 +1201,18 @@ export default function StoryBuilderPage() {
           sort_order: fragment.sort_order ?? fragmentIndex,
         }));
 
-      if (!partialStep.question) {
+      if (step.step_key !== "narration" && !partialStep.question) {
         throw new Error("Заполните вопрос для ребёнка перед сохранением шага.");
       }
 
-      const savedTemplate = await ensureTemplateSaved();
+      const savedTemplate = await fetchJson<{ template: StoryBuilderTemplate }>(
+        "/api/admin/story-builder/template",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sanitizeTemplateForRequest(activeTemplate)),
+        },
+      ).then((data) => data.template);
       if (!savedTemplate?.id) {
         throw new Error("Сначала сохраните шаблон истории.");
       }
@@ -1552,9 +1540,10 @@ export default function StoryBuilderPage() {
       if (narrationIndex === -1) {
         return prev;
       }
-      next.steps[narrationIndex].question = value;
+      next.hero_name = value;
       return next;
     });
+    markDirty("template");
     markDirty("step:narration");
   };
 
@@ -1759,7 +1748,7 @@ export default function StoryBuilderPage() {
           );
   const stepStats = useMemo(() => (
     activeTemplate && activeStep
-      ? getStepCompletionStats(activeStep, activeTemplate.fragments)
+      ? getStepCompletionStats(activeStep, activeTemplate.fragments, activeTemplate.hero_name)
       : null
   ), [activeStep, activeTemplate]);
   const similarChoiceIndexes = useMemo(() => (
@@ -2272,6 +2261,7 @@ export default function StoryBuilderPage() {
                   const stats = getStepCompletionStats(
                     step,
                     activeTemplate.fragments,
+                    activeTemplate.hero_name,
                   );
                   const isActive = index === selectedStep;
 
