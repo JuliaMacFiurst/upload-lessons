@@ -25,14 +25,6 @@ export const STORY_SUBMISSION_STEP_LABELS: Record<StorySubmissionStepKey, string
   ending: "Финал",
 };
 
-export const storySubmissionSlideSchema = z.object({
-  id: z.string().uuid().optional(),
-  stepKey: storySubmissionStepKeySchema,
-  text: z.string().default(""),
-  mediaUrl: z.string().default(""),
-  sortOrder: z.number().int().optional(),
-});
-
 export const storySubmissionStepSchema = z.object({
   key: storySubmissionStepKeySchema,
   label: z.string().trim().min(1),
@@ -56,7 +48,6 @@ export const storySubmissionSchema = z.object({
   snippet: z.string().default(""),
   reviewerNotes: z.string().default(""),
   assembledStory: storySubmissionAssembledStorySchema,
-  slides: z.array(storySubmissionSlideSchema).default([]),
 });
 
 export const storySubmissionListItemSchema = storySubmissionSchema.pick({
@@ -78,16 +69,10 @@ export const storySubmissionPatchSchema = z.object({
         text: z.string().default(""),
         keywords: z.array(z.string().trim().min(1)).default([]),
         preview: z.string().optional().nullable(),
+        mediaUrl: z.string().default(""),
       }),
     ).length(STORY_SUBMISSION_STEP_KEYS.length),
   }),
-  slides: z.array(
-    z.object({
-      id: z.string().uuid().optional(),
-      step_key: storySubmissionStepKeySchema,
-      media_url: z.string().default(""),
-    }),
-  ).default([]),
 });
 
 export const storySubmissionRejectSchema = z.object({
@@ -96,7 +81,6 @@ export const storySubmissionRejectSchema = z.object({
 
 export type StorySubmissionStatus = z.infer<typeof storySubmissionStatusSchema>;
 export type StorySubmissionStep = z.infer<typeof storySubmissionStepSchema>;
-export type StorySubmissionSlide = z.infer<typeof storySubmissionSlideSchema>;
 export type StorySubmission = z.infer<typeof storySubmissionSchema>;
 export type StorySubmissionListItem = z.infer<typeof storySubmissionListItemSchema>;
 export type StorySubmissionPatchInput = z.infer<typeof storySubmissionPatchSchema>;

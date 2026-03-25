@@ -32,19 +32,9 @@ function toPatchBody(submission: StorySubmission) {
         text: step.text,
         keywords: step.keywords,
         preview: step.preview ?? null,
+        mediaUrl: step.slideMediaUrl,
       })),
     },
-    slides: submission.assembledStory.steps.flatMap((step) => {
-      if (!step.slideMediaUrl.trim()) {
-        return [];
-      }
-      const existingSlide = submission.slides.find((slide) => slide.stepKey === step.key);
-      return [{
-        ...(existingSlide?.id ? { id: existingSlide.id } : {}),
-        step_key: step.key,
-        media_url: step.slideMediaUrl,
-      }];
-    }),
   };
 }
 

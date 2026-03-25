@@ -5,7 +5,6 @@ import {
   type StorySubmission,
   type StorySubmissionListItem,
   type StorySubmissionPatchInput,
-  type StorySubmissionSlide,
   type StorySubmissionStatus,
   type StorySubmissionStep,
   type StorySubmissionStepKey,
@@ -22,16 +21,6 @@ type SubmissionRow = {
   assembled_story: unknown;
   created_at: string | null;
   reviewed_at?: string | null;
-};
-
-type SlideRow = Record<string, unknown> & {
-  id?: string;
-  submission_id?: string;
-  step_key?: string;
-  media_url?: string | null;
-  text?: string | null;
-  slide_index?: number | null;
-  sort_order?: number | null;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -73,6 +62,10 @@ function normalizeStepKey(value: unknown): StorySubmissionStepKey | null {
   return STORY_SUBMISSION_STEP_KEYS.find((key) => key === value) ?? null;
 }
 
+function normalizeHero(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 function buildEmptyAssembledStory() {
   return {
     steps: STORY_SUBMISSION_STEP_KEYS.map((key) => ({
@@ -80,6 +73,7 @@ function buildEmptyAssembledStory() {
       text: "",
       keywords: [],
       preview: null,
+      mediaUrl: "",
     })),
   };
 }
@@ -88,7 +82,10 @@ function normalizeAssembledStory(value: unknown) {
   const parsed = parseMaybeJson(value);
 
   if (!isRecord(parsed)) {
-    return buildEmptyAssembledStory();
+    return {
+      hero: "",
+      ...buildEmptyAssembledStory(),
+    };
   }
 
   const stepsSource = Array.isArray(parsed.steps)
@@ -101,7 +98,12 @@ function normalizeAssembledStory(value: unknown) {
         return { key, text: typeof direct === "string" ? direct : "", keywords: [] };
       });
 
-  const stepMap = new Map<StorySubmissionStepKey, { text: string; keywords: string[]; preview: string | null }>();
+  const stepMap = new Map<StorySubmissionStepKey, {
+    text: string;
+    keywords: string[];
+    preview: string | null;
+    mediaUrl: string;
+  }>();
 
   stepsSource.forEach((step) => {
     if (!isRecord(step)) {
@@ -123,152 +125,108 @@ function normalizeAssembledStory(value: unknown) {
       text,
       keywords: normalizeKeywords(step.keywords),
       preview: typeof step.preview === "string" ? step.preview : null,
+      mediaUrl:
+        typeof step.mediaUrl === "string"
+          ? step.mediaUrl
+          : typeof step.slideMediaUrl === "string"
+            ? step.slideMediaUrl
+            : "",
     });
   });
 
   return {
+    hero: normalizeHero(parsed.hero),
     steps: STORY_SUBMISSION_STEP_KEYS.map((key) => ({
       key,
       text: stepMap.get(key)?.text ?? "",
       keywords: stepMap.get(key)?.keywords ?? [],
       preview: stepMap.get(key)?.preview ?? null,
+      mediaUrl: stepMap.get(key)?.mediaUrl ?? "",
     })),
   };
 }
 
-function mapSlideRow(row: SlideRow): StorySubmissionSlide | null {
-  const stepKey = normalizeStepKey(row.step_key ?? row.stepKey);
-  if (!stepKey) {
-    return null;
-  }
+function buildPersistedAssembledStory(
+  currentValue: unknown,
+  input: StorySubmissionPatchInput,
+) {
+  const parsed = parseMaybeJson(currentValue);
+  const currentRecord = isRecord(parsed) ? parsed : {};
+  const currentSteps = Array.isArray(currentRecord.steps)
+    ? currentRecord.steps.filter((step): step is Record<string, unknown> => isRecord(step))
+    : [];
+  const currentStepMap = new Map(
+    currentSteps
+      .map((step) => {
+        const key = normalizeStepKey(step.key);
+        return key ? [key, step] : null;
+      })
+      .filter((entry): entry is [StorySubmissionStepKey, Record<string, unknown>] => Boolean(entry)),
+  );
 
   return {
-    id: typeof row.id === "string" ? row.id : undefined,
-    stepKey,
-    text:
-      typeof row.text === "string"
-        ? row.text
-        : typeof row.content === "string"
-          ? row.content
-          : "",
-    mediaUrl:
-      typeof row.media_url === "string"
-        ? row.media_url
-        : typeof row.mediaUrl === "string"
-          ? row.mediaUrl
-          : "",
-    sortOrder:
-      typeof row.sort_order === "number"
-        ? row.sort_order
-        : typeof row.sortOrder === "number"
-          ? row.sortOrder
-          : undefined,
+    ...currentRecord,
+    hero: input.hero_name.trim(),
+    steps: input.assembled_story.steps.map((step) => ({
+      ...(currentStepMap.get(step.key) ?? {}),
+      key: step.key,
+      text: step.text,
+      keywords: step.keywords,
+      preview: step.preview ?? null,
+      mediaUrl: step.mediaUrl.trim(),
+    })),
   };
-}
-
-function getPrimarySlide(slides: StorySubmissionSlide[], stepKey: StorySubmissionStepKey) {
-  const slidesForStep = slides.filter((slide) => slide.stepKey === stepKey);
-
-  if (slidesForStep.length === 0) {
-    return null;
-  }
-
-  return slidesForStep
-    .slice()
-    .sort((left, right) => (left.sortOrder ?? 0) - (right.sortOrder ?? 0))[0] ?? null;
 }
 
 function resolveStepText(
   stepKey: StorySubmissionStepKey,
   assembledStory: ReturnType<typeof normalizeAssembledStory>,
-  slides: StorySubmissionSlide[],
 ) {
-  const primarySlideText = getPrimarySlide(slides, stepKey)?.text?.trim() ?? "";
-
-  if (primarySlideText) {
-    return primarySlideText;
-  }
-
   return assembledStory.steps.find((step) => step.key === stepKey)?.text.trim() ?? "";
 }
 
-function buildSnippetFromAssembledStory(
-  assembledStory: ReturnType<typeof normalizeAssembledStory>,
-  slides: StorySubmissionSlide[],
-) {
-  const narration = resolveStepText("narration", assembledStory, slides);
+function buildSnippetFromAssembledStory(assembledStory: ReturnType<typeof normalizeAssembledStory>) {
+  const narration = resolveStepText("narration", assembledStory);
   return narration.length > 160 ? `${narration.slice(0, 157).trim()}...` : narration;
 }
 
-function mapSubmissionRow(row: SubmissionRow, slideRows: SlideRow[]): StorySubmission {
+function mapSubmissionRow(row: SubmissionRow): StorySubmission {
   const assembledStory = normalizeAssembledStory(row.assembled_story);
-  const slides = slideRows
-    .map((slide) => mapSlideRow(slide))
-    .filter((slide): slide is StorySubmissionSlide => Boolean(slide));
-  const slideMap = new Map(slides.map((slide) => [slide.stepKey, slide.mediaUrl]));
 
   const steps: StorySubmissionStep[] = assembledStory.steps.map((step) => ({
     key: step.key,
     label: STORY_SUBMISSION_STEP_LABELS[step.key],
-    text: resolveStepText(step.key, assembledStory, slides),
+    text: resolveStepText(step.key, assembledStory),
     keywords: step.keywords,
     preview: step.preview,
-    slideMediaUrl: slideMap.get(step.key) ?? "",
+    slideMediaUrl: step.mediaUrl,
   }));
 
   return {
     id: row.id,
-    heroName: row.hero_name ?? "",
+    heroName: assembledStory.hero || row.hero_name || "",
     mode: row.mode ?? "",
     status: normalizeStatus(row.status),
     createdAt: row.created_at ?? null,
     reviewedAt: row.reviewed_at ?? null,
-    snippet: buildSnippetFromAssembledStory(assembledStory, slides),
+    snippet: buildSnippetFromAssembledStory(assembledStory),
     reviewerNotes: row.reviewer_notes ?? "",
     assembledStory: { steps },
-    slides,
   };
 }
 
-async function loadSubmissionRow(
-  supabase: SupabaseClient,
-  id: string,
-): Promise<{ submission: SubmissionRow; slides: SlideRow[] }> {
-  const [{ data: submission, error: submissionError }, { data: slides, error: slidesError }] = await Promise.all([
-    supabase
-      .from("user_story_submissions")
-      .select("id,hero_name,mode,status,reviewer_notes,assembled_story,created_at,reviewed_at")
-      .eq("id", id)
-      .single(),
-    supabase
-      .from("user_story_slides")
-      .select("*")
-      .eq("submission_id", id)
-      .order("sort_order", { ascending: true })
-      .order("slide_index", { ascending: true }),
-  ]);
+async function loadSubmissionRow(supabase: SupabaseClient, id: string): Promise<SubmissionRow> {
+  const { data: submission, error: submissionError } = await supabase
+    .from("user_story_submissions")
+    .select("id,hero_name,mode,status,reviewer_notes,assembled_story,created_at,reviewed_at")
+    .eq("id", id)
+    .single();
 
   if (submissionError) {
     throw new Error(`Failed to load story submission: ${submissionError.message}`);
   }
 
-  if (slidesError) {
-    throw new Error(`Failed to load story slides: ${slidesError.message}`);
-  }
-
-  return {
-    submission: submission as SubmissionRow,
-    slides: (slides as SlideRow[] | null) ?? [],
-  };
-}
-
-function buildSlidesPayload(input: StorySubmissionPatchInput): SlideRow[] {
-  return input.slides.map((slide, index) => ({
-    ...(slide.id ? { id: slide.id } : {}),
-    step_key: slide.step_key,
-    media_url: slide.media_url.trim() || null,
-    slide_index: index,
-  }));
+  return submission as SubmissionRow;
 }
 
 function validateSubmissionForApproval(input: StorySubmissionPatchInput) {
@@ -276,58 +234,6 @@ function validateSubmissionForApproval(input: StorySubmissionPatchInput) {
   if (missing.length > 0) {
     const labels = missing.map((step) => STORY_SUBMISSION_STEP_LABELS[step.key]).join(", ");
     throw new Error(`Перед одобрением заполни все шаги истории: ${labels}.`);
-  }
-}
-
-async function persistSlides(
-  supabase: SupabaseClient,
-  submissionId: string,
-  input: StorySubmissionPatchInput,
-): Promise<void> {
-  const { data: existingSlides, error: existingSlidesError } = await supabase
-    .from("user_story_slides")
-    .select("id")
-    .eq("submission_id", submissionId);
-
-  if (existingSlidesError) {
-    throw new Error(`Failed to inspect story slides: ${existingSlidesError.message}`);
-  }
-
-  const existingIds = new Set(((existingSlides as Array<{ id: string }> | null) ?? []).map((slide) => slide.id));
-  const slidesPayload = buildSlidesPayload(input);
-  const slidesWithId = slidesPayload.filter((slide) => typeof slide.id === "string" && existingIds.has(slide.id));
-  const slidesWithoutId = slidesPayload
-    .filter((slide) => !slide.id || !existingIds.has(String(slide.id)))
-    .map((slide) => ({
-      submission_id: submissionId,
-      step_key: slide.step_key,
-      media_url: slide.media_url,
-      slide_index: slide.slide_index,
-    }));
-
-  const removeIds = ((existingSlides as Array<{ id: string }> | null) ?? [])
-    .map((slide) => slide.id)
-    .filter((id) => !input.slides.some((slide) => slide.id === id));
-
-  if (removeIds.length > 0) {
-    const { error } = await supabase.from("user_story_slides").delete().in("id", removeIds);
-    if (error) {
-      throw new Error(`Failed to delete old story slides: ${error.message}`);
-    }
-  }
-
-  if (slidesWithId.length > 0) {
-    const { error } = await supabase.from("user_story_slides").upsert(slidesWithId);
-    if (error) {
-      throw new Error(`Failed to update story slides: ${error.message}`);
-    }
-  }
-
-  if (slidesWithoutId.length > 0) {
-    const { error } = await supabase.from("user_story_slides").insert(slidesWithoutId);
-    if (error) {
-      throw new Error(`Failed to create story slides: ${error.message}`);
-    }
   }
 }
 
@@ -349,7 +255,7 @@ export async function listStorySubmissions(
     mode: row.mode ?? "",
     status: normalizeStatus(row.status),
     createdAt: row.created_at ?? null,
-    snippet: buildSnippetFromAssembledStory(normalizeAssembledStory(row.assembled_story), []),
+    snippet: buildSnippetFromAssembledStory(normalizeAssembledStory(row.assembled_story)),
   }));
 }
 
@@ -357,8 +263,8 @@ export async function loadStorySubmissionById(
   supabase: SupabaseClient,
   id: string,
 ): Promise<StorySubmission> {
-  const { submission, slides } = await loadSubmissionRow(supabase, id);
-  return mapSubmissionRow(submission, slides);
+  const submission = await loadSubmissionRow(supabase, id);
+  return mapSubmissionRow(submission);
 }
 
 export async function saveStorySubmissionEdits(
@@ -367,13 +273,15 @@ export async function saveStorySubmissionEdits(
   input: unknown,
 ): Promise<StorySubmission> {
   const parsed = storySubmissionPatchSchema.parse(input);
+  const current = await loadSubmissionRow(supabase, id);
+  const assembledStory = buildPersistedAssembledStory(current.assembled_story, parsed);
 
   const { error } = await supabase
     .from("user_story_submissions")
     .update({
       hero_name: parsed.hero_name.trim() || null,
       reviewer_notes: parsed.reviewer_notes.trim() || null,
-      assembled_story: parsed.assembled_story,
+      assembled_story: assembledStory,
     })
     .eq("id", id);
 
@@ -381,7 +289,6 @@ export async function saveStorySubmissionEdits(
     throw new Error(`Failed to save story submission: ${error.message}`);
   }
 
-  await persistSlides(supabase, id, parsed);
   return loadStorySubmissionById(supabase, id);
 }
 
@@ -392,13 +299,15 @@ export async function approveStorySubmission(
 ): Promise<StorySubmission> {
   const parsed = storySubmissionPatchSchema.parse(input);
   validateSubmissionForApproval(parsed);
+  const current = await loadSubmissionRow(supabase, id);
+  const assembledStory = buildPersistedAssembledStory(current.assembled_story, parsed);
 
   const { error } = await supabase
     .from("user_story_submissions")
     .update({
       hero_name: parsed.hero_name.trim() || null,
       reviewer_notes: parsed.reviewer_notes.trim() || null,
-      assembled_story: parsed.assembled_story,
+      assembled_story: assembledStory,
       status: "approved",
       reviewed_at: new Date().toISOString(),
     })
@@ -408,7 +317,6 @@ export async function approveStorySubmission(
     throw new Error(`Failed to approve story submission: ${error.message}`);
   }
 
-  await persistSlides(supabase, id, parsed);
   return loadStorySubmissionById(supabase, id);
 }
 

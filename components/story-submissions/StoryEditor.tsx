@@ -80,17 +80,6 @@ export function StoryEditor({
                     item.key === nextStep.key ? nextStep : item,
                   ),
                 },
-                slides: submission.slides.some((slide) => slide.stepKey === nextStep.key)
-                  ? nextStep.slideMediaUrl.trim()
-                    ? submission.slides.map((slide) =>
-                        slide.stepKey === nextStep.key
-                          ? { ...slide, mediaUrl: nextStep.slideMediaUrl }
-                          : slide,
-                      )
-                    : submission.slides.filter((slide) => slide.stepKey !== nextStep.key)
-                  : nextStep.slideMediaUrl.trim()
-                    ? [...submission.slides, { stepKey: nextStep.key, mediaUrl: nextStep.slideMediaUrl }]
-                    : submission.slides,
               })
             }
           />
