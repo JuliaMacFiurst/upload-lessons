@@ -8,6 +8,7 @@ export function AdminTabs() {
 
   const tabs = [
     { href: "/admin/upload-lesson", label: "Уроки" },
+    { href: "/admin/artworks", label: "Художники" },
     { href: "/admin/upload-video", label: "Видео" },
     { href: "/admin/translations", label: "Переводы" },
     { href: "/admin/books", label: "Книги" },
@@ -27,6 +28,7 @@ export function AdminTabs() {
       {tabs.map((tab) => {
         const isActive =
           router.pathname === tab.href ||
+          (tab.href === "/admin/artworks" && router.pathname.startsWith("/admin/artworks")) ||
           (tab.href === "/admin/books" && router.pathname.startsWith("/admin/books")) ||
           (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder")) ||
           (tab.href === "/admin/story-submissions" && router.pathname.startsWith("/admin/story-submissions"));
