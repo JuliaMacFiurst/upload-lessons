@@ -1,0 +1,239 @@
+.story-submissions-page {
+  background:
+    radial-gradient(circle at top left, rgba(255, 228, 196, 0.45), transparent 28%),
+    radial-gradient(circle at top right, rgba(187, 221, 255, 0.4), transparent 26%),
+    #f6f8fb;
+  min-height: 100vh;
+}
+
+.story-submissions-layout {
+  display: grid;
+  grid-template-columns: 340px minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.story-submissions-sidebar,
+.story-submissions-main {
+  min-width: 0;
+}
+
+.story-submissions-sidebar {
+  position: sticky;
+  top: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: rgba(255, 255, 255, 0.88);
+  border: 1px solid #d7deea;
+  border-radius: 24px;
+  padding: 18px;
+  box-shadow: 0 16px 40px rgba(27, 38, 59, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.story-submissions-sidebar__title {
+  margin: 0;
+  font-size: 1.15rem;
+}
+
+.story-submissions-sidebar__hint {
+  margin: 8px 0 0;
+  color: #607083;
+  line-height: 1.45;
+}
+
+.story-submissions-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.story-submissions-filter {
+  border: 1px solid #d7deea;
+  background: #ffffff;
+  color: #334155;
+  border-radius: 999px;
+  padding: 9px 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.story-submissions-filter--active {
+  background: #12395d;
+  border-color: #12395d;
+  color: #ffffff;
+}
+
+.story-submissions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.story-submissions-card {
+  width: 100%;
+  text-align: left;
+  border: 1px solid #d7deea;
+  background: #ffffff;
+  border-radius: 18px;
+  padding: 14px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.story-submissions-card--active {
+  border-color: #0c4b83;
+  box-shadow: 0 0 0 3px rgba(12, 75, 131, 0.12);
+}
+
+.story-submissions-card__top,
+.story-submissions-card__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.story-submissions-card__meta {
+  color: #68778c;
+  font-size: 0.92rem;
+}
+
+.story-submissions-card__snippet {
+  margin: 0;
+  color: #334155;
+  line-height: 1.45;
+}
+
+.story-submissions-badge {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.story-submissions-badge--pending {
+  background: #fff4d6;
+  color: #8a5b00;
+}
+
+.story-submissions-badge--approved {
+  background: #e8f7ec;
+  color: #1d6b32;
+}
+
+.story-submissions-badge--rejected {
+  background: #fff1f0;
+  color: #992b2b;
+}
+
+.story-submissions-empty,
+.story-submissions-loading {
+  border: 1px dashed #ced7e3;
+  border-radius: 18px;
+  padding: 18px;
+  color: #607083;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.story-submission-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid #d7deea;
+  border-radius: 28px;
+  padding: 24px;
+  box-shadow: 0 16px 40px rgba(27, 38, 59, 0.08);
+}
+
+.story-submission-editor--empty {
+  min-height: 420px;
+  justify-content: center;
+}
+
+.story-submission-editor__head,
+.story-submission-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.story-submission-mode {
+  min-width: 180px;
+  border: 1px solid #d7deea;
+  border-radius: 18px;
+  padding: 14px 16px;
+  background: #fbfdff;
+}
+
+.story-submission-mode__label,
+.story-submission-preview__label {
+  display: block;
+  color: #68778c;
+  font-size: 0.86rem;
+  margin-bottom: 6px;
+}
+
+.story-submission-steps {
+  display: grid;
+  gap: 16px;
+}
+
+.story-submission-step {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border: 1px solid #dce3ed;
+  border-radius: 22px;
+  padding: 18px;
+  background:
+    linear-gradient(180deg, rgba(250, 252, 255, 0.95), rgba(255, 248, 240, 0.52));
+}
+
+.story-submission-step__title {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.story-submission-step__help {
+  margin: 6px 0 0;
+  color: #607083;
+  line-height: 1.45;
+}
+
+.story-submission-preview {
+  border-radius: 16px;
+  background: #f8fbff;
+  border: 1px solid #d7deea;
+  padding: 14px 16px;
+}
+
+.story-submission-preview p {
+  margin: 0;
+  color: #334155;
+  line-height: 1.5;
+}
+
+@media (max-width: 1100px) {
+  .story-submissions-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .story-submissions-sidebar {
+    position: static;
+  }
+}
+
+@media (max-width: 720px) {
+  .story-submission-editor__head,
+  .story-submission-meta,
+  .story-submissions-card__top,
+  .story-submissions-card__meta {
+    flex-direction: column;
+  }
+}

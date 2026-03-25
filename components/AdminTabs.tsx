@@ -12,6 +12,7 @@ export function AdminTabs() {
     { href: "/admin/translations", label: "Переводы" },
     { href: "/admin/books", label: "Книги" },
     { href: "/admin/story-builder", label: "Истории" },
+    { href: "/admin/story-submissions", label: "Заявки" },
   ];
 
   return (
@@ -27,7 +28,8 @@ export function AdminTabs() {
         const isActive =
           router.pathname === tab.href ||
           (tab.href === "/admin/books" && router.pathname.startsWith("/admin/books")) ||
-          (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder"));
+          (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder")) ||
+          (tab.href === "/admin/story-submissions" && router.pathname.startsWith("/admin/story-submissions"));
 
         return (
           <Link key={tab.href} href={tab.href} legacyBehavior>
