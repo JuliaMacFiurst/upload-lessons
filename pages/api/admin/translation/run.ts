@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createServerSupabaseClient } from "@supabase/auth-helpers-nextjs";
+import { createClient } from "@supabase/supabase-js";
 import {
   getTranslationRunProgress,
   startTranslationRun,
@@ -19,8 +20,29 @@ function isValidScope(value: unknown): value is TranslationScope {
     value === "all" ||
     value === "lessons" ||
     value === "map_stories" ||
-    value === "artworks"
+    value === "artworks" ||
+    value === "books" ||
+    value === "stories"
   );
+}
+
+function createSupabaseServiceClient() {
+  const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const serviceKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY;
+
+  if (!url || !serviceKey) {
+    throw new Error(
+      "Missing Supabase server credentials. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
+    );
+  }
+
+  return createClient(url, serviceKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+    },
+  });
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -65,7 +87,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .json({ error: "Run must be explicitly confirmed by admin (`confirmed=true`)." });
   }
 
-  const { data: runningRow, error: runningError } = await supabase
+  let serviceSupabase;
+  try {
+    serviceSupabase = createSupabaseServiceClient();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return res.status(500).json({ error: message });
+  }
+
+  const { data: runningRow, error: runningError } = await serviceSupabase
     .from("translation_runs")
     .select("id")
     .eq("status", "running")
@@ -81,7 +111,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       .json({ error: "Translation run already in progress" });
   }
 
-  const { data: createdRun, error: createRunError } = await supabase
+  const { data: createdRun, error: createRunError } = await serviceSupabase
     .from("translation_runs")
     .insert({
       status: "running",
@@ -106,7 +136,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       firstN,
       batchSize,
       onSettled: async () => {
-        await supabase
+        await serviceSupabase
           .from("translation_runs")
           .update({
             status: "finished",
@@ -117,7 +147,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
     return res.status(202).json({ ok: true, runId });
   } catch (error) {
-    await supabase
+    await serviceSupabase
       .from("translation_runs")
       .update({
         status: "finished",

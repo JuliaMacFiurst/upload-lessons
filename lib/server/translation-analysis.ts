@@ -1,25 +1,20 @@
-import crypto from "crypto";
 import { GoogleGenAI } from "@google/genai";
-import stringify from "json-stable-stringify";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
-  extractTranslatableLessonPayload,
-  type LessonJson,
-} from "../lesson-translation";
-
-export type TranslationScope =
-  | "all"
-  | "lessons"
-  | "map_stories"
-  | "artworks";
+  type LoadedTranslationItem,
+  loadTranslationItemsByScope,
+  type TranslationContentType,
+  type TranslationScope,
+} from "./translation-content";
 
 type TranslationStatus = "translated" | "missing" | "outdated";
-type ContentType = "lesson" | "map_story" | "artwork";
 
 type AnalyzeCounts = {
   lessons: number;
   mapStories: number;
   artworks: number;
+  books: number;
+  stories: number;
   total: number;
 };
 
@@ -33,6 +28,15 @@ type AnalyzeByType = {
   lessons: StatusTotals & { total: number };
   mapStories: StatusTotals & { total: number };
   artworks: StatusTotals & { total: number };
+  books: StatusTotals & { total: number };
+  stories: StatusTotals & { total: number };
+};
+
+type BatchComplexity = {
+  recommendedBatchSize: number;
+  estimatedTokensPerItem: number;
+  largestItemTokens: number;
+  warning: string | null;
 };
 
 export type TranslationAnalyzeResult = {
@@ -44,39 +48,17 @@ export type TranslationAnalyzeResult = {
   estimatedCostUsd: number;
   costModel: string;
   tokenMethod: "gemini_count_tokens" | "chars_div_4";
-};
-
-type LessonRow = {
-  id: string;
-  title: string | null;
-  steps: unknown;
-};
-
-type MapStoryRow = {
-  id: number;
-  content: string | null;
-};
-
-type ArtworkRow = {
-  id: string;
-  title: string | null;
-  description: string | null;
+  batchComplexity: BatchComplexity;
 };
 
 type ContentTranslationRow = {
-  content_type: ContentType;
+  content_type: TranslationContentType;
   content_id: string;
   language: string;
   source_hash: string;
 };
 
-type AnalyzeItem = {
-  contentType: ContentType;
-  contentId: string;
-  sourceHash: string;
-  payload: unknown;
-  normalizedSource: string;
-  characters: number;
+type AnalyzeItem = LoadedTranslationItem & {
   status: TranslationStatus;
 };
 
@@ -87,7 +69,7 @@ type AnalyzeOptions = {
 };
 
 export type TranslationQueueItem = {
-  contentType: ContentType;
+  contentType: TranslationContentType;
   contentId: string;
   sourceHash: string;
   payload: unknown;
@@ -127,14 +109,6 @@ function getGeminiClient(): GoogleGenAI | null {
   return new GoogleGenAI({ apiKey });
 }
 
-function toCanonicalJson(value: unknown): string {
-  return stringify(value) ?? "null";
-}
-
-function buildSourceHash(value: unknown): string {
-  return crypto.createHash("sha256").update(toCanonicalJson(value)).digest("hex");
-}
-
 function estimateCostUsd(tokens: number): number {
   const inputCost = (tokens / 1_000_000) * GEMINI_INPUT_COST_PER_1M;
   const outputCost =
@@ -144,18 +118,6 @@ function estimateCostUsd(tokens: number): number {
 
 function estimateTokensByChars(characters: number): number {
   return Math.ceil(characters / 4);
-}
-
-function toScopeFlags(scope: TranslationScope): {
-  lessons: boolean;
-  mapStories: boolean;
-  artworks: boolean;
-} {
-  return {
-    lessons: scope === "all" || scope === "lessons",
-    mapStories: scope === "all" || scope === "map_stories",
-    artworks: scope === "all" || scope === "artworks",
-  };
 }
 
 async function fetchTranslationRows(
@@ -176,25 +138,6 @@ async function fetchTranslationRows(
     map.set(`${row.content_type}:${row.content_id}`, row);
   });
   return map;
-}
-
-function normalizeLessonSource(row: LessonRow): unknown {
-  const lesson: LessonJson = {
-    title: row.title ?? "",
-    steps: Array.isArray(row.steps) ? (row.steps as LessonJson["steps"]) : [],
-  } as LessonJson;
-  return extractTranslatableLessonPayload({ lesson });
-}
-
-function normalizeMapStorySource(row: MapStoryRow): unknown {
-  return { content: row.content ?? "" };
-}
-
-function normalizeArtworkSource(row: ArtworkRow): unknown {
-  return {
-    title: row.title ?? "",
-    description: row.description ?? "",
-  };
 }
 
 function resolveStatus(
@@ -251,99 +194,92 @@ function applyStatusCounter(target: StatusTotals, status: TranslationStatus): vo
   target.outdated += 1;
 }
 
+function mapContentTypeToBucket(
+  contentType: TranslationContentType,
+): keyof AnalyzeByType {
+  if (contentType === "lesson") {
+    return "lessons";
+  }
+  if (contentType === "map_story") {
+    return "mapStories";
+  }
+  if (contentType === "artwork") {
+    return "artworks";
+  }
+  if (contentType === "book") {
+    return "books";
+  }
+  return "stories";
+}
+
+function buildBatchComplexity(items: AnalyzeItem[]): BatchComplexity {
+  if (items.length === 0) {
+    return {
+      recommendedBatchSize: 10,
+      estimatedTokensPerItem: 0,
+      largestItemTokens: 0,
+      warning: null,
+    };
+  }
+
+  const itemTokens = items.map((item) => estimateTokensByChars(item.characters));
+  const totalTokens = itemTokens.reduce((sum, value) => sum + value, 0);
+  const estimatedTokensPerItem = Math.max(1, Math.round(totalTokens / items.length));
+  const largestItemTokens = Math.max(...itemTokens);
+  const containsComplexContent = items.some(
+    (item) => item.contentType === "book" || item.contentType === "story_template" || item.contentType === "story_submission",
+  );
+
+  const targetBatchTokens = containsComplexContent ? 6000 : 12000;
+  const recommendedBatchSize = Math.max(
+    1,
+    Math.min(10, Math.floor(targetBatchTokens / Math.max(estimatedTokensPerItem, 1))),
+  );
+
+  let warning: string | null = null;
+  if (largestItemTokens > 5000) {
+    warning =
+      "At least one item is very large. Send books/stories in very small batches, ideally 1 item at a time.";
+  } else if (containsComplexContent && recommendedBatchSize <= 3 && items.length > 3) {
+    warning =
+      `This batch is likely too complex for a large Gemini request. Recommended batch size: ${recommendedBatchSize} or less.`;
+  } else if (estimatedTokensPerItem > 2000 && items.length > recommendedBatchSize) {
+    warning =
+      `Items are relatively heavy. Recommended batch size: ${recommendedBatchSize} or less to reduce JSON parse failures.`;
+  }
+
+  return {
+    recommendedBatchSize,
+    estimatedTokensPerItem,
+    largestItemTokens,
+    warning,
+  };
+}
+
+async function loadAnalyzedItems(options: AnalyzeOptions): Promise<AnalyzeItem[]> {
+  const supabase = getSupabaseServerClient();
+  const [loadedItems, existingMap] = await Promise.all([
+    loadTranslationItemsByScope(supabase, options.scope ?? "all"),
+    fetchTranslationRows(supabase, options.lang),
+  ]);
+
+  return loadedItems.map((item) => ({
+    ...item,
+    status: resolveStatus(
+      existingMap.get(`${item.contentType}:${item.contentId}`),
+      item.sourceHash,
+    ),
+  }));
+}
+
 export async function analyzeTranslationState(
   options: AnalyzeOptions,
 ): Promise<TranslationAnalyzeResult> {
-  const scope = options.scope ?? "all";
   const firstN =
     typeof options.firstN === "number" && Number.isFinite(options.firstN) && options.firstN > 0
       ? Math.floor(options.firstN)
       : undefined;
-
-  const supabase = getSupabaseServerClient();
-  const [lessonsRes, mapStoriesRes, artworksRes, existingMap] = await Promise.all([
-    supabase.from("lessons").select("id,title,steps"),
-    supabase.from("map_stories").select("id,content"),
-    supabase.from("artworks").select("id,title,description"),
-    fetchTranslationRows(supabase, options.lang),
-  ]);
-
-  if (lessonsRes.error) {
-    throw new Error(`Failed to load lessons: ${lessonsRes.error.message}`);
-  }
-  if (mapStoriesRes.error) {
-    throw new Error(`Failed to load map_stories: ${mapStoriesRes.error.message}`);
-  }
-  if (artworksRes.error) {
-    throw new Error(`Failed to load artworks: ${artworksRes.error.message}`);
-  }
-
-  const flags = toScopeFlags(scope);
-  const queue: AnalyzeItem[] = [];
-
-  if (flags.lessons) {
-    ((lessonsRes.data as LessonRow[] | null) ?? []).forEach((row) => {
-      const normalized = normalizeLessonSource(row);
-      const normalizedSource = toCanonicalJson(normalized);
-      const sourceHash = buildSourceHash(normalized);
-      const contentId = row.id;
-      const existing = existingMap.get(`lesson:${contentId}`);
-      const status = resolveStatus(existing, sourceHash);
-
-      queue.push({
-        contentType: "lesson",
-        contentId,
-        sourceHash,
-        payload: normalized,
-        normalizedSource,
-        characters: normalizedSource.length,
-        status,
-      });
-    });
-  }
-
-  if (flags.mapStories) {
-    ((mapStoriesRes.data as MapStoryRow[] | null) ?? []).forEach((row) => {
-      const normalized = normalizeMapStorySource(row);
-      const normalizedSource = toCanonicalJson(normalized);
-      const sourceHash = buildSourceHash(normalized);
-      const contentId = String(row.id);
-      const existing = existingMap.get(`map_story:${contentId}`);
-      const status = resolveStatus(existing, sourceHash);
-
-      queue.push({
-        contentType: "map_story",
-        contentId,
-        sourceHash,
-        payload: normalized,
-        normalizedSource,
-        characters: normalizedSource.length,
-        status,
-      });
-    });
-  }
-
-  if (flags.artworks) {
-    ((artworksRes.data as ArtworkRow[] | null) ?? []).forEach((row) => {
-      const normalized = normalizeArtworkSource(row);
-      const normalizedSource = toCanonicalJson(normalized);
-      const sourceHash = buildSourceHash(normalized);
-      const contentId = row.id;
-      const existing = existingMap.get(`artwork:${contentId}`);
-      const status = resolveStatus(existing, sourceHash);
-
-      queue.push({
-        contentType: "artwork",
-        contentId,
-        sourceHash,
-        payload: normalized,
-        normalizedSource,
-        characters: normalizedSource.length,
-        status,
-      });
-    });
-  }
-
+  const queue = await loadAnalyzedItems(options);
   const selected = firstN ? queue.slice(0, firstN) : queue;
   const needsTranslation = selected.filter(
     (item) => item.status === "missing" || item.status === "outdated",
@@ -353,20 +289,15 @@ export async function analyzeTranslationState(
     lessons: { total: 0, ...initStatusTotals() },
     mapStories: { total: 0, ...initStatusTotals() },
     artworks: { total: 0, ...initStatusTotals() },
+    books: { total: 0, ...initStatusTotals() },
+    stories: { total: 0, ...initStatusTotals() },
   };
   const statusCounts = initStatusTotals();
 
   selected.forEach((item) => {
-    if (item.contentType === "lesson") {
-      detailedCounts.lessons.total += 1;
-      applyStatusCounter(detailedCounts.lessons, item.status);
-    } else if (item.contentType === "map_story") {
-      detailedCounts.mapStories.total += 1;
-      applyStatusCounter(detailedCounts.mapStories, item.status);
-    } else {
-      detailedCounts.artworks.total += 1;
-      applyStatusCounter(detailedCounts.artworks, item.status);
-    }
+    const bucket = mapContentTypeToBucket(item.contentType);
+    detailedCounts[bucket].total += 1;
+    applyStatusCounter(detailedCounts[bucket], item.status);
     applyStatusCounter(statusCounts, item.status);
   });
 
@@ -384,6 +315,8 @@ export async function analyzeTranslationState(
       lessons: detailedCounts.lessons.total,
       mapStories: detailedCounts.mapStories.total,
       artworks: detailedCounts.artworks.total,
+      books: detailedCounts.books.total,
+      stories: detailedCounts.stories.total,
       total: selected.length,
     },
     statusCounts,
@@ -393,6 +326,7 @@ export async function analyzeTranslationState(
     estimatedCostUsd: estimateCostUsd(estimatedTokens),
     costModel: `${GEMINI_MODEL} (input $${GEMINI_INPUT_COST_PER_1M}/1M, output $${GEMINI_OUTPUT_COST_PER_1M}/1M tokens)`,
     tokenMethod: geminiTokens === null ? "chars_div_4" : "gemini_count_tokens",
+    batchComplexity: buildBatchComplexity(needsTranslation),
   };
 }
 
@@ -401,91 +335,27 @@ export async function getTranslationQueue(
     statuses?: TranslationStatus[];
   },
 ): Promise<TranslationQueueItem[]> {
-  const scope = options.scope ?? "all";
   const firstN =
     typeof options.firstN === "number" && Number.isFinite(options.firstN) && options.firstN > 0
       ? Math.floor(options.firstN)
       : undefined;
-
-  const supabase = getSupabaseServerClient();
-  const [lessonsRes, mapStoriesRes, artworksRes, existingMap] = await Promise.all([
-    supabase.from("lessons").select("id,title,steps"),
-    supabase.from("map_stories").select("id,content"),
-    supabase.from("artworks").select("id,title,description"),
-    fetchTranslationRows(supabase, options.lang),
-  ]);
-
-  if (lessonsRes.error) {
-    throw new Error(`Failed to load lessons: ${lessonsRes.error.message}`);
-  }
-  if (mapStoriesRes.error) {
-    throw new Error(`Failed to load map_stories: ${mapStoriesRes.error.message}`);
-  }
-  if (artworksRes.error) {
-    throw new Error(`Failed to load artworks: ${artworksRes.error.message}`);
-  }
-
-  const flags = toScopeFlags(scope);
-  const queue: TranslationQueueItem[] = [];
-
-  if (flags.lessons) {
-    ((lessonsRes.data as LessonRow[] | null) ?? []).forEach((row) => {
-      const normalized = normalizeLessonSource(row);
-      const sourceHash = buildSourceHash(normalized);
-      const contentId = row.id;
-      const existing = existingMap.get(`lesson:${contentId}`);
-      const status = resolveStatus(existing, sourceHash);
-      queue.push({
-        contentType: "lesson",
-        contentId,
-        sourceHash,
-        payload: normalized,
-        status,
-        characters: toCanonicalJson(normalized).length,
-      });
-    });
-  }
-
-  if (flags.mapStories) {
-    ((mapStoriesRes.data as MapStoryRow[] | null) ?? []).forEach((row) => {
-      const normalized = normalizeMapStorySource(row);
-      const sourceHash = buildSourceHash(normalized);
-      const contentId = String(row.id);
-      const existing = existingMap.get(`map_story:${contentId}`);
-      const status = resolveStatus(existing, sourceHash);
-      queue.push({
-        contentType: "map_story",
-        contentId,
-        sourceHash,
-        payload: normalized,
-        status,
-        characters: toCanonicalJson(normalized).length,
-      });
-    });
-  }
-
-  if (flags.artworks) {
-    ((artworksRes.data as ArtworkRow[] | null) ?? []).forEach((row) => {
-      const normalized = normalizeArtworkSource(row);
-      const sourceHash = buildSourceHash(normalized);
-      const contentId = row.id;
-      const existing = existingMap.get(`artwork:${contentId}`);
-      const status = resolveStatus(existing, sourceHash);
-      queue.push({
-        contentType: "artwork",
-        contentId,
-        sourceHash,
-        payload: normalized,
-        status,
-        characters: toCanonicalJson(normalized).length,
-      });
-    });
-  }
+  const queue = await loadAnalyzedItems(options);
 
   const filtered =
     options.statuses && options.statuses.length > 0
       ? queue.filter((item) => options.statuses?.includes(item.status))
       : queue;
 
-  return firstN ? filtered.slice(0, firstN) : filtered;
+  const mapped = filtered.map((item) => ({
+    contentType: item.contentType,
+    contentId: item.contentId,
+    sourceHash: item.sourceHash,
+    payload: item.payload,
+    status: item.status,
+    characters: item.characters,
+  }));
+
+  return firstN ? mapped.slice(0, firstN) : mapped;
 }
+
+export type { TranslationScope };

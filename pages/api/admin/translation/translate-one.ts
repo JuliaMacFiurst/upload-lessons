@@ -3,33 +3,17 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import { GoogleGenAI } from "@google/genai";
 import stringify from "json-stable-stringify";
-import { extractTranslatableLessonPayload, type LessonJson } from "../../../../lib/lesson-translation";
 import { mockTranslateLesson, type LessonTextPayload, validateTranslationPayload } from "../../../../lib/server/translation-runner";
-
-type ContentType = "lesson" | "map_story" | "artwork";
+import {
+  loadTranslationItemByContent,
+  type TranslationContentType as ContentType,
+} from "../../../../lib/server/translation-content";
 
 type RequestBody = {
   content_type?: ContentType;
   content_id?: string;
   lang?: string;
   preview?: boolean;
-};
-
-type LessonRow = {
-  id: string;
-  title: string | null;
-  steps: unknown;
-};
-
-type MapStoryRow = {
-  id: string | number;
-  content: string | null;
-};
-
-type ArtworkRow = {
-  id: string;
-  title: string | null;
-  description: string | null;
 };
 
 const TRANSLATION_MOCK_MODEL = process.env.TRANSLATION_MOCK_MODEL === "true";
@@ -256,6 +240,71 @@ function validateNonEmptyObjectStrings(payload: unknown, requiredKeys: string[])
   }
 }
 
+function validateStoryPayload(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid translation payload");
+  }
+
+  const record = payload as {
+    hero_name?: unknown;
+    steps?: unknown;
+    fragments?: unknown;
+    assembled_story?: unknown;
+  };
+
+  if (typeof record.hero_name !== "string") {
+    throw new Error("Invalid translation payload");
+  }
+  if (!record.steps || typeof record.steps !== "object") {
+    throw new Error("Invalid translation payload");
+  }
+
+  const steps = record.steps as Record<string, unknown>;
+  for (const key of ["narration", "intro", "journey", "problem", "solution", "ending"]) {
+    if (typeof steps[key] !== "string") {
+      throw new Error("Invalid translation payload");
+    }
+  }
+
+  if (!Array.isArray(record.fragments)) {
+    throw new Error("Invalid translation payload");
+  }
+}
+
+function validateBookPayload(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid translation payload");
+  }
+
+  const record = payload as {
+    title?: unknown;
+    author?: unknown;
+    description?: unknown;
+    categories?: unknown;
+    sections?: unknown;
+    tests?: unknown;
+  };
+
+  if (typeof record.title !== "string") {
+    throw new Error("Invalid translation payload");
+  }
+  if (typeof record.author !== "string") {
+    throw new Error("Invalid translation payload");
+  }
+  if (typeof record.description !== "string") {
+    throw new Error("Invalid translation payload");
+  }
+  if (!Array.isArray(record.categories)) {
+    throw new Error("Invalid translation payload");
+  }
+  if (!Array.isArray(record.sections)) {
+    throw new Error("Invalid translation payload");
+  }
+  if (!Array.isArray(record.tests)) {
+    throw new Error("Invalid translation payload");
+  }
+}
+
 async function buildSourcePayload(args: {
   supabase: ReturnType<typeof createSupabaseServerClient>;
   contentType: ContentType;
@@ -264,58 +313,15 @@ async function buildSourcePayload(args: {
   sourcePayload: unknown;
   sourceHash: string;
 }> {
-  if (args.contentType === "lesson") {
-    const { data: lesson, error } = await args.supabase
-      .from("lessons")
-      .select("id,title,steps")
-      .eq("id", args.contentId)
-      .single();
-    if (error || !lesson) {
-      throw new Error("Lesson not found.");
-    }
-    const extracted = extractTranslatableLessonPayload({
-      lesson: {
-        title: (lesson as LessonRow).title,
-        steps: Array.isArray((lesson as LessonRow).steps)
-          ? ((lesson as LessonRow).steps as LessonJson["steps"])
-          : [],
-      } as LessonJson,
-    });
-    const sourcePayload = coerceLessonPayload(extracted);
-    return {
-      sourcePayload,
-      sourceHash: buildSourceHash(sourcePayload),
-    };
-  }
-
-  if (args.contentType === "map_story") {
-    const { data: story, error } = await args.supabase
-      .from("map_stories")
-      .select("id,content")
-      .eq("id", args.contentId)
-      .single();
-    if (error || !story) {
-      throw new Error("Map story not found.");
-    }
-    const sourcePayload = { content: (story as MapStoryRow).content ?? "" };
-    return {
-      sourcePayload,
-      sourceHash: buildSourceHash(sourcePayload),
-    };
-  }
-
-  const { data: artwork, error } = await args.supabase
-    .from("artworks")
-    .select("id,title,description")
-    .eq("id", args.contentId)
-    .single();
-  if (error || !artwork) {
-    throw new Error("Artwork not found.");
-  }
-  const sourcePayload = {
-    title: (artwork as ArtworkRow).title ?? "",
-    description: (artwork as ArtworkRow).description ?? "",
-  };
+  const item = await loadTranslationItemByContent(
+    args.supabase,
+    args.contentType,
+    args.contentId,
+  );
+  const sourcePayload =
+    args.contentType === "lesson"
+      ? coerceLessonPayload(item.payload)
+      : item.payload;
   return {
     sourcePayload,
     sourceHash: buildSourceHash(sourcePayload),
@@ -342,7 +348,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const lang = typeof body.lang === "string" ? body.lang.trim() : "";
   const preview = body.preview === true;
 
-  if (!contentType || !["lesson", "map_story", "artwork"].includes(contentType)) {
+  if (
+    !contentType ||
+    !["lesson", "map_story", "artwork", "book", "story_template", "story_submission"].includes(
+      contentType,
+    )
+  ) {
     return res.status(400).json({ error: "Unsupported content_type." });
   }
   if (!contentId || !lang) {
@@ -408,8 +419,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     } else if (contentType === "map_story") {
       validateNonEmptyObjectStrings(translation, ["content"]);
-    } else {
+    } else if (contentType === "artwork") {
       validateNonEmptyObjectStrings(translation, ["title", "description"]);
+    } else if (contentType === "book") {
+      validateBookPayload(translation);
+    } else {
+      validateStoryPayload(translation);
     }
 
     let safeJson: unknown;

@@ -9,6 +9,8 @@ export function TranslationSummary(props: Props) {
     { label: "Lessons", value: props.data.counts.lessons },
     { label: "Map stories", value: props.data.counts.mapStories },
     { label: "Artworks", value: props.data.counts.artworks },
+    { label: "Books", value: props.data.counts.books },
+    { label: "Stories", value: props.data.counts.stories },
     { label: "Total", value: props.data.counts.total },
     { label: "Translated", value: props.data.statusCounts.translated },
     { label: "Missing", value: props.data.statusCounts.missing },

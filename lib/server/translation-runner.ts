@@ -36,6 +36,7 @@ export type TranslationRunProgress = {
   logs: string[];
   hasMore: boolean;
   errorMessage: string | null;
+  cancelRequested: boolean;
 };
 
 const MODEL_NAME = "gemini-2.5-flash";
@@ -90,9 +91,11 @@ const progressState: TranslationRunProgress = {
   logs: [],
   hasMore: false,
   errorMessage: null,
+  cancelRequested: false,
 };
 
 let activeRun: Promise<void> | null = null;
+let cancelRequested = false;
 
 function getSupabaseServerClient(): SupabaseClient {
   const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -130,6 +133,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+function ensureRunNotCancelled(): void {
+  if (cancelRequested) {
+    throw new Error("Translation run cancelled by admin.");
+  }
 }
 
 function chunk<T>(items: T[], size: number): T[][] {
@@ -666,12 +675,19 @@ async function runJob(options: StartRunOptions): Promise<void> {
     log("[TRANSLATION MOCK] MODE ACTIVE (no Gemini calls).");
   }
 
-  const queue = await getTranslationQueue({
-    lang: options.lang,
-    scope: options.scope,
-    firstN: options.firstN,
-    statuses: ["missing", "outdated"],
-  });
+  ensureRunNotCancelled();
+
+  const queue =
+    options.scope === "books"
+      ? await translateBooks(options)
+      : options.scope === "stories"
+        ? await translateStories(options)
+        : await getTranslationQueue({
+            lang: options.lang,
+            scope: options.scope,
+            firstN: options.firstN,
+            statuses: ["missing", "outdated"],
+          });
 
   progressState.totalItems = queue.length;
   progressState.total = queue.length;
@@ -696,6 +712,7 @@ async function runJob(options: StartRunOptions): Promise<void> {
   const gemini = TRANSLATION_MOCK_MODEL ? null : getGeminiClient();
 
   for (let index = 0; index < batches.length; index += 1) {
+    ensureRunNotCancelled();
     const batch = batches[index];
     const batchTokens = batch.reduce(
       (sum, item) => sum + estimateTokensByChars(item.characters),
@@ -720,7 +737,9 @@ async function runJob(options: StartRunOptions): Promise<void> {
     );
 
     try {
+      ensureRunNotCancelled();
       const translatedById = await translateBatch(gemini, options.lang, batch);
+      ensureRunNotCancelled();
       const saveResult = await upsertTranslationRows(
         supabase,
         options.lang,
@@ -746,9 +765,28 @@ async function runJob(options: StartRunOptions): Promise<void> {
     progressState.skippedItems = progressState.totalItems - progressState.processedItems;
 
     if (index < batches.length - 1) {
+      ensureRunNotCancelled();
       await sleep(INTER_BATCH_DELAY_MS);
     }
   }
+}
+
+async function translateBooks(options: StartRunOptions): Promise<TranslationQueueItem[]> {
+  return getTranslationQueue({
+    lang: options.lang,
+    scope: "books",
+    firstN: options.firstN,
+    statuses: ["missing", "outdated"],
+  });
+}
+
+async function translateStories(options: StartRunOptions): Promise<TranslationQueueItem[]> {
+  return getTranslationQueue({
+    lang: options.lang,
+    scope: "stories",
+    firstN: options.firstN,
+    statuses: ["missing", "outdated"],
+  });
 }
 
 function resetProgress(runId: string, options: StartRunOptions): void {
@@ -773,6 +811,8 @@ function resetProgress(runId: string, options: StartRunOptions): void {
   progressState.logs = [];
   progressState.hasMore = false;
   progressState.errorMessage = null;
+  progressState.cancelRequested = false;
+  cancelRequested = false;
 }
 
 function completeProgress(): void {
@@ -790,6 +830,17 @@ export function getTranslationRunProgress(): TranslationRunProgress {
     ...progressState,
     logs: [...progressState.logs],
   };
+}
+
+export function requestTranslationRunCancel(): boolean {
+  if (!progressState.running || !activeRun) {
+    return false;
+  }
+
+  cancelRequested = true;
+  progressState.cancelRequested = true;
+  log("Cancellation requested by admin.");
+  return true;
 }
 
 export function startTranslationRun(options: StartRunOptions): { runId: string } {

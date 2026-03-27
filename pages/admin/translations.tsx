@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
+import { USD_TO_ILS } from "../../lib/ai/pricing";
 import { AdminTabs } from "../../components/AdminTabs";
 import { AdminLogout } from "../../components/AdminLogout";
 import { TranslationSummary } from "../../components/translations/TranslationSummary";
@@ -39,6 +40,7 @@ export default function AdminTranslationsPage() {
   const [batchSize, setBatchSize] = useState<10 | 20 | 50>(10);
   const [analyzeLoading, setAnalyzeLoading] = useState(false);
   const [runLoading, setRunLoading] = useState(false);
+  const [cancelLoading, setCancelLoading] = useState(false);
   const [analysis, setAnalysis] = useState<AnalyzeResponse | null>(null);
   const [progress, setProgress] = useState<ProgressResponse | null>(null);
   const [openConfirm, setOpenConfirm] = useState(false);
@@ -66,6 +68,7 @@ export default function AdminTranslationsPage() {
   }, [router, supabase]);
 
   const firstNParam = firstNEnabled ? firstN : undefined;
+  const queuedItems = (analysis?.statusCounts.missing ?? 0) + (analysis?.statusCounts.outdated ?? 0);
 
   const analyzeUrl = useMemo(() => {
     const params = new URLSearchParams({
@@ -101,9 +104,13 @@ export default function AdminTranslationsPage() {
       }
       if (!data.running && data.finishedAt && !data.errorMessage) {
         setRunLoading(false);
+        setCancelLoading(false);
         setSuccess("Translation run finished.");
+        void loadAnalysis();
       } else if (!data.running && data.errorMessage) {
         setRunLoading(false);
+        setCancelLoading(false);
+        void loadAnalysis();
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -137,7 +144,7 @@ export default function AdminTranslationsPage() {
       setError("Run analysis before starting translation.");
       return;
     }
-    if (analysis.counts.total === 0) {
+    if (queuedItems === 0) {
       setError("Nothing to translate for selected filters.");
       return;
     }
@@ -174,6 +181,23 @@ export default function AdminTranslationsPage() {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
       setRunLoading(false);
+    }
+  };
+
+  const cancelRun = async () => {
+    setCancelLoading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await fetchJson<{ ok: true }>("/api/admin/translation/cancel", {
+        method: "POST",
+      });
+      await loadProgress();
+      setSuccess("Stop requested. The current batch will halt shortly.");
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message);
+      setCancelLoading(false);
     }
   };
 
@@ -226,11 +250,19 @@ export default function AdminTranslationsPage() {
             estimatedCostUsd={analysis.estimatedCostUsd}
             costModel={analysis.costModel}
             tokenMethod={analysis.tokenMethod}
+            batchComplexity={analysis.batchComplexity}
           />
         </>
       )}
 
-      <TranslationUntranslatedLessons lang={lang} scope={scope} onMessage={showMessage} />
+      <TranslationUntranslatedLessons
+        lang={lang}
+        scope={scope}
+        onMessage={showMessage}
+        onTranslationComplete={async () => {
+          await loadAnalysis();
+        }}
+      />
 
       <section className="translations-panel">
         <h2 className="translations-title">Run Translation</h2>
@@ -256,6 +288,11 @@ export default function AdminTranslationsPage() {
             </div>
           )}
         </div>
+        {analysis?.batchComplexity.warning && (
+          <p className="translations-alert translations-alert--error">
+            {analysis.batchComplexity.warning} Current batch size: {batchSize}. Recommended: {analysis.batchComplexity.recommendedBatchSize} or less.
+          </p>
+        )}
         <button
           onClick={openConfirmation}
           disabled={runLoading || progress?.running || !analysis}
@@ -265,7 +302,15 @@ export default function AdminTranslationsPage() {
         </button>
       </section>
 
-      {progress && <TranslationProgress progress={progress} />}
+      {progress && (
+        <TranslationProgress
+          progress={progress}
+          cancelLoading={cancelLoading}
+          onCancel={() => {
+            void cancelRun();
+          }}
+        />
+      )}
       <TranslationLogs logs={progress?.logs ?? []} />
 
       {error && <div className="translations-alert translations-alert--error">{error}</div>}
@@ -273,10 +318,17 @@ export default function AdminTranslationsPage() {
 
       <TranslationConfirmModal
         open={openConfirm}
-        items={analysis?.counts.total ?? 0}
+        items={queuedItems}
         tokens={analysis?.estimatedTokens ?? 0}
         cost={analysis?.estimatedCostUsd ?? 0}
+        costIls={(analysis?.estimatedCostUsd ?? 0) * USD_TO_ILS}
         lang={lang}
+        loading={runLoading}
+        warning={
+          analysis?.batchComplexity.warning
+            ? `${analysis.batchComplexity.warning} Current batch size: ${batchSize}.`
+            : null
+        }
         onCancel={() => setOpenConfirm(false)}
         onConfirm={() => {
           void startRun();

@@ -4,6 +4,12 @@ type Props = {
   estimatedCostUsd: number;
   costModel: string;
   tokenMethod: "gemini_count_tokens" | "chars_div_4";
+  batchComplexity?: {
+    recommendedBatchSize: number;
+    estimatedTokensPerItem: number;
+    largestItemTokens: number;
+    warning: string | null;
+  };
 };
 
 export function TranslationEstimator(props: Props) {
@@ -31,6 +37,22 @@ export function TranslationEstimator(props: Props) {
           ? "Gemini countTokens"
           : "Fallback estimate (1 token ≈ 4 chars)"}
       </p>
+      {props.batchComplexity && (
+        <>
+          <p className="translations-hint">
+            Estimated tokens per item: {props.batchComplexity.estimatedTokensPerItem.toLocaleString()}
+            {" · "}
+            Largest item: {props.batchComplexity.largestItemTokens.toLocaleString()}
+            {" · "}
+            Recommended batch size: {props.batchComplexity.recommendedBatchSize}
+          </p>
+          {props.batchComplexity.warning && (
+            <p className="translations-hint" style={{ color: "#aa3d3d", fontWeight: 700 }}>
+              Warning: {props.batchComplexity.warning}
+            </p>
+          )}
+        </>
+      )}
     </section>
   );
 }

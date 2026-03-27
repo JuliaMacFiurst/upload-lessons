@@ -11,7 +11,9 @@ function parseScope(value: string | string[] | undefined): TranslationScope {
     raw === "all" ||
     raw === "lessons" ||
     raw === "map_stories" ||
-    raw === "artworks"
+    raw === "artworks" ||
+    raw === "books" ||
+    raw === "stories"
   ) {
     return raw;
   }

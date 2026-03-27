@@ -1,37 +1,50 @@
 import type { ProgressResponse } from "./types";
+import {
+  TranslationActivityOverlay,
+  type OverlayLog,
+} from "./TranslationActivityOverlay";
 
 type Props = {
   progress: ProgressResponse | null;
+  cancelLoading: boolean;
+  onCancel: () => void;
 };
 
-export function TranslationProgress({ progress }: Props) {
+export function TranslationProgress({ progress, cancelLoading, onCancel }: Props) {
   if (!progress) {
     return null;
   }
 
-  const denominator = Math.max(progress.totalItems, 1);
-  const percent = Math.min(100, Math.round((progress.processedItems / denominator) * 100));
+  const logs: OverlayLog[] = progress.logs.map((line) => ({
+    message: line,
+    level:
+      /failed|error|invalid/i.test(line)
+        ? "error"
+        : /saved|validated|complete|finished/i.test(line)
+          ? "success"
+          : "info",
+  }));
 
   return (
-    <section className="translations-panel">
-      <h2 className="translations-title">Translation Progress</h2>
-      <div className="translations-progress-meta">
-        <span>Current item: {progress.currentItem ?? "Idle"}</span>
-        <span>
-          Tokens: {progress.tokensProcessed.toLocaleString()} /{" "}
-          {progress.tokenBudget.toLocaleString()}
-        </span>
-      </div>
-      <div className="translations-progress">
-        <div className="translations-progress__bar" style={{ width: `${percent}%` }} />
-      </div>
-      <div className="translations-grid translations-grid--4">
-        <div className="translations-pill">Processed: {progress.processedItems}</div>
-        <div className="translations-pill">Translated: {progress.translatedItems}</div>
-        <div className="translations-pill">Failed: {progress.failedItems}</div>
-        <div className="translations-pill">Has more: {progress.hasMore ? "Yes" : "No"}</div>
-      </div>
-    </section>
+    <TranslationActivityOverlay
+      open={progress.running}
+      title="Translation Run Progress"
+      running={progress.running}
+      currentItem={progress.currentItem}
+      processed={progress.processedItems}
+      total={progress.totalItems}
+      translated={progress.translatedItems}
+      failed={progress.failedItems}
+      logs={logs}
+      actionLabel={
+        cancelLoading
+          ? "Stopping..."
+          : progress.cancelRequested
+            ? "Stop requested..."
+            : "Stop run"
+      }
+      actionDisabled={!progress.running || cancelLoading || progress.cancelRequested}
+      onAction={progress.running ? onCancel : undefined}
+    />
   );
 }
-

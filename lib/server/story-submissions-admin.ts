@@ -78,7 +78,7 @@ function buildEmptyAssembledStory() {
   };
 }
 
-function normalizeAssembledStory(value: unknown) {
+export function normalizeAssembledStory(value: unknown) {
   const parsed = parseMaybeJson(value);
 
   if (!isRecord(parsed)) {

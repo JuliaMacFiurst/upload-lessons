@@ -380,6 +380,144 @@
   gap: 10px;
 }
 
+.translations-activity-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(34, 40, 43, 0.42);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 1001;
+}
+
+.translations-activity-card {
+  width: min(920px, 100%);
+  max-height: min(82vh, 860px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border-radius: 20px;
+  background: #fffdf8;
+  border: 1px solid #eadfd3;
+  box-shadow: 0 28px 80px rgba(44, 39, 35, 0.26);
+  padding: 20px;
+}
+
+.translations-activity-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.translations-activity-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.translations-activity-title {
+  margin: 0;
+  color: #39545d;
+  font-size: 24px;
+}
+
+.translations-activity-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.translations-activity-badge--completed {
+  background: #ecfff1;
+  color: #207242;
+  border: 1px solid #bfe6cb;
+}
+
+.translations-activity-badge--error {
+  background: #fff1ef;
+  color: #a3473b;
+  border: 1px solid #efc3bc;
+}
+
+.translations-activity-subtitle {
+  margin: 6px 0 0;
+  color: #6a7a82;
+  font-size: 14px;
+}
+
+.translations-activity-summary {
+  border-radius: 14px;
+  padding: 12px 14px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.translations-activity-summary--success {
+  background: #effff5;
+  color: #207242;
+  border: 1px solid #c8ecd5;
+}
+
+.translations-activity-summary--error {
+  background: #fff3f1;
+  color: #a3473b;
+  border: 1px solid #efd0ca;
+}
+
+.translations-activity-logs {
+  flex: 1;
+  min-height: 220px;
+  max-height: 42vh;
+  overflow: auto;
+  border-radius: 14px;
+  border: 1px solid #e8ddd1;
+  background: #fff;
+  padding: 12px;
+}
+
+.translations-activity-log {
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 8px 10px;
+  border-radius: 10px;
+  margin-bottom: 8px;
+  border: 1px solid transparent;
+}
+
+.translations-activity-log--info {
+  background: #f4fbff;
+  color: #45626b;
+  border-color: #d8edf6;
+}
+
+.translations-activity-log--success {
+  background: #f3fff5;
+  color: #1f6e3a;
+  border-color: #cdeed5;
+}
+
+.translations-activity-log--error {
+  background: #fff3f1;
+  color: #a3473b;
+  border-color: #f1d0ca;
+}
+
+.translations-activity-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 @media (max-width: 640px) {
   .admin-translations-page {
     padding: 16px;
@@ -401,5 +539,18 @@
   .translations-list__actions {
     justify-content: flex-start;
     flex-wrap: wrap;
+  }
+
+  .translations-activity-overlay {
+    padding: 14px;
+  }
+
+  .translations-activity-card {
+    max-height: 90vh;
+    padding: 16px;
+  }
+
+  .translations-activity-head {
+    flex-direction: column;
   }
 }

@@ -3,6 +3,8 @@ export type AnalyzeResponse = {
     lessons: number;
     mapStories: number;
     artworks: number;
+    books: number;
+    stories: number;
     total: number;
   };
   statusCounts: {
@@ -29,16 +31,40 @@ export type AnalyzeResponse = {
       missing: number;
       outdated: number;
     };
+    books: {
+      total: number;
+      translated: number;
+      missing: number;
+      outdated: number;
+    };
+    stories: {
+      total: number;
+      translated: number;
+      missing: number;
+      outdated: number;
+    };
   };
   totalCharacters: number;
   estimatedTokens: number;
   estimatedCostUsd: number;
   costModel: string;
   tokenMethod: "gemini_count_tokens" | "chars_div_4";
+  batchComplexity: {
+    recommendedBatchSize: number;
+    estimatedTokensPerItem: number;
+    largestItemTokens: number;
+    warning: string | null;
+  };
   mockModeActive?: boolean;
 };
 
-export type TranslationScope = "all" | "lessons" | "map_stories" | "artworks";
+export type TranslationScope =
+  | "all"
+  | "lessons"
+  | "map_stories"
+  | "artworks"
+  | "books"
+  | "stories";
 
 export type RunRequest = {
   lang: string;
@@ -51,7 +77,13 @@ export type RunRequest = {
 export type UntranslatedLesson = {
   id: string;
   title: string | null;
-  content_type: "lesson" | "map_story" | "artwork";
+  content_type:
+    | "lesson"
+    | "map_story"
+    | "artwork"
+    | "book"
+    | "story_template"
+    | "story_submission";
   source_tokens?: number;
 };
 
@@ -76,4 +108,5 @@ export type ProgressResponse = {
   logs: string[];
   hasMore: boolean;
   errorMessage: string | null;
+  cancelRequested: boolean;
 };

@@ -69,6 +69,24 @@ export function TranslationSelector(props: Props) {
           />
           Artworks only
         </label>
+        <label className="translations-radio">
+          <input
+            type="radio"
+            name="scope"
+            checked={props.scope === "books"}
+            onChange={() => props.onScopeChange("books")}
+          />
+          Books only
+        </label>
+        <label className="translations-radio">
+          <input
+            type="radio"
+            name="scope"
+            checked={props.scope === "stories"}
+            onChange={() => props.onScopeChange("stories")}
+          />
+          Stories only
+        </label>
       </div>
 
       <div className="translations-row translations-row--gap">
@@ -100,4 +118,3 @@ export function TranslationSelector(props: Props) {
     </section>
   );
 }
-
