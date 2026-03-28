@@ -133,7 +133,6 @@ type StoryFragmentRow = {
   step_key: string;
   choice_id: string | null;
   text: string;
-  short_text: string | null;
   sort_order: number | null;
 };
 
@@ -2169,7 +2168,6 @@ export async function saveStoryTemplate(
         step_key: role,
         choice_id: choiceId,
         text: fragment.text.trim(),
-        short_text: null,
         sort_order: fragment.sort_order ?? index,
       });
     });
