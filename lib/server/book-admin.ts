@@ -1227,6 +1227,7 @@ export async function saveBookEditorData(
               return null;
             }
             return {
+              id: fragment.id ?? crypto.randomUUID(),
               template_id: templateId,
               step_key: fragment.step_key,
               choice_id: choiceId,
@@ -2162,14 +2163,14 @@ export async function saveStoryTemplate(
         fragment.choice_temp_key !== ""
           ? choiceIdByRoleAndIndex.get(`${role}:${fragment.choice_temp_key}`) ?? null
           : null;
-      return stripNullId({
-        id: fragment.id ?? null,
+      return {
+        id: fragment.id ?? crypto.randomUUID(),
         template_id: templateId,
         step_key: role,
         choice_id: choiceId,
         text: fragment.text.trim(),
         sort_order: fragment.sort_order ?? index,
-      });
+      };
     });
 
   console.log("[TEMPLATE SAVE SANITIZED]", JSON.stringify({
