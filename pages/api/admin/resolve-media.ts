@@ -37,6 +37,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "slideText, targetId and mapType are required." });
   }
 
+  if (preferredSource === "pexels" && !process.env.PEXELS_API_KEY) {
+    return res.status(500).json({
+      error: "PEXELS_API_KEY is not configured on the server.",
+    });
+  }
+
+  if (preferredSource === "giphy" && !process.env.GIPHY_API_KEY) {
+    return res.status(500).json({
+      error: "GIPHY_API_KEY is not configured on the server.",
+    });
+  }
+
   try {
     const result = await resolveMedia({
       slideText,

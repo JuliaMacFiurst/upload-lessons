@@ -840,7 +840,7 @@ export default function AdminMapTargetEditorPage() {
                 />
               </div>
               <div>
-                <div className="map-target-editor__field-label">Google Maps</div>
+                <div className="map-target-editor__field-label">Большая карта Google</div>
                 <input
                   className="books-input map-target-editor__slide-input"
                   value={googleMapsUrl}
