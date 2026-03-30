@@ -104,6 +104,19 @@ type GiphyResponse = {
 };
 
 const WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php";
+const WIKIMEDIA_MIN_REQUEST_INTERVAL_MS = 1200;
+const WIKIMEDIA_CACHE_TTL_MS = 5 * 60 * 1000;
+const WIKIMEDIA_MAX_RETRIES = 2;
+
+let wikimediaNextRequestAt = 0;
+let wikimediaRequestQueue: Promise<void> = Promise.resolve();
+const wikimediaSearchCache = new Map<
+  string,
+  {
+    expiresAt: number;
+    value: Promise<WikimediaImageCandidate[]>;
+  }
+>();
 
 const STOPWORDS = new Set([
   "a",
@@ -390,51 +403,134 @@ function buildMediaQueries(input: ResolveMediaInput): string[] {
   );
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+function parseRetryAfterMs(value: string | null): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const retryAt = Date.parse(value);
+  if (Number.isNaN(retryAt)) {
+    return null;
+  }
+
+  return Math.max(0, retryAt - Date.now());
+}
+
+async function enqueueWikimediaRequest<T>(task: () => Promise<T>): Promise<T> {
+  const run = wikimediaRequestQueue
+    .catch(() => undefined)
+    .then(async () => {
+      const waitMs = wikimediaNextRequestAt - Date.now();
+      if (waitMs > 0) {
+        await sleep(waitMs);
+      }
+
+      try {
+        return await task();
+      } finally {
+        wikimediaNextRequestAt = Math.max(wikimediaNextRequestAt, Date.now() + WIKIMEDIA_MIN_REQUEST_INTERVAL_MS);
+      }
+    });
+
+  wikimediaRequestQueue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+
+  return run;
+}
+
 async function searchWikimediaImages(
   query: string,
   limit: number,
 ): Promise<WikimediaImageCandidate[]> {
-  const params = new URLSearchParams({
-    action: "query",
-    format: "json",
-    origin: "*",
-    generator: "search",
-    gsrsearch: query,
-    gsrnamespace: "6",
-    gsrlimit: String(limit),
-    prop: "imageinfo",
-    iiprop: "url|user|extmetadata",
-    iiurlwidth: "1600",
-  });
-
-  const response = await fetch(`${WIKIMEDIA_API_URL}?${params.toString()}`);
-  if (!response.ok) {
-    throw new Error(`Wikimedia request failed: ${response.status}`);
+  const cacheKey = `${query.trim().toLowerCase()}::${limit}`;
+  const cached = wikimediaSearchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value;
   }
 
-  const data = (await response.json()) as WikimediaSearchResponse;
-  const pages = Object.values(data.query?.pages ?? {});
-  return pages
-    .map((page) => {
-      const info = page?.imageinfo?.[0];
+  const request = enqueueWikimediaRequest(async () => {
+    const params = new URLSearchParams({
+      action: "query",
+      format: "json",
+      origin: "*",
+      generator: "search",
+      gsrsearch: query,
+      gsrnamespace: "6",
+      gsrlimit: String(limit),
+      prop: "imageinfo",
+      iiprop: "url|user|extmetadata",
+      iiurlwidth: "1600",
+    });
 
-      if (!page?.title || !info?.url || !info.descriptionurl) {
-        return null;
+    for (let attempt = 0; attempt <= WIKIMEDIA_MAX_RETRIES; attempt += 1) {
+      const response = await fetch(`${WIKIMEDIA_API_URL}?${params.toString()}`);
+      if (response.ok) {
+        const data = (await response.json()) as WikimediaSearchResponse;
+        const pages = Object.values(data.query?.pages ?? {});
+        return pages
+          .map((page) => {
+            const info = page?.imageinfo?.[0];
+
+            if (!page?.title || !info?.url || !info.descriptionurl) {
+              return null;
+            }
+
+            if (isDisallowedMediaUrl(info.url)) {
+              return null;
+            }
+
+            return {
+              title: page.title,
+              url: info.url,
+              user: info.user ?? null,
+              licenseShortName: info.extmetadata?.LicenseShortName?.value ?? null,
+              descriptionUrl: info.descriptionurl,
+            };
+          })
+          .filter((item): item is WikimediaImageCandidate => item !== null);
       }
 
-      if (isDisallowedMediaUrl(info.url)) {
-        return null;
+      if (response.status !== 429) {
+        throw new Error(`Wikimedia request failed: ${response.status}`);
       }
 
-      return {
-        title: page.title,
-        url: info.url,
-        user: info.user ?? null,
-        licenseShortName: info.extmetadata?.LicenseShortName?.value ?? null,
-        descriptionUrl: info.descriptionurl,
-      };
-    })
-    .filter((item): item is WikimediaImageCandidate => item !== null);
+      const retryAfterMs = parseRetryAfterMs(response.headers.get("retry-after"));
+      const backoffMs = retryAfterMs ?? WIKIMEDIA_MIN_REQUEST_INTERVAL_MS * (attempt + 2);
+
+      if (attempt === WIKIMEDIA_MAX_RETRIES) {
+        console.warn(`[resolve-media] wikimedia rate limited for query "${query}"`);
+        return [];
+      }
+
+      wikimediaNextRequestAt = Math.max(wikimediaNextRequestAt, Date.now() + backoffMs);
+      await sleep(backoffMs);
+    }
+
+    return [];
+  }).catch((error) => {
+    wikimediaSearchCache.delete(cacheKey);
+    throw error;
+  });
+
+  wikimediaSearchCache.set(cacheKey, {
+    expiresAt: Date.now() + WIKIMEDIA_CACHE_TTL_MS,
+    value: request,
+  });
+
+  return request;
 }
 
 function formatWikimediaCredit(candidate: WikimediaImageCandidate): string {
@@ -453,7 +549,15 @@ async function resolveFromWikimedia(input: ResolveMediaInput): Promise<ResolveMe
   const existingUrlSet = buildExistingUrlSet(input);
 
   for (const query of queries) {
-    const candidates = await searchWikimediaImages(query, 8);
+    let candidates: WikimediaImageCandidate[] = [];
+
+    try {
+      candidates = await searchWikimediaImages(query, 8);
+    } catch (error) {
+      console.error("[resolve-media] wikimedia search failed", error);
+      continue;
+    }
+
     const candidate = candidates.find((item) => !existingUrlSet.has(normalizeUrl(item.url)));
     if (!candidate) {
       continue;
@@ -681,10 +785,15 @@ export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMed
   const preferredType = input.preferredType;
 
   if (preferredSource === "wikimedia") {
-    const wikimedia = await resolveFromWikimedia(input);
-    if (wikimedia) {
-      return wikimedia;
+    try {
+      const wikimedia = await resolveFromWikimedia(input);
+      if (wikimedia) {
+        return wikimedia;
+      }
+    } catch (error) {
+      console.error("[resolve-media] preferred wikimedia failed", error);
     }
+
     return buildFallbackImage(input);
   }
 
