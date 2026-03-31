@@ -33,13 +33,40 @@ type StoryResponse = {
   slides: SlideItem[];
 };
 
+function getResponseErrorMessage(raw: string, status: number): string {
+  const trimmed = raw.trim();
+
+  if (!trimmed) {
+    return `Request failed with status ${status}.`;
+  }
+
+  if (trimmed.startsWith("<!DOCTYPE html") || trimmed.startsWith("<html")) {
+    return `Server returned HTML instead of JSON (status ${status}). Check server logs for the underlying error.`;
+  }
+
+  return trimmed.slice(0, 300);
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
-  const data = (await response.json()) as T & { error?: string };
-  if (!response.ok) {
-    throw new Error(data.error ?? "Request failed.");
+  const raw = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(getResponseErrorMessage(raw, response.status));
   }
-  return data;
+
+  let data: (T & { error?: string }) | null = null;
+  try {
+    data = JSON.parse(raw) as T & { error?: string };
+  } catch {
+    throw new Error(`Invalid JSON response from ${url} (status ${response.status}).`);
+  }
+
+  if (!response.ok) {
+    throw new Error(data?.error ?? getResponseErrorMessage(raw, response.status));
+  }
+  return data as T;
 }
 
 function isDisallowedMediaUrl(url: string): boolean {
@@ -453,6 +480,7 @@ export default function AdminMapTargetEditorPage() {
     setError(null);
     setSuccess(null);
     setSlideSuccess(null);
+    let failedSlideIndex: number | null = null;
 
     try {
       const nextSlides = [...slides];
@@ -488,6 +516,7 @@ export default function AdminMapTargetEditorPage() {
         }
 
         setResolvingSlideIndex(index);
+        failedSlideIndex = index;
 
         const intent = detectSlideIntent(slide.text);
         const preferences: Array<{ source: PreferredSource; type?: "image" | "video" }> = [];
@@ -591,7 +620,12 @@ export default function AdminMapTargetEditorPage() {
         `Медиа автоматически подобраны: Wikimedia ${wikimediaCount}, Pexels image ${pexelsImageCount}, Pexels video ${pexelsVideoCount}, Giphy ${giphyCount}.`,
       );
     } catch (resolveError) {
-      setError(resolveError instanceof Error ? resolveError.message : String(resolveError));
+      const message = resolveError instanceof Error ? resolveError.message : String(resolveError);
+      setError(
+        failedSlideIndex !== null
+          ? `Ошибка при подборе медиа для слайда ${failedSlideIndex + 1}: ${message}`
+          : message,
+      );
     } finally {
       setResolvingSlideIndex(null);
       setResolvingAllSlides(false);
