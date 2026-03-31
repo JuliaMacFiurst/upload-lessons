@@ -13,6 +13,9 @@ type MapTargetStatusItem = {
   has_story: boolean;
   has_slides: boolean;
   slides_count: number;
+  has_youtube_links: boolean;
+  has_google_maps_url: boolean;
+  has_slide_images: boolean;
 };
 
 type FilterMode = "all" | "missing-story" | "missing-slides" | "ready";
@@ -49,6 +52,20 @@ function getStatusMeta(item: MapTargetStatusItem) {
     label: "Готово",
     tone: "success",
   } as const;
+}
+
+function getPresenceMeta(isPresent: boolean) {
+  return isPresent
+    ? {
+        icon: "✅",
+        label: "Есть",
+        tone: "success",
+      }
+    : {
+        icon: "❌",
+        label: "Нет",
+        tone: "danger",
+      };
 }
 
 export default function AdminMapTargetsPage() {
@@ -222,7 +239,7 @@ export default function AdminMapTargetsPage() {
         <div>
           <h1 className="map-targets-title">Покрытие карты</h1>
           <p className="map-targets-subtitle">
-            Список всех `map_targets` с проверкой story и slides для русского языка.
+            Список всех `map_targets` с проверкой story, slides, YouTube, Google Maps/Earth и изображений в слайдах.
           </p>
         </div>
         <div className="map-targets-summary">
@@ -359,6 +376,9 @@ export default function AdminMapTargetsPage() {
                   <th>map_type</th>
                   <th>target_id</th>
                   <th>Статус</th>
+                  <th>YouTube</th>
+                  <th>Google Maps / Earth</th>
+                  <th>Изображения в slides</th>
                   <th>slides_count</th>
                   <th />
                 </tr>
@@ -366,6 +386,9 @@ export default function AdminMapTargetsPage() {
               <tbody>
                 {paginatedItems.map((item) => {
                   const status = getStatusMeta(item);
+                  const youtubeStatus = getPresenceMeta(item.has_youtube_links);
+                  const mapsStatus = getPresenceMeta(item.has_google_maps_url);
+                  const imagesStatus = getPresenceMeta(item.has_slide_images);
 
                   return (
                     <tr key={`${item.map_type}:${item.target_id}`}>
@@ -375,6 +398,24 @@ export default function AdminMapTargetsPage() {
                         <span className={`map-targets-badge map-targets-badge--${status.tone}`}>
                           <span>{status.icon}</span>
                           <span>{status.label}</span>
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`map-targets-badge map-targets-badge--${youtubeStatus.tone}`}>
+                          <span>{youtubeStatus.icon}</span>
+                          <span>{youtubeStatus.label}</span>
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`map-targets-badge map-targets-badge--${mapsStatus.tone}`}>
+                          <span>{mapsStatus.icon}</span>
+                          <span>{mapsStatus.label}</span>
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`map-targets-badge map-targets-badge--${imagesStatus.tone}`}>
+                          <span>{imagesStatus.icon}</span>
+                          <span>{imagesStatus.label}</span>
                         </span>
                       </td>
                       <td>{item.slides_count}</td>
@@ -622,7 +663,7 @@ export default function AdminMapTargetsPage() {
         .map-targets-table {
           width: 100%;
           border-collapse: collapse;
-          min-width: 860px;
+          min-width: 1260px;
         }
 
         .map-targets-table th,

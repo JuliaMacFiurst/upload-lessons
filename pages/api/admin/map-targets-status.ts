@@ -12,11 +12,16 @@ type MapStoryRow = {
   id: string;
   type: string | null;
   target_id: string | null;
+  youtube_url_ru: string | null;
+  youtube_url_he: string | null;
+  youtube_url_en: string | null;
+  google_maps_url: string | null;
 };
 
 type MapStorySlideRow = {
   id: string;
   story_id: string | null;
+  image_url: string | null;
 };
 
 type MapTargetStatusItem = {
@@ -25,7 +30,14 @@ type MapTargetStatusItem = {
   has_story: boolean;
   has_slides: boolean;
   slides_count: number;
+  has_youtube_links: boolean;
+  has_google_maps_url: boolean;
+  has_slide_images: boolean;
 };
+
+function hasFilledValue(value: string | null | undefined): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
 
 async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTargetStatusItem[]> {
   const [expectedTargets, { data: targets, error: targetsError }, { data: stories, error: storiesError }] =
@@ -34,7 +46,9 @@ async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTarget
       supabase.from("map_targets").select("map_type,target_id").order("map_type").order("target_id"),
       supabase
         .from("map_stories")
-        .select("id,type,target_id")
+        .select(
+          "id,type,target_id,youtube_url_ru,youtube_url_he,youtube_url_en,google_maps_url",
+        )
         .eq("language", "ru"),
     ]);
 
@@ -50,12 +64,12 @@ async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTarget
   const typedStories = (stories ?? []) as MapStoryRow[];
   const storyIds = typedStories.map((story) => story.id).filter(Boolean);
 
-  let slidesByStoryId = new Map<string, number>();
+  let slidesByStoryId = new Map<string, { count: number; hasImages: boolean }>();
 
   if (storyIds.length > 0) {
     const { data: slides, error: slidesError } = await supabase
       .from("map_story_slides")
-      .select("id,story_id")
+      .select("id,story_id,image_url")
       .in("story_id", storyIds);
 
     if (slidesError) {
@@ -67,9 +81,13 @@ async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTarget
         return acc;
       }
 
-      acc.set(slide.story_id, (acc.get(slide.story_id) ?? 0) + 1);
+      const current = acc.get(slide.story_id) ?? { count: 0, hasImages: false };
+      acc.set(slide.story_id, {
+        count: current.count + 1,
+        hasImages: current.hasImages || hasFilledValue(slide.image_url),
+      });
       return acc;
-    }, new Map<string, number>());
+    }, new Map<string, { count: number; hasImages: boolean }>());
   }
 
   const storiesByTargetKey = typedStories.reduce((acc, story) => {
@@ -115,10 +133,18 @@ async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTarget
   const items = Array.from(targetKeyMap.values()).map((target) => {
     const key = `${target.map_type}::${target.target_id}`;
     const targetStories = storiesByTargetKey.get(key) ?? [];
-    const slidesCount = targetStories.reduce(
-      (sum, story) => sum + (slidesByStoryId.get(story.id) ?? 0),
-      0,
+    const slidesCount = targetStories.reduce((sum, story) => {
+      const storySlides = slidesByStoryId.get(story.id);
+      return sum + (storySlides?.count ?? 0);
+    }, 0);
+    const hasSlideImages = targetStories.some((story) => slidesByStoryId.get(story.id)?.hasImages ?? false);
+    const hasYouTubeLinks = targetStories.some(
+      (story) =>
+        hasFilledValue(story.youtube_url_ru) ||
+        hasFilledValue(story.youtube_url_en) ||
+        hasFilledValue(story.youtube_url_he),
     );
+    const hasGoogleMapsUrl = targetStories.some((story) => hasFilledValue(story.google_maps_url));
 
     return {
       map_type: target.map_type,
@@ -126,6 +152,9 @@ async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTarget
       has_story: targetStories.length > 0,
       has_slides: slidesCount > 0,
       slides_count: slidesCount,
+      has_youtube_links: hasYouTubeLinks,
+      has_google_maps_url: hasGoogleMapsUrl,
+      has_slide_images: hasSlideImages,
     };
   });
 
