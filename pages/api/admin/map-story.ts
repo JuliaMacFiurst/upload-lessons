@@ -8,6 +8,9 @@ type MapStoryRow = {
   target_id: string | null;
   language: string | null;
   content: string | null;
+  is_approved: boolean | null;
+  auto_generated: boolean | null;
+  auto_generation_model: string | null;
   youtube_url_ru: string | null;
   youtube_url_he: string | null;
   youtube_url_en: string | null;
@@ -39,6 +42,9 @@ type StoryResponse = {
     target_id: string;
     language: string;
     content: string;
+    is_approved: boolean;
+    auto_generated: boolean;
+    auto_generation_model: string | null;
     youtube_url_ru: string | null;
     youtube_url_he: string | null;
     youtube_url_en: string | null;
@@ -183,7 +189,9 @@ async function loadStory(
 ): Promise<StoryResponse> {
   const { data, error } = await supabase
     .from("map_stories")
-    .select("id,type,target_id,language,content,youtube_url_ru,youtube_url_he,youtube_url_en,google_maps_url")
+    .select(
+      "id,type,target_id,language,content,is_approved,auto_generated,auto_generation_model,youtube_url_ru,youtube_url_he,youtube_url_en,google_maps_url",
+    )
     .eq("type", mapType)
     .eq("target_id", targetId)
     .eq("language", "ru")
@@ -211,6 +219,9 @@ async function loadStory(
       target_id: story.target_id ?? targetId,
       language: story.language ?? "ru",
       content: story.content ?? "",
+      is_approved: story.is_approved ?? true,
+      auto_generated: story.auto_generated ?? false,
+      auto_generation_model: story.auto_generation_model ?? null,
       youtube_url_ru: story.youtube_url_ru ?? null,
       youtube_url_he: story.youtube_url_he ?? null,
       youtube_url_en: story.youtube_url_en ?? null,
@@ -266,6 +277,8 @@ async function saveStoryContent(
       ...normalizedYouTubeFields,
       google_maps_url: normalizedGoogleMapsUrl,
       is_approved: true,
+      auto_generated: false,
+      auto_generation_model: null,
     });
 
     if (insertError) {

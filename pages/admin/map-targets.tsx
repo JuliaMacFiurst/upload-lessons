@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../components/AdminLogout";
 import { AdminTabs } from "../../components/AdminTabs";
+import { estimateMapTargetBatchCost } from "../../lib/ai/mapTargetGenerationProfile";
 
 type MapTargetStatusItem = {
   map_type: string;
@@ -16,21 +17,52 @@ type MapTargetStatusItem = {
   has_youtube_links: boolean;
   has_google_maps_url: boolean;
   has_slide_images: boolean;
+  is_approved: boolean;
+  auto_generated: boolean;
 };
 
 type FilterMode = "all" | "missing-story" | "missing-slides" | "ready";
 const PAGE_SIZE = 100;
 
+function getResponseErrorMessage(raw: string, status: number): string {
+  const trimmed = raw.trim();
+
+  if (!trimmed) {
+    return `Request failed with status ${status}.`;
+  }
+
+  if (trimmed.startsWith("<!DOCTYPE html") || trimmed.startsWith("<html")) {
+    return `Server returned HTML instead of JSON (status ${status}). Check server logs for the underlying error.`;
+  }
+
+  return trimmed.slice(0, 300);
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
-  const data = (await response.json()) as T & { error?: string };
+  const raw = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(getResponseErrorMessage(raw, response.status));
+  }
+
+  const data = JSON.parse(raw) as T & { error?: string };
   if (!response.ok) {
-    throw new Error(data.error ?? "Request failed.");
+    throw new Error(data.error ?? getResponseErrorMessage(raw, response.status));
   }
   return data;
 }
 
 function getStatusMeta(item: MapTargetStatusItem) {
+  if (item.auto_generated && !item.is_approved) {
+    return {
+      icon: "🤖",
+      label: "Автогенерация ждёт одобрения",
+      tone: "warning",
+    } as const;
+  }
+
   if (!item.has_story) {
     return {
       icon: "❌",
@@ -75,10 +107,14 @@ export default function AdminMapTargetsPage() {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [items, setItems] = useState<MapTargetStatusItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [generatingBatch, setGeneratingBatch] = useState(false);
+  const [parsingSelectedSlides, setParsingSelectedSlides] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterMode>("all");
   const [page, setPage] = useState(1);
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -90,39 +126,27 @@ export default function AdminMapTargetsPage() {
     });
   }, [router, supabase]);
 
+  const loadItems = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const data = await fetchJson<{ items: MapTargetStatusItem[] }>("/api/admin/map-targets-status");
+      setItems(data.items);
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!sessionChecked) {
       return;
     }
 
-    let isActive = true;
-
-    const load = async () => {
-      setLoading(true);
-      setError(null);
-
-      try {
-        const data = await fetchJson<{ items: MapTargetStatusItem[] }>("/api/admin/map-targets-status");
-        if (isActive) {
-          setItems(data.items);
-        }
-      } catch (loadError) {
-        if (isActive) {
-          setError(loadError instanceof Error ? loadError.message : String(loadError));
-        }
-      } finally {
-        if (isActive) {
-          setLoading(false);
-        }
-      }
-    };
-
-    void load();
-
-    return () => {
-      isActive = false;
-    };
-  }, [sessionChecked]);
+    void loadItems();
+  }, [loadItems, sessionChecked]);
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -165,6 +189,159 @@ export default function AdminMapTargetsPage() {
     const start = (safePage - 1) * PAGE_SIZE;
     return filteredItems.slice(start, start + PAGE_SIZE);
   }, [filteredItems, safePage]);
+
+  const selectedKeySet = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+
+  const selectedItems = useMemo(
+    () =>
+      items.filter((item) => selectedKeySet.has(`${item.map_type}::${item.target_id}`)),
+    [items, selectedKeySet],
+  );
+
+  const batchEstimate = useMemo(
+    () =>
+      selectedItems.length > 0
+        ? estimateMapTargetBatchCost(
+            selectedItems.map((item) => ({
+              map_type: item.map_type,
+              target_id: item.target_id,
+            })),
+          )
+        : null,
+    [selectedItems],
+  );
+
+  const selectedItemsWithStoryWithoutSlides = useMemo(
+    () => selectedItems.filter((item) => item.has_story && !item.has_slides),
+    [selectedItems],
+  );
+
+  const paginatedKeys = useMemo(
+    () => paginatedItems.map((item) => `${item.map_type}::${item.target_id}`),
+    [paginatedItems],
+  );
+
+  const allPageSelected =
+    paginatedKeys.length > 0 && paginatedKeys.every((key) => selectedKeySet.has(key));
+
+  const toggleSelected = (mapType: string, targetId: string) => {
+    const key = `${mapType}::${targetId}`;
+    setSelectedKeys((current) =>
+      current.includes(key) ? current.filter((item) => item !== key) : [...current, key],
+    );
+  };
+
+  const toggleSelectPage = () => {
+    setSelectedKeys((current) => {
+      if (allPageSelected) {
+        return current.filter((key) => !paginatedKeys.includes(key));
+      }
+
+      return Array.from(new Set([...current, ...paginatedKeys]));
+    });
+  };
+
+  const handleGenerateBatch = async () => {
+    if (selectedItems.length === 0) {
+      setError("Выберите хотя бы один объект в таблице.");
+      return;
+    }
+
+    setGeneratingBatch(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const data = await fetchJson<{
+        total: number;
+        generated: number;
+        failed: number;
+        failures: Array<{ mapType: string; targetId: string; error: string }>;
+      }>("/api/admin/map-story/generate-batch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          targets: selectedItems.map((item) => ({
+            mapType: item.map_type,
+            targetId: item.target_id,
+          })),
+        }),
+      });
+
+      await loadItems();
+      setSelectedKeys(data.failures.map((item) => `${item.mapType}::${item.targetId}`));
+      setSuccess(
+        data.failed > 0
+          ? `Автогенерация завершена: успешно ${data.generated}, с ошибками ${data.failed}. Неуспешные строки оставлены выделенными.`
+          : `Автогенерация завершена: создано ${data.generated} story.`,
+      );
+      if (data.failed > 0) {
+        setError(
+          data.failures
+            .slice(0, 3)
+            .map((item) => `${item.mapType}/${item.targetId}: ${item.error}`)
+            .join(" | "),
+        );
+      }
+    } catch (batchError) {
+      setError(batchError instanceof Error ? batchError.message : String(batchError));
+    } finally {
+      setGeneratingBatch(false);
+    }
+  };
+
+  const handleParseSelectedStoriesToSlides = async () => {
+    if (selectedItemsWithStoryWithoutSlides.length === 0) {
+      setError("Среди выделенных объектов нет story без slides.");
+      return;
+    }
+
+    setParsingSelectedSlides(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const data = await fetchJson<{
+        parsed: number;
+        failed: number;
+        failures: Array<{ mapType: string; targetId: string; error: string }>;
+      }>("/api/admin/map-story/parse-slides-batch", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          targets: selectedItemsWithStoryWithoutSlides.map((item) => ({
+            mapType: item.map_type,
+            targetId: item.target_id,
+          })),
+        }),
+      });
+
+      await loadItems();
+      setSelectedKeys(data.failures.map((item) => `${item.mapType}::${item.targetId}`));
+      setSuccess(
+        data.failed > 0
+          ? `Парсинг story в slides завершён: успешно ${data.parsed}, с ошибками ${data.failed}.`
+          : `Парсинг story в slides завершён: обработано ${data.parsed}.`,
+      );
+
+      if (data.failed > 0) {
+        setError(
+          data.failures
+            .slice(0, 3)
+            .map((item) => `${item.mapType}/${item.targetId}: ${item.error}`)
+            .join(" | "),
+        );
+      }
+    } catch (parseError) {
+      setError(parseError instanceof Error ? parseError.message : String(parseError));
+    } finally {
+      setParsingSelectedSlides(false);
+    }
+  };
 
   const stats = useMemo(() => {
     let missingStory = 0;
@@ -333,7 +510,55 @@ export default function AdminMapTargetsPage() {
           </div>
         </div>
 
+        <div className="map-targets-batch-bar">
+          <div className="map-targets-batch-bar__meta">
+            <strong>Выбрано:</strong> {selectedItems.length}
+            {batchEstimate ? (
+              <>
+                <span>Токены: {batchEstimate.inputTokens + batchEstimate.outputTokens}</span>
+                <span>USD: ${batchEstimate.usd.toFixed(4)}</span>
+                <span>ILS: ₪{batchEstimate.ils.toFixed(3)}</span>
+                <span>Модель: {batchEstimate.model}</span>
+              </>
+            ) : (
+              <span>Выделите строки для оценки и автогенерации.</span>
+            )}
+            <span>Story без slides: {selectedItemsWithStoryWithoutSlides.length}</span>
+          </div>
+          <div className="map-targets-batch-bar__actions">
+            <button
+              type="button"
+              className="map-targets-pagination__button"
+              onClick={() => setSelectedKeys([])}
+              disabled={selectedItems.length === 0 || generatingBatch || parsingSelectedSlides}
+            >
+              Снять выделение
+            </button>
+            <button
+              type="button"
+              className="map-targets-pagination__button"
+              onClick={() => void handleParseSelectedStoriesToSlides()}
+              disabled={
+                selectedItemsWithStoryWithoutSlides.length === 0 ||
+                generatingBatch ||
+                parsingSelectedSlides
+              }
+            >
+              {parsingSelectedSlides ? "Парсим story..." : "Распарсить story в slides"}
+            </button>
+            <button
+              type="button"
+              className="map-targets-generate"
+              onClick={() => void handleGenerateBatch()}
+              disabled={selectedItems.length === 0 || generatingBatch || parsingSelectedSlides}
+            >
+              {generatingBatch ? "Генерируем..." : "Сгенерировать автоматически"}
+            </button>
+          </div>
+        </div>
+
         {error ? <p className="map-targets-error">{error}</p> : null}
+        {success ? <p className="map-targets-success">{success}</p> : null}
         {loading ? <div className="map-targets-state">Загрузка покрытия карты...</div> : null}
         {!loading && !error && filteredItems.length === 0 ? (
           <div className="map-targets-state">
@@ -349,6 +574,14 @@ export default function AdminMapTargetsPage() {
                 {filteredItems.length !== items.length ? `, всего записей: ${items.length}` : ""}
               </div>
               <div className="map-targets-pagination__actions">
+                <button
+                  type="button"
+                  className="map-targets-pagination__button"
+                  onClick={toggleSelectPage}
+                  disabled={paginatedKeys.length === 0 || generatingBatch || parsingSelectedSlides}
+                >
+                  {allPageSelected ? "Снять страницу" : "Выделить страницу"}
+                </button>
                 <button
                   type="button"
                   className="map-targets-pagination__button"
@@ -373,9 +606,18 @@ export default function AdminMapTargetsPage() {
             <table className="map-targets-table">
               <thead>
                 <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      checked={allPageSelected}
+                      onChange={toggleSelectPage}
+                      aria-label="Выбрать текущую страницу"
+                    />
+                  </th>
                   <th>map_type</th>
                   <th>target_id</th>
                   <th>Статус</th>
+                  <th>Маркер</th>
                   <th>YouTube</th>
                   <th>Google Maps / Earth</th>
                   <th>Изображения в slides</th>
@@ -392,6 +634,14 @@ export default function AdminMapTargetsPage() {
 
                   return (
                     <tr key={`${item.map_type}:${item.target_id}`}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={selectedKeySet.has(`${item.map_type}::${item.target_id}`)}
+                          onChange={() => toggleSelected(item.map_type, item.target_id)}
+                          aria-label={`Выбрать ${item.map_type} ${item.target_id}`}
+                        />
+                      </td>
                       <td>{item.map_type}</td>
                       <td className="map-targets-table__target">{item.target_id}</td>
                       <td>
@@ -399,6 +649,24 @@ export default function AdminMapTargetsPage() {
                           <span>{status.icon}</span>
                           <span>{status.label}</span>
                         </span>
+                      </td>
+                      <td>
+                        {item.auto_generated && !item.is_approved ? (
+                          <span className="map-targets-badge map-targets-badge--warning">
+                            <span>🤖</span>
+                            <span>Автоматическая генерация</span>
+                          </span>
+                        ) : item.auto_generated ? (
+                          <span className="map-targets-badge map-targets-badge--success">
+                            <span>✅</span>
+                            <span>Автогенерация одобрена</span>
+                          </span>
+                        ) : (
+                          <span className="map-targets-badge map-targets-badge--neutral">
+                            <span>—</span>
+                            <span>Без маркера</span>
+                          </span>
+                        )}
                       </td>
                       <td>
                         <span className={`map-targets-badge map-targets-badge--${youtubeStatus.tone}`}>
@@ -548,6 +816,32 @@ export default function AdminMapTargetsPage() {
           align-items: end;
         }
 
+        .map-targets-batch-bar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          padding: 18px 20px;
+          border-bottom: 1px solid #edf1f5;
+          background: #f8fafc;
+        }
+
+        .map-targets-batch-bar__meta {
+          display: flex;
+          gap: 14px;
+          align-items: center;
+          flex-wrap: wrap;
+          color: #344054;
+          font-size: 14px;
+        }
+
+        .map-targets-batch-bar__actions {
+          display: flex;
+          gap: 10px;
+          align-items: center;
+          flex-wrap: wrap;
+        }
+
         .map-targets-field {
           display: flex;
           flex-direction: column;
@@ -600,6 +894,7 @@ export default function AdminMapTargetsPage() {
         }
 
         .map-targets-error,
+        .map-targets-success,
         .map-targets-state {
           margin: 0;
           padding: 20px;
@@ -611,12 +906,29 @@ export default function AdminMapTargetsPage() {
           background: #fff4f2;
         }
 
+        .map-targets-success {
+          color: #027a48;
+          border-bottom: 1px solid #edf1f5;
+          background: #ecfdf3;
+        }
+
         .map-targets-state {
           color: #475467;
         }
 
         .map-targets-table-wrap {
           overflow: auto;
+        }
+
+        .map-targets-generate {
+          width: auto;
+          margin: 0;
+          padding: 11px 16px;
+          border: 1px solid #1f4b99;
+          border-radius: 10px;
+          background: #1f4b99;
+          color: #ffffff;
+          cursor: pointer;
         }
 
         .map-targets-pagination {
@@ -719,6 +1031,11 @@ export default function AdminMapTargetsPage() {
           color: #027a48;
         }
 
+        .map-targets-badge--neutral {
+          background: #f2f4f7;
+          color: #475467;
+        }
+
         .map-targets-open {
           display: inline-flex;
           align-items: center;
@@ -747,6 +1064,11 @@ export default function AdminMapTargetsPage() {
           }
 
           .map-targets-controls {
+            flex-direction: column;
+            align-items: stretch;
+          }
+
+          .map-targets-batch-bar {
             flex-direction: column;
             align-items: stretch;
           }

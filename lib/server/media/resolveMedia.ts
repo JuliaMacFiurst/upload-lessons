@@ -798,35 +798,43 @@ export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMed
   }
 
   if (preferredSource === "pexels") {
-    if (preferredType === "image") {
-      const photo = await resolveFromPexelsPhotos(input);
-      if (photo) {
-        return photo;
-      }
-    } else if (preferredType === "video") {
-      const video = await resolveFromPexels(input);
-      if (video) {
-        return video;
-      }
-    } else {
-      const photo = await resolveFromPexelsPhotos(input);
-      if (photo) {
-        return photo;
-      }
+    try {
+      if (preferredType === "image") {
+        const photo = await resolveFromPexelsPhotos(input);
+        if (photo) {
+          return photo;
+        }
+      } else if (preferredType === "video") {
+        const video = await resolveFromPexels(input);
+        if (video) {
+          return video;
+        }
+      } else {
+        const photo = await resolveFromPexelsPhotos(input);
+        if (photo) {
+          return photo;
+        }
 
-      const video = await resolveFromPexels(input);
-      if (video) {
-        return video;
+        const video = await resolveFromPexels(input);
+        if (video) {
+          return video;
+        }
       }
+    } catch (error) {
+      console.error("[resolve-media] preferred pexels failed", error);
     }
 
     return buildFallbackImage(input);
   }
 
   if (preferredSource === "giphy") {
-    const giphy = await resolveFromGiphy(input);
-    if (giphy) {
-      return giphy;
+    try {
+      const giphy = await resolveFromGiphy(input);
+      if (giphy) {
+        return giphy;
+      }
+    } catch (error) {
+      console.error("[resolve-media] preferred giphy failed", error);
     }
     return buildFallbackImage(input);
   }

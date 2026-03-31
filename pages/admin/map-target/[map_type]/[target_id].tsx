@@ -22,6 +22,9 @@ type StoryPayload = {
   target_id: string;
   language: string;
   content: string;
+  is_approved: boolean;
+  auto_generated: boolean;
+  auto_generation_model: string | null;
   youtube_url_ru: string | null;
   youtube_url_he: string | null;
   youtube_url_en: string | null;
@@ -121,6 +124,7 @@ export default function AdminMapTargetEditorPage() {
   const [savingText, setSavingText] = useState(false);
   const [parsingSlides, setParsingSlides] = useState(false);
   const [savingSlides, setSavingSlides] = useState(false);
+  const [approvingStory, setApprovingStory] = useState(false);
   const [resolvingAllSlides, setResolvingAllSlides] = useState(false);
   const [resolvingSlideIndex, setResolvingSlideIndex] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -286,6 +290,37 @@ export default function AdminMapTargetEditorPage() {
       setError(parseError instanceof Error ? parseError.message : String(parseError));
     } finally {
       setParsingSlides(false);
+    }
+  };
+
+  const handleApproveStory = async () => {
+    if (!mapType || !targetId || !story) {
+      setError("Story не найдена.");
+      return;
+    }
+
+    setApprovingStory(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      await fetchJson<{ ok: true }>("/api/admin/map-story/approve", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          mapType,
+          targetId,
+        }),
+      });
+
+      await loadData();
+      setSuccess("Story одобрена.");
+    } catch (approveError) {
+      setError(approveError instanceof Error ? approveError.message : String(approveError));
+    } finally {
+      setApprovingStory(false);
     }
   };
 
@@ -827,15 +862,32 @@ export default function AdminMapTargetEditorPage() {
                 <p className="map-target-editor__panel-subtitle">
                   {story ? "Русская story найдена." : "Story ещё не создана. Можно ввести текст и сохранить."}
                 </p>
+                {story?.auto_generated && !story.is_approved ? (
+                  <div className="map-target-editor__auto-badge">
+                    Автоматическая генерация. Нужна ручная проверка и одобрение.
+                  </div>
+                ) : null}
               </div>
-              <button
-                type="button"
-                className="books-button books-button--primary"
-                onClick={() => void handleSaveText()}
-                disabled={savingText}
-              >
-                {savingText ? "Сохраняем..." : "Сохранить текст"}
-              </button>
+              <div className="map-target-editor__panel-actions">
+                {story?.auto_generated && !story.is_approved ? (
+                  <button
+                    type="button"
+                    className="books-button books-button--ghost"
+                    onClick={() => void handleApproveStory()}
+                    disabled={approvingStory}
+                  >
+                    {approvingStory ? "Одобряем..." : "Одобрить"}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="books-button books-button--primary"
+                  onClick={() => void handleSaveText()}
+                  disabled={savingText}
+                >
+                  {savingText ? "Сохраняем..." : "Сохранить текст"}
+                </button>
+              </div>
             </div>
 
             <textarea
@@ -1255,6 +1307,19 @@ export default function AdminMapTargetEditorPage() {
         .map-target-editor__panel-subtitle {
           margin: 0;
           color: #667085;
+        }
+
+        .map-target-editor__auto-badge {
+          margin-top: 10px;
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          padding: 8px 12px;
+          border-radius: 999px;
+          background: #fff7e6;
+          color: #9a6700;
+          font-size: 13px;
+          font-weight: 700;
         }
 
         .map-target-editor__panel-header {
