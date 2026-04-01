@@ -15,6 +15,10 @@ export type ResolveMediaResult = {
   source: string;
 };
 
+type ResolveAttemptInput = ResolveMediaInput & {
+  deadlineAt?: number;
+};
+
 type WikimediaImageCandidate = {
   title: string;
   url: string;
@@ -107,6 +111,11 @@ const WIKIMEDIA_API_URL = "https://commons.wikimedia.org/w/api.php";
 const WIKIMEDIA_MIN_REQUEST_INTERVAL_MS = 1200;
 const WIKIMEDIA_CACHE_TTL_MS = 5 * 60 * 1000;
 const WIKIMEDIA_MAX_RETRIES = 2;
+const MAX_MEDIA_QUERIES = 4;
+const TOTAL_RESOLVE_TIMEOUT_MS = 8000;
+const WIKIMEDIA_FETCH_TIMEOUT_MS = 2500;
+const PEXELS_FETCH_TIMEOUT_MS = 2500;
+const GIPHY_FETCH_TIMEOUT_MS = 2500;
 
 let wikimediaNextRequestAt = 0;
 let wikimediaRequestQueue: Promise<void> = Promise.resolve();
@@ -400,7 +409,7 @@ function buildMediaQueries(input: ResolveMediaInput): string[] {
         `${primaryTargetTerm}`.trim(),
       ].filter(Boolean),
     ),
-  );
+  ).slice(0, MAX_MEDIA_QUERIES);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -425,6 +434,43 @@ function parseRetryAfterMs(value: string | null): number | null {
   }
 
   return Math.max(0, retryAt - Date.now());
+}
+
+function getRemainingTimeMs(input: ResolveAttemptInput): number | null {
+  if (!input.deadlineAt) {
+    return null;
+  }
+
+  return input.deadlineAt - Date.now();
+}
+
+function hasTimedOut(input: ResolveAttemptInput, bufferMs = 0): boolean {
+  const remainingMs = getRemainingTimeMs(input);
+  return remainingMs !== null && remainingMs <= bufferMs;
+}
+
+async function fetchWithTimeout(
+  input: ResolveAttemptInput,
+  url: string,
+  init: RequestInit | undefined,
+  timeoutMs: number,
+): Promise<Response> {
+  const remainingMs = getRemainingTimeMs(input);
+  const effectiveTimeoutMs =
+    remainingMs === null ? timeoutMs : Math.max(1, Math.min(timeoutMs, remainingMs));
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`Timed out after ${effectiveTimeoutMs}ms`));
+  }, effectiveTimeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
 }
 
 async function enqueueWikimediaRequest<T>(task: () => Promise<T>): Promise<T> {
@@ -452,6 +498,7 @@ async function enqueueWikimediaRequest<T>(task: () => Promise<T>): Promise<T> {
 }
 
 async function searchWikimediaImages(
+  input: ResolveAttemptInput,
   query: string,
   limit: number,
 ): Promise<WikimediaImageCandidate[]> {
@@ -476,7 +523,16 @@ async function searchWikimediaImages(
     });
 
     for (let attempt = 0; attempt <= WIKIMEDIA_MAX_RETRIES; attempt += 1) {
-      const response = await fetch(`${WIKIMEDIA_API_URL}?${params.toString()}`);
+      if (hasTimedOut(input, 150)) {
+        return [];
+      }
+
+      const response = await fetchWithTimeout(
+        input,
+        `${WIKIMEDIA_API_URL}?${params.toString()}`,
+        undefined,
+        WIKIMEDIA_FETCH_TIMEOUT_MS,
+      );
       if (response.ok) {
         const data = (await response.json()) as WikimediaSearchResponse;
         const pages = Object.values(data.query?.pages ?? {});
@@ -549,10 +605,14 @@ async function resolveFromWikimedia(input: ResolveMediaInput): Promise<ResolveMe
   const existingUrlSet = buildExistingUrlSet(input);
 
   for (const query of queries) {
+    if (hasTimedOut(input, 200)) {
+      return null;
+    }
+
     let candidates: WikimediaImageCandidate[] = [];
 
     try {
-      candidates = await searchWikimediaImages(query, 8);
+      candidates = await searchWikimediaImages(input, query, 8);
     } catch (error) {
       console.error("[resolve-media] wikimedia search failed", error);
       continue;
@@ -638,7 +698,7 @@ function pickBestPexelsPhoto(
   return null;
 }
 
-async function resolveFromPexelsPhotos(input: ResolveMediaInput): Promise<ResolveMediaResult | null> {
+async function resolveFromPexelsPhotos(input: ResolveAttemptInput): Promise<ResolveMediaResult | null> {
   if (!process.env.PEXELS_API_KEY) {
     return null;
   }
@@ -647,6 +707,10 @@ async function resolveFromPexelsPhotos(input: ResolveMediaInput): Promise<Resolv
   const existingUrlSet = buildExistingUrlSet(input);
 
   for (const query of queries) {
+    if (hasTimedOut(input, 200)) {
+      return null;
+    }
+
     const params = new URLSearchParams({
       query,
       per_page: "8",
@@ -655,11 +719,16 @@ async function resolveFromPexelsPhotos(input: ResolveMediaInput): Promise<Resolv
       locale: "en-US",
     });
 
-    const response = await fetch(`https://api.pexels.com/v1/search?${params.toString()}`, {
-      headers: {
-        Authorization: process.env.PEXELS_API_KEY,
+    const response = await fetchWithTimeout(
+      input,
+      `https://api.pexels.com/v1/search?${params.toString()}`,
+      {
+        headers: {
+          Authorization: process.env.PEXELS_API_KEY,
+        },
       },
-    });
+      PEXELS_FETCH_TIMEOUT_MS,
+    );
 
     if (!response.ok) {
       throw new Error(`Pexels photo request failed: ${response.status}`);
@@ -682,7 +751,7 @@ async function resolveFromPexelsPhotos(input: ResolveMediaInput): Promise<Resolv
   return null;
 }
 
-async function resolveFromPexels(input: ResolveMediaInput): Promise<ResolveMediaResult | null> {
+async function resolveFromPexels(input: ResolveAttemptInput): Promise<ResolveMediaResult | null> {
   if (!process.env.PEXELS_API_KEY) {
     return null;
   }
@@ -691,6 +760,10 @@ async function resolveFromPexels(input: ResolveMediaInput): Promise<ResolveMedia
   const existingUrlSet = buildExistingUrlSet(input);
 
   for (const query of queries) {
+    if (hasTimedOut(input, 200)) {
+      return null;
+    }
+
     const params = new URLSearchParams({
       query,
       per_page: "8",
@@ -699,11 +772,16 @@ async function resolveFromPexels(input: ResolveMediaInput): Promise<ResolveMedia
       locale: "en-US",
     });
 
-    const response = await fetch(`https://api.pexels.com/videos/search?${params.toString()}`, {
-      headers: {
-        Authorization: process.env.PEXELS_API_KEY,
+    const response = await fetchWithTimeout(
+      input,
+      `https://api.pexels.com/videos/search?${params.toString()}`,
+      {
+        headers: {
+          Authorization: process.env.PEXELS_API_KEY,
+        },
       },
-    });
+      PEXELS_FETCH_TIMEOUT_MS,
+    );
 
     if (!response.ok) {
       throw new Error(`Pexels request failed: ${response.status}`);
@@ -726,7 +804,7 @@ async function resolveFromPexels(input: ResolveMediaInput): Promise<ResolveMedia
   return null;
 }
 
-async function resolveFromGiphy(input: ResolveMediaInput): Promise<ResolveMediaResult | null> {
+async function resolveFromGiphy(input: ResolveAttemptInput): Promise<ResolveMediaResult | null> {
   if (!process.env.GIPHY_API_KEY) {
     return null;
   }
@@ -736,6 +814,10 @@ async function resolveFromGiphy(input: ResolveMediaInput): Promise<ResolveMediaR
   const preferredType = input.preferredType ?? "image";
 
   for (const query of queries) {
+    if (hasTimedOut(input, 200)) {
+      return null;
+    }
+
     const params = new URLSearchParams({
       api_key: process.env.GIPHY_API_KEY,
       q: query,
@@ -744,7 +826,12 @@ async function resolveFromGiphy(input: ResolveMediaInput): Promise<ResolveMediaR
       lang: "en",
     });
 
-    const response = await fetch(`https://api.giphy.com/v1/gifs/search?${params.toString()}`);
+    const response = await fetchWithTimeout(
+      input,
+      `https://api.giphy.com/v1/gifs/search?${params.toString()}`,
+      undefined,
+      GIPHY_FETCH_TIMEOUT_MS,
+    );
 
     if (!response.ok) {
       throw new Error(`Giphy request failed: ${response.status}`);
@@ -781,12 +868,16 @@ async function resolveFromGiphy(input: ResolveMediaInput): Promise<ResolveMediaR
 }
 
 export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMediaResult> {
+  const timedInput: ResolveAttemptInput = {
+    ...input,
+    deadlineAt: Date.now() + TOTAL_RESOLVE_TIMEOUT_MS,
+  };
   const preferredSource = input.preferredSource ?? "auto";
   const preferredType = input.preferredType;
 
   if (preferredSource === "wikimedia") {
     try {
-      const wikimedia = await resolveFromWikimedia(input);
+      const wikimedia = await resolveFromWikimedia(timedInput);
       if (wikimedia) {
         return wikimedia;
       }
@@ -800,22 +891,22 @@ export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMed
   if (preferredSource === "pexels") {
     try {
       if (preferredType === "image") {
-        const photo = await resolveFromPexelsPhotos(input);
+        const photo = await resolveFromPexelsPhotos(timedInput);
         if (photo) {
           return photo;
         }
       } else if (preferredType === "video") {
-        const video = await resolveFromPexels(input);
+        const video = await resolveFromPexels(timedInput);
         if (video) {
           return video;
         }
       } else {
-        const photo = await resolveFromPexelsPhotos(input);
+        const photo = await resolveFromPexelsPhotos(timedInput);
         if (photo) {
           return photo;
         }
 
-        const video = await resolveFromPexels(input);
+        const video = await resolveFromPexels(timedInput);
         if (video) {
           return video;
         }
@@ -829,7 +920,7 @@ export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMed
 
   if (preferredSource === "giphy") {
     try {
-      const giphy = await resolveFromGiphy(input);
+      const giphy = await resolveFromGiphy(timedInput);
       if (giphy) {
         return giphy;
       }
@@ -840,7 +931,7 @@ export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMed
   }
 
   try {
-    const wikimedia = await resolveFromWikimedia(input);
+    const wikimedia = await resolveFromWikimedia(timedInput);
     if (wikimedia) {
       return wikimedia;
     }
@@ -851,7 +942,7 @@ export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMed
   try {
     if (preferredType === "video") {
       const giphyVideo = await resolveFromGiphy({
-        ...input,
+        ...timedInput,
         preferredSource: "giphy",
         preferredType: "video",
       });
@@ -862,7 +953,7 @@ export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMed
 
     if (!preferredType) {
       const giphyImage = await resolveFromGiphy({
-        ...input,
+        ...timedInput,
         preferredSource: "giphy",
         preferredType: "image",
       });
@@ -872,27 +963,27 @@ export async function resolveMedia(input: ResolveMediaInput): Promise<ResolveMed
     }
 
     if (preferredType === "image") {
-      const pexelsPhoto = await resolveFromPexelsPhotos(input);
+      const pexelsPhoto = await resolveFromPexelsPhotos(timedInput);
       if (pexelsPhoto) {
         return pexelsPhoto;
       }
     }
 
     if (preferredType === "video") {
-      const pexelsVideo = await resolveFromPexels(input);
+      const pexelsVideo = await resolveFromPexels(timedInput);
       if (pexelsVideo) {
         return pexelsVideo;
       }
     }
 
     if (!preferredType) {
-      const pexelsPhoto = await resolveFromPexelsPhotos(input);
+      const pexelsPhoto = await resolveFromPexelsPhotos(timedInput);
       if (pexelsPhoto) {
         return pexelsPhoto;
       }
     }
 
-    const pexels = await resolveFromPexels(input);
+    const pexels = await resolveFromPexels(timedInput);
     if (pexels) {
       return pexels;
     }
