@@ -53,11 +53,67 @@ type StoryResponse = {
   slides: SlideDto[];
 };
 
+type BulkMapStoryItem = {
+  map_type?: string;
+  mapType?: string;
+  target_id?: string;
+  targetId?: string;
+  content?: string;
+};
+
+type BulkSaveResponse = {
+  saved: number;
+  failed: number;
+  failures: Array<{ mapType: string; targetId: string; error: string }>;
+};
+
 type YouTubeFields = {
   youtube_url_ru?: string | null;
   youtube_url_he?: string | null;
   youtube_url_en?: string | null;
 };
+
+function sanitizeMapStoryContent(input: string): string {
+  return input
+    .replace(/\/n\/n\/?/gi, "\n\n")
+    .replace(/\\n\\n/g, "\n\n")
+    .replace(/\/n\/?/gi, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/^\s*#{1,6}\s*/g, "")
+        .replace(/^\s*[*•\-\/]+\s*/g, "")
+        .replace(/[*/#]+$/g, "")
+        .trim(),
+    )
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+async function ensureMapTargetExists(
+  supabase: SupabaseClient,
+  mapType: string,
+  targetId: string,
+): Promise<void> {
+  const { data, error } = await supabase
+    .from("map_targets")
+    .select("map_type,target_id")
+    .eq("map_type", mapType)
+    .eq("target_id", targetId)
+    .maybeSingle();
+
+  if (error) {
+    throw new Error(`Failed to check map_target: ${error.message}`);
+  }
+
+  if (!data) {
+    throw new Error(`Map target ${mapType}/${targetId} does not exist in map_targets.`);
+  }
+}
 
 function extractIframeSrc(input: string): string {
   const text = input.trim();
@@ -239,9 +295,11 @@ async function saveStoryContent(
   youtubeFields?: YouTubeFields,
   googleMapsUrl?: string | null,
 ): Promise<StoryResponse> {
-  const trimmedContent = content.trim();
+  const trimmedContent = sanitizeMapStoryContent(content);
   const normalizedYouTubeFields = normalizeYouTubeFields(youtubeFields);
   const normalizedGoogleMapsUrl = normalizeGoogleMapsUrl(googleMapsUrl);
+
+  await ensureMapTargetExists(supabase, mapType, targetId);
 
   const { data: existing, error: existingError } = await supabase
     .from("map_stories")
@@ -317,6 +375,59 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   if (req.method === "POST") {
+    if (Array.isArray(req.body?.items)) {
+      const items = req.body.items as BulkMapStoryItem[];
+
+      if (items.length === 0) {
+        return res.status(400).json({ error: "items are required." });
+      }
+
+      const failures: BulkSaveResponse["failures"] = [];
+      let saved = 0;
+
+      for (const item of items) {
+        const mapType =
+          typeof item?.mapType === "string"
+            ? item.mapType.trim()
+            : typeof item?.map_type === "string"
+              ? item.map_type.trim()
+              : "";
+        const targetId =
+          typeof item?.targetId === "string"
+            ? item.targetId.trim()
+            : typeof item?.target_id === "string"
+              ? item.target_id.trim()
+              : "";
+        const content = typeof item?.content === "string" ? item.content : "";
+
+        if (!mapType || !targetId || !content.trim()) {
+          failures.push({
+            mapType,
+            targetId,
+            error: "Each item must include map_type/mapType, target_id/targetId, and non-empty content.",
+          });
+          continue;
+        }
+
+        try {
+          await saveStoryContent(supabase, mapType, targetId, content);
+          saved += 1;
+        } catch (error) {
+          failures.push({
+            mapType,
+            targetId,
+            error: error instanceof Error ? error.message : "Failed to save map story.",
+          });
+        }
+      }
+
+      return res.status(200).json({
+        saved,
+        failed: failures.length,
+        failures,
+      } satisfies BulkSaveResponse);
+    }
+
     const mapType = typeof req.body?.mapType === "string" ? req.body.mapType.trim() : "";
     const targetId = typeof req.body?.targetId === "string" ? req.body.targetId.trim() : "";
     const content = typeof req.body?.content === "string" ? req.body.content : "";

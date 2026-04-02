@@ -21,6 +21,12 @@ type MapTargetStatusItem = {
   auto_generated: boolean;
 };
 
+type BulkMapStoryJsonItem = {
+  map_type: string;
+  target_id: string;
+  content: string;
+};
+
 type FilterMode = "all" | "missing-story" | "missing-slides" | "ready";
 const PAGE_SIZE = 100;
 
@@ -115,6 +121,8 @@ export default function AdminMapTargetsPage() {
   const [filter, setFilter] = useState<FilterMode>("all");
   const [page, setPage] = useState(1);
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
+  const [bulkJsonInput, setBulkJsonInput] = useState("");
+  const [savingBulkJson, setSavingBulkJson] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -239,6 +247,94 @@ export default function AdminMapTargetsPage() {
 
       return Array.from(new Set([...current, ...paginatedKeys]));
     });
+  };
+
+  const handleCopySelectedAsJson = async () => {
+    if (selectedItems.length === 0) {
+      setError("Выберите хотя бы один объект в таблице.");
+      return;
+    }
+
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const payload = selectedItems.map((item) => ({
+        map_type: item.map_type,
+        target_id: item.target_id,
+        content: "",
+      }));
+
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      setSuccess(`Скопировано ${payload.length} объектов в JSON с пустым шаблоном content.`);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : String(copyError));
+    }
+  };
+
+  const handleBulkJsonSave = async () => {
+    if (!bulkJsonInput.trim()) {
+      setError("Вставьте JSON для массового сохранения.");
+      return;
+    }
+
+    setSavingBulkJson(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const parsed = JSON.parse(bulkJsonInput) as unknown;
+      if (!Array.isArray(parsed)) {
+        throw new Error("JSON должен быть массивом объектов.");
+      }
+
+      const items = parsed.map((item) => {
+        const record = item as Partial<BulkMapStoryJsonItem>;
+        return {
+          map_type: typeof record.map_type === "string" ? record.map_type.trim() : "",
+          target_id: typeof record.target_id === "string" ? record.target_id.trim() : "",
+          content: typeof record.content === "string" ? record.content : "",
+        };
+      });
+
+      if (items.some((item) => !item.map_type || !item.target_id || !item.content.trim())) {
+        throw new Error("Каждый объект должен содержать map_type, target_id и непустой content.");
+      }
+
+      const data = await fetchJson<{
+        saved: number;
+        failed: number;
+        failures: Array<{ mapType: string; targetId: string; error: string }>;
+      }>("/api/admin/map-story", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ items }),
+      });
+
+      await loadItems();
+
+      setSuccess(
+        data.failed > 0
+          ? `Массовое сохранение завершено: успешно ${data.saved}, с ошибками ${data.failed}.`
+          : `Массовое сохранение завершено: сохранено ${data.saved} записей.`,
+      );
+
+      if (data.failed > 0) {
+        setSelectedKeys(data.failures.map((item) => `${item.mapType}::${item.targetId}`));
+        setError(
+          data.failures
+            .slice(0, 3)
+            .map((item) => `${item.mapType}/${item.targetId}: ${item.error}`)
+            .join(" | "),
+        );
+      }
+    } catch (bulkError) {
+      setError(bulkError instanceof Error ? bulkError.message : String(bulkError));
+    } finally {
+      setSavingBulkJson(false);
+    }
   };
 
   const handleGenerateBatch = async () => {
@@ -529,8 +625,16 @@ export default function AdminMapTargetsPage() {
             <button
               type="button"
               className="map-targets-pagination__button"
+              onClick={() => void handleCopySelectedAsJson()}
+              disabled={selectedItems.length === 0 || generatingBatch || parsingSelectedSlides || savingBulkJson}
+            >
+              Копировать JSON
+            </button>
+            <button
+              type="button"
+              className="map-targets-pagination__button"
               onClick={() => setSelectedKeys([])}
-              disabled={selectedItems.length === 0 || generatingBatch || parsingSelectedSlides}
+              disabled={selectedItems.length === 0 || generatingBatch || parsingSelectedSlides || savingBulkJson}
             >
               Снять выделение
             </button>
@@ -541,7 +645,8 @@ export default function AdminMapTargetsPage() {
               disabled={
                 selectedItemsWithStoryWithoutSlides.length === 0 ||
                 generatingBatch ||
-                parsingSelectedSlides
+                parsingSelectedSlides ||
+                savingBulkJson
               }
             >
               {parsingSelectedSlides ? "Парсим story..." : "Распарсить story в slides"}
@@ -550,11 +655,59 @@ export default function AdminMapTargetsPage() {
               type="button"
               className="map-targets-generate"
               onClick={() => void handleGenerateBatch()}
-              disabled={selectedItems.length === 0 || generatingBatch || parsingSelectedSlides}
+              disabled={selectedItems.length === 0 || generatingBatch || parsingSelectedSlides || savingBulkJson}
             >
               {generatingBatch ? "Генерируем..." : "Сгенерировать автоматически"}
             </button>
           </div>
+        </div>
+
+        <div className="map-targets-section map-targets-section--bulk-json">
+          <div className="map-targets-section__header">
+            <h2 className="map-targets-section__title">Массовая загрузка content через JSON</h2>
+          </div>
+          <p className="map-targets-bulk-json__hint">
+            Вставь JSON-массив объектов. Для каждого элемента будет сохранён `content` в `map_stories`
+            строго по паре `map_type + target_id`.
+          </p>
+          <textarea
+            className="map-targets-bulk-json__textarea"
+            value={bulkJsonInput}
+            onChange={(event) => setBulkJsonInput(event.target.value)}
+            placeholder='[{"map_type":"country","target_id":"brazil","content":"..."}]'
+            spellCheck={false}
+          />
+          <div className="map-targets-bulk-json__actions">
+            <button
+              type="button"
+              className="map-targets-pagination__button"
+              onClick={() => setBulkJsonInput("")}
+              disabled={!bulkJsonInput || savingBulkJson}
+            >
+              Очистить
+            </button>
+            <button
+              type="button"
+              className="map-targets-generate"
+              onClick={() => void handleBulkJsonSave()}
+              disabled={!bulkJsonInput.trim() || generatingBatch || parsingSelectedSlides || savingBulkJson}
+            >
+              {savingBulkJson ? "Сохраняем JSON..." : "Сохранить JSON в map_stories"}
+            </button>
+          </div>
+          <div className="map-targets-bulk-json__example-label">Пример JSON, который принимается:</div>
+          <pre className="map-targets-bulk-json__example">{`[
+  {
+    "map_type": "country",
+    "target_id": "brazil",
+    "content": "Brazil is the largest country in South America. It is famous for the Amazon rainforest and long Atlantic beaches."
+  },
+  {
+    "map_type": "river",
+    "target_id": "nile",
+    "content": "The Nile is one of the longest rivers in the world. It flows through northeastern Africa and has been important for people for thousands of years."
+  }
+]`}</pre>
         </div>
 
         {error ? <p className="map-targets-error">{error}</p> : null}
@@ -842,6 +995,55 @@ export default function AdminMapTargetsPage() {
           flex-wrap: wrap;
         }
 
+        .map-targets-section--bulk-json {
+          display: grid;
+          gap: 12px;
+        }
+
+        .map-targets-bulk-json__hint {
+          margin: 0;
+          color: #5f6368;
+          line-height: 1.5;
+        }
+
+        .map-targets-bulk-json__textarea {
+          width: 100%;
+          min-height: 220px;
+          resize: vertical;
+          margin: 0;
+          padding: 14px 16px;
+          border: 1px solid #cfd8e3;
+          border-radius: 12px;
+          background: #fbfcfe;
+          font: inherit;
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          line-height: 1.5;
+        }
+
+        .map-targets-bulk-json__actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 10px;
+          flex-wrap: wrap;
+        }
+
+        .map-targets-bulk-json__example-label {
+          font-size: 13px;
+          font-weight: 600;
+          color: #475467;
+        }
+
+        .map-targets-bulk-json__example {
+          margin: 0;
+          padding: 14px 16px;
+          border-radius: 12px;
+          background: #101828;
+          color: #f8fafc;
+          overflow-x: auto;
+          font-size: 13px;
+          line-height: 1.5;
+        }
+
         .map-targets-field {
           display: flex;
           flex-direction: column;
@@ -1080,6 +1282,11 @@ export default function AdminMapTargetsPage() {
 
           .map-targets-pagination__actions {
             justify-content: space-between;
+          }
+
+          .map-targets-bulk-json__actions {
+            justify-content: stretch;
+            flex-direction: column;
           }
 
           .map-targets-field--search {
