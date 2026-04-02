@@ -123,6 +123,7 @@ export default function AdminMapTargetsPage() {
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [bulkJsonInput, setBulkJsonInput] = useState("");
   const [savingBulkJson, setSavingBulkJson] = useState(false);
+  const [copiedJson, setCopiedJson] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -257,6 +258,7 @@ export default function AdminMapTargetsPage() {
 
     setError(null);
     setSuccess(null);
+    setCopiedJson(false);
 
     try {
       const payload = selectedItems.map((item) => ({
@@ -267,10 +269,23 @@ export default function AdminMapTargetsPage() {
 
       await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
       setSuccess(`Скопировано ${payload.length} объектов в JSON с пустым шаблоном content.`);
+      setCopiedJson(true);
     } catch (copyError) {
       setError(copyError instanceof Error ? copyError.message : String(copyError));
     }
   };
+
+  useEffect(() => {
+    if (!copiedJson) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setCopiedJson(false);
+    }, 1800);
+
+    return () => window.clearTimeout(timer);
+  }, [copiedJson]);
 
   const handleBulkJsonSave = async () => {
     if (!bulkJsonInput.trim()) {
@@ -628,7 +643,7 @@ export default function AdminMapTargetsPage() {
               onClick={() => void handleCopySelectedAsJson()}
               disabled={selectedItems.length === 0 || generatingBatch || parsingSelectedSlides || savingBulkJson}
             >
-              Копировать JSON
+              {copiedJson ? "Скопировано" : "Копировать JSON"}
             </button>
             <button
               type="button"
@@ -1133,6 +1148,15 @@ export default function AdminMapTargetsPage() {
           cursor: pointer;
         }
 
+        .map-targets-generate:hover:not(:disabled) {
+          background: #173b78;
+          border-color: #173b78;
+        }
+
+        .map-targets-generate:active:not(:disabled) {
+          transform: translateY(1px);
+        }
+
         .map-targets-pagination {
           display: flex;
           justify-content: space-between;
@@ -1161,6 +1185,16 @@ export default function AdminMapTargetsPage() {
           padding: 8px 12px;
           font: inherit;
           cursor: pointer;
+        }
+
+        .map-targets-pagination__button:hover:not(:disabled) {
+          background: #f8fafc;
+          border-color: #b8c1cc;
+        }
+
+        .map-targets-pagination__button:active:not(:disabled) {
+          background: #eef2f6;
+          transform: translateY(1px);
         }
 
         .map-targets-pagination__button:disabled {
