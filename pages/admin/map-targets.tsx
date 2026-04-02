@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
@@ -124,6 +124,7 @@ export default function AdminMapTargetsPage() {
   const [bulkJsonInput, setBulkJsonInput] = useState("");
   const [savingBulkJson, setSavingBulkJson] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
+  const copiedJsonTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -266,8 +267,46 @@ export default function AdminMapTargetsPage() {
         target_id: item.target_id,
         content: "",
       }));
+      const text = JSON.stringify(payload, null, 2);
 
-      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+      if (navigator.clipboard?.writeText) {
+        try {
+          await navigator.clipboard.writeText(text);
+        } catch {
+          const textarea = document.createElement("textarea");
+          textarea.value = text;
+          textarea.setAttribute("readonly", "true");
+          textarea.style.position = "fixed";
+          textarea.style.opacity = "0";
+          textarea.style.pointerEvents = "none";
+          document.body.appendChild(textarea);
+          textarea.focus();
+          textarea.select();
+          const copied = document.execCommand("copy");
+          document.body.removeChild(textarea);
+
+          if (!copied) {
+            throw new Error("Не удалось скопировать JSON в буфер обмена.");
+          }
+        }
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.setAttribute("readonly", "true");
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        textarea.style.pointerEvents = "none";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const copied = document.execCommand("copy");
+        document.body.removeChild(textarea);
+
+        if (!copied) {
+          throw new Error("Не удалось скопировать JSON в буфер обмена.");
+        }
+      }
+
       setSuccess(`Скопировано ${payload.length} объектов в JSON с пустым шаблоном content.`);
       setCopiedJson(true);
     } catch (copyError) {
@@ -280,11 +319,21 @@ export default function AdminMapTargetsPage() {
       return;
     }
 
-    const timer = window.setTimeout(() => {
+    if (copiedJsonTimerRef.current !== null) {
+      window.clearTimeout(copiedJsonTimerRef.current);
+    }
+
+    copiedJsonTimerRef.current = window.setTimeout(() => {
       setCopiedJson(false);
+      copiedJsonTimerRef.current = null;
     }, 1800);
 
-    return () => window.clearTimeout(timer);
+    return () => {
+      if (copiedJsonTimerRef.current !== null) {
+        window.clearTimeout(copiedJsonTimerRef.current);
+        copiedJsonTimerRef.current = null;
+      }
+    };
   }, [copiedJson]);
 
   const handleBulkJsonSave = async () => {
@@ -329,6 +378,7 @@ export default function AdminMapTargetsPage() {
       });
 
       await loadItems();
+      setSelectedKeys(data.failures.map((item) => `${item.mapType}::${item.targetId}`));
 
       setSuccess(
         data.failed > 0
@@ -337,13 +387,14 @@ export default function AdminMapTargetsPage() {
       );
 
       if (data.failed > 0) {
-        setSelectedKeys(data.failures.map((item) => `${item.mapType}::${item.targetId}`));
         setError(
           data.failures
             .slice(0, 3)
             .map((item) => `${item.mapType}/${item.targetId}: ${item.error}`)
             .join(" | "),
         );
+      } else {
+        setBulkJsonInput("");
       }
     } catch (bulkError) {
       setError(bulkError instanceof Error ? bulkError.message : String(bulkError));
