@@ -577,6 +577,69 @@ export async function loadCategoryOptions(supabase: SupabaseClient): Promise<Cat
   return (data as CategoryOption[] | null) ?? [];
 }
 
+export async function createUniqueCategorySlug(
+  supabase: SupabaseClient,
+  name: string,
+): Promise<string> {
+  const base = safeSlug(name) || "category";
+  let candidate = base;
+  let attempt = 1;
+
+  while (true) {
+    const { data, error } = await supabase.from("categories").select("id").eq("slug", candidate).maybeSingle();
+    if (error) {
+      throw new Error(`Failed to check existing category slug: ${error.message}`);
+    }
+    if (!data?.id) {
+      return candidate;
+    }
+    attempt += 1;
+    candidate = `${base}-${attempt}`;
+  }
+}
+
+export async function createBookCategory(
+  supabase: SupabaseClient,
+  input: { name: string; slug?: string | null },
+): Promise<CategoryOption> {
+  const normalizedName = input.name.trim();
+  if (!normalizedName) {
+    throw new Error("Category name is required.");
+  }
+
+  const { data: existingByName, error: existingByNameError } = await supabase
+    .from("categories")
+    .select("id,name,slug,icon,sort_order,is_published")
+    .ilike("name", normalizedName)
+    .maybeSingle();
+
+  if (existingByNameError) {
+    throw new Error(`Failed to check existing category name: ${existingByNameError.message}`);
+  }
+
+  if (existingByName) {
+    return existingByName as CategoryOption;
+  }
+
+  const slug = input.slug?.trim() ? safeSlug(input.slug) : await createUniqueCategorySlug(supabase, normalizedName);
+
+  const { data, error } = await supabase
+    .from("categories")
+    .insert({
+      name: normalizedName,
+      slug,
+      is_published: true,
+    })
+    .select("id,name,slug,icon,sort_order,is_published")
+    .single();
+
+  if (error || !data) {
+    throw new Error(error?.message ?? "Failed to create category.");
+  }
+
+  return data as CategoryOption;
+}
+
 export async function loadExplanationModes(
   supabase: SupabaseClient,
 ): Promise<ExplanationMode[]> {
@@ -1058,9 +1121,10 @@ export async function saveBookEditorData(
       return [];
     }
 
+    const explanationId = explanation.id ?? existingExplanationMap.get(explanation.mode_id);
     return [
       {
-        id: explanation.id ?? existingExplanationMap.get(explanation.mode_id),
+        ...(explanationId ? { id: explanationId } : {}),
         book_id: bookId,
         mode_id: explanation.mode_id,
         slides: explanation.slides,
@@ -1106,7 +1170,7 @@ export async function saveBookEditorData(
   if (parsed.tests.length > 0) {
     const { error } = await supabase.from("book_tests").upsert(
       parsed.tests.map((test, index) => ({
-        id: test.id,
+        ...(test.id ? { id: test.id } : {}),
         book_id: bookId,
         title: test.title,
         description: test.description || null,

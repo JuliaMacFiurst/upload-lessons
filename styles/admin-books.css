@@ -134,10 +134,57 @@
   min-height: 88px;
 }
 
+.books-input--json {
+  min-height: 280px;
+  font-family: "SFMono-Regular", "Menlo", "Monaco", monospace;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+
+.books-import-help {
+  border: 1px solid #d8e3ef;
+  border-radius: 14px;
+  padding: 16px;
+  background: #f7fbff;
+}
+
+.books-import-help__code {
+  margin: 10px 0 0;
+  padding: 14px;
+  overflow-x: auto;
+  border-radius: 12px;
+  background: #eef5fb;
+  border: 1px solid #d2dfec;
+  font-family: "SFMono-Regular", "Menlo", "Monaco", monospace;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .books-checkbox-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+
+.books-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.books-tag {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 12px;
+  border: 1px solid #d7e2ec;
+  border-radius: 12px;
+  background: #f9fbfd;
+}
+
+.books-tag small {
+  color: #6e7a8d;
 }
 
 .books-checkbox {

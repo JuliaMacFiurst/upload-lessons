@@ -6,7 +6,11 @@ import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminTabs } from "../../../components/AdminTabs";
 import { AdminLogout } from "../../../components/AdminLogout";
-import type { BookListItem } from "../../../lib/books/types";
+import {
+  buildBookPayloadFromImportedJson,
+  extractBookSeedFromImportedJson,
+} from "../../../lib/books/book-json-import";
+import type { BookEditorResponse, BookListItem, CategoryOption } from "../../../lib/books/types";
 
 type BatchPlannedBook = {
   title: string;
@@ -48,8 +52,14 @@ export default function AdminBooksIndexPage() {
   const [author, setAuthor] = useState("");
   const [search, setSearch] = useState("");
   const [books, setBooks] = useState<BookListItem[]>([]);
+  const [bookCategories, setBookCategories] = useState<CategoryOption[]>([]);
   const [loadingBooks, setLoadingBooks] = useState(false);
+  const [loadingCategories, setLoadingCategories] = useState(false);
   const [checkingBook, setCheckingBook] = useState(false);
+  const [importingBookJson, setImportingBookJson] = useState(false);
+  const [creatingCategory, setCreatingCategory] = useState(false);
+  const [jsonImportValue, setJsonImportValue] = useState("");
+  const [newCategoryName, setNewCategoryName] = useState("");
   const [batchAgeGroup, setBatchAgeGroup] = useState("8-10");
   const [batchGenre, setBatchGenre] = useState("");
   const [batchCount, setBatchCount] = useState(5);
@@ -94,6 +104,18 @@ export default function AdminBooksIndexPage() {
     }
   }, [searchUrl]);
 
+  const loadBookCategories = useCallback(async () => {
+    setLoadingCategories(true);
+    try {
+      const data = await fetchJson<{ categories: CategoryOption[] }>("/api/admin/book-categories");
+      setBookCategories(data.categories);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setLoadingCategories(false);
+    }
+  }, []);
+
   const filteredBooks = books.filter((book) => {
     if (statusFilter === "published") {
       return book.is_published === true;
@@ -116,7 +138,8 @@ export default function AdminBooksIndexPage() {
       return;
     }
     void loadBooks();
-  }, [sessionChecked, loadBooks]);
+    void loadBookCategories();
+  }, [sessionChecked, loadBooks, loadBookCategories]);
 
   const checkBook = async () => {
     setCheckingBook(true);
@@ -140,6 +163,63 @@ export default function AdminBooksIndexPage() {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
     } finally {
       setCheckingBook(false);
+    }
+  };
+
+  const importBookFromJson = async () => {
+    setImportingBookJson(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const seed = extractBookSeedFromImportedJson(jsonImportValue);
+      const bookResult = await fetchJson<{ existing: boolean; book: BookListItem }>("/api/admin/books", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(seed),
+      });
+
+      const editor = await fetchJson<BookEditorResponse>(`/api/admin/books/${bookResult.book.id}`);
+      const payload = buildBookPayloadFromImportedJson(editor, jsonImportValue);
+      await fetchJson<{ ok: true; data: BookEditorResponse }>(`/api/admin/books/${bookResult.book.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      await loadBooks();
+      setSuccess(bookResult.existing ? "Книга обновлена из JSON. Открываю редактор." : "Книга создана из JSON. Открываю редактор.");
+      await router.push(`/admin/books/${bookResult.book.id}`);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setImportingBookJson(false);
+    }
+  };
+
+  const createCategory = async () => {
+    setCreatingCategory(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const data = await fetchJson<{ category: CategoryOption }>("/api/admin/book-categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newCategoryName }),
+      });
+
+      setBookCategories((current) =>
+        [...current, data.category].sort((left, right) => left.name.localeCompare(right.name, "ru")),
+      );
+      setNewCategoryName("");
+      setSuccess(`Категория «${data.category.name}» готова. Теперь JSON можно импортировать повторно.`);
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setCreatingCategory(false);
     }
   };
 
@@ -250,6 +330,142 @@ export default function AdminBooksIndexPage() {
           </p>
         </div>
       </header>
+
+      {error && <div className="books-alert books-alert--error">{error}</div>}
+      {success && <div className="books-alert books-alert--success">{success}</div>}
+
+      <section className="books-panel">
+        <div className="books-section-head">
+          <div>
+            <h2 className="books-panel__title">Категории книг</h2>
+            <p className="books-section-help">
+              Если импорт JSON падает из-за новой категории, добавьте её здесь и повторите импорт.
+            </p>
+          </div>
+        </div>
+
+        <div className="books-grid books-grid--2">
+          <label className="books-field">
+            <span className="books-field__label">
+              Название категории
+              <span className="books-field__tip" title="Категория будет создана в общем справочнике книг. Slug сформируется автоматически.">
+                i
+              </span>
+            </span>
+            <input
+              className="books-input"
+              value={newCategoryName}
+              onChange={(event) => setNewCategoryName(event.target.value)}
+              placeholder="Приключения"
+            />
+            <span className="books-field__help">Пример: Приключения, Детская классика, Философская проза.</span>
+          </label>
+        </div>
+
+        <div className="books-actions">
+          <button
+            type="button"
+            className="books-button books-button--primary"
+            disabled={creatingCategory || !newCategoryName.trim()}
+            onClick={() => {
+              void createCategory();
+            }}
+          >
+            {creatingCategory ? "Создание..." : "Добавить категорию"}
+          </button>
+        </div>
+
+        <div className="books-tag-list">
+          {loadingCategories ? (
+            <span className="books-field__help">Загрузка категорий...</span>
+          ) : bookCategories.length === 0 ? (
+            <span className="books-field__help">Категории пока не добавлены.</span>
+          ) : (
+            bookCategories.map((category) => (
+              <div className="books-tag" key={category.id}>
+                <strong>{category.name}</strong>
+                <small>{category.slug}</small>
+              </div>
+            ))
+          )}
+        </div>
+      </section>
+
+      <section className="books-panel">
+        <div className="books-section-head">
+          <div>
+            <h2 className="books-panel__title">Импорт готового JSON</h2>
+            <p className="books-section-help">
+              Вставьте полный JSON книги. Книга будет создана или найдена по `title`, затем данные сохранятся в базу.
+            </p>
+          </div>
+          <button
+            type="button"
+            className="books-button books-button--primary"
+            disabled={importingBookJson || !jsonImportValue.trim()}
+            onClick={() => {
+              void importBookFromJson();
+            }}
+          >
+            {importingBookJson ? "Импорт..." : "Импортировать JSON"}
+          </button>
+        </div>
+
+        <label className="books-field">
+          <span className="books-field__label">
+            JSON книги
+            <span className="books-field__tip" title="Полный JSON со всеми данными книги, который будет автоматически разложен по полям и таблицам.">
+              i
+            </span>
+          </span>
+          <textarea
+            className="books-input books-input--textarea books-input--json"
+            value={jsonImportValue}
+            placeholder='{"title":"Волшебник Земноморья","plot_slides":["..."]}'
+            onChange={(event) => setJsonImportValue(event.target.value)}
+          />
+          <span className="books-field__help">
+            Поддерживаются поля title, author, year, description, keywords, age, reading_time, categories, *_slides и test.
+          </span>
+        </label>
+
+        <div className="books-import-help">
+          <strong>Поддерживаемый формат</strong>
+          <pre className="books-import-help__code">{`{
+  "title": "Волшебник Земноморья",
+  "author": "Урсула Ле Гуин",
+  "year": 1968,
+  "description": "Короткое описание книги",
+  "keywords": "магия, взросление, тень",
+  "age": "10–14 лет",
+  "reading_time": "6–8 часов",
+  "categories": ["фэнтези", "классика"],
+  "plot_slides": ["...", "..."],
+  "characters_slides": ["...", "..."],
+  "idea_slides": ["...", "..."],
+  "philosophy_slides": ["...", "..."],
+  "conflicts_slides": ["...", "..."],
+  "author_message_slides": ["...", "..."],
+  "ending_meaning_slides": ["...", "..."],
+  "book_in_20_sec_slides": ["...", "..."],
+  "test": {
+    "title": "Название теста",
+    "description": "Короткое описание",
+    "questions": [
+      {
+        "question": "Вопрос",
+        "options": ["A", "B", "C"],
+        "correct_answer": 2
+      }
+    ]
+  }
+}`}</pre>
+          <p className="books-section-help">
+            `correct_answer` указывается как номер ответа, начиная с 1. `reading_time` можно вставлять числом или строкой
+            вроде `45 мин` или `6–8 часов`.
+          </p>
+        </div>
+      </section>
 
       <section className="books-panel">
         <div className="books-section-head">
@@ -472,9 +688,6 @@ export default function AdminBooksIndexPage() {
           />
           <span className="books-field__help">Filter the latest 50 books by title, author, or slug.</span>
         </label>
-
-        {error && <div className="books-alert books-alert--error">{error}</div>}
-        {success && <div className="books-alert books-alert--success">{success}</div>}
 
         <div className="books-table">
           <div className="books-table__head">
