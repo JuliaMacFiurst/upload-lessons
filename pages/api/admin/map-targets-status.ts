@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireAdminSession } from "@/lib/server/admin-session";
 import { loadExpectedMapTargets } from "@/lib/server/mapTargets/importMapTargets";
+import { countMapStorySlides } from "@/lib/server/mapTargets/storySlides";
 
 type MapTargetRow = {
   map_type: string;
@@ -12,6 +13,7 @@ type MapStoryRow = {
   id: string;
   type: string | null;
   target_id: string | null;
+  content: string | null;
   is_approved: boolean | null;
   auto_generated: boolean | null;
   youtube_url_ru: string | null;
@@ -51,7 +53,7 @@ async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTarget
       supabase
         .from("map_stories")
         .select(
-          "id,type,target_id,is_approved,auto_generated,youtube_url_ru,youtube_url_he,youtube_url_en,google_maps_url",
+          "id,type,target_id,content,is_approved,auto_generated,youtube_url_ru,youtube_url_he,youtube_url_en,google_maps_url",
         )
         .eq("language", "ru"),
     ]);
@@ -137,10 +139,14 @@ async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTarget
   const items = Array.from(targetKeyMap.values()).map((target) => {
     const key = `${target.map_type}::${target.target_id}`;
     const targetStories = storiesByTargetKey.get(key) ?? [];
-    const slidesCount = targetStories.reduce((sum, story) => {
+    const savedSlidesCount = targetStories.reduce((sum, story) => {
       const storySlides = slidesByStoryId.get(story.id);
       return sum + (storySlides?.count ?? 0);
     }, 0);
+    const slidesCount = targetStories.reduce(
+      (sum, story) => sum + countMapStorySlides(story.content),
+      0,
+    );
     const hasSlideImages = targetStories.some((story) => slidesByStoryId.get(story.id)?.hasImages ?? false);
     const hasYouTubeLinks = targetStories.some(
       (story) =>
@@ -156,7 +162,7 @@ async function loadMapTargetsStatus(supabase: SupabaseClient): Promise<MapTarget
       map_type: target.map_type,
       target_id: target.target_id,
       has_story: targetStories.length > 0,
-      has_slides: slidesCount > 0,
+      has_slides: savedSlidesCount > 0,
       slides_count: slidesCount,
       has_youtube_links: hasYouTubeLinks,
       has_google_maps_url: hasGoogleMapsUrl,

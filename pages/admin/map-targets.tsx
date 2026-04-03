@@ -106,6 +106,18 @@ function getPresenceMeta(isPresent: boolean) {
       };
 }
 
+function getSlidesCountTone(count: number): "danger" | "warning" | "neutral" {
+  if (count > 35) {
+    return "danger";
+  }
+
+  if (count > 25) {
+    return "warning";
+  }
+
+  return "neutral";
+}
+
 export default function AdminMapTargetsPage() {
   const router = useRouter();
   const supabase = createClientComponentClient();
@@ -850,6 +862,7 @@ export default function AdminMapTargetsPage() {
                   const youtubeStatus = getPresenceMeta(item.has_youtube_links);
                   const mapsStatus = getPresenceMeta(item.has_google_maps_url);
                   const imagesStatus = getPresenceMeta(item.has_slide_images);
+                  const slidesCountTone = getSlidesCountTone(item.slides_count);
 
                   return (
                     <tr key={`${item.map_type}:${item.target_id}`}>
@@ -905,7 +918,13 @@ export default function AdminMapTargetsPage() {
                           <span>{imagesStatus.label}</span>
                         </span>
                       </td>
-                      <td>{item.slides_count}</td>
+                      <td>
+                        <span
+                          className={`map-targets-slides-count map-targets-slides-count--${slidesCountTone}`}
+                        >
+                          {item.slides_count}
+                        </span>
+                      </td>
                       <td>
                         <Link
                           href={`/admin/map-target/${encodeURIComponent(item.map_type)}/${encodeURIComponent(item.target_id)}`}
@@ -1321,6 +1340,27 @@ export default function AdminMapTargetsPage() {
         .map-targets-badge--neutral {
           background: #f2f4f7;
           color: #475467;
+        }
+
+        .map-targets-slides-count {
+          display: inline-flex;
+          min-width: 44px;
+          justify-content: center;
+          padding: 6px 10px;
+          border-radius: 999px;
+          font-weight: 700;
+          background: #f2f4f7;
+          color: #344054;
+        }
+
+        .map-targets-slides-count--warning {
+          background: #fffaeb;
+          color: #b54708;
+        }
+
+        .map-targets-slides-count--danger {
+          background: #fff1f3;
+          color: #b42318;
         }
 
         .map-targets-open {

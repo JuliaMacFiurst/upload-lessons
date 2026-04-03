@@ -10,6 +10,7 @@ import {
   sanitizeMapStoryContent,
   sanitizeMapStoryText,
 } from "@/lib/server/mapTargets/sanitizeMapStoryContent";
+import { splitMapStoryIntoSlideTexts } from "@/lib/server/mapTargets/storySlides";
 
 type SlideInput = {
   text: string;
@@ -26,30 +27,12 @@ const generatedMapStorySchema = z.object({
   content: z.string().trim().min(1),
 });
 
-function splitIntoSentences(content: string): string[] {
-  return content
-    .replace(/\s+/g, " ")
-    .split(/(?<=[.!?…])\s+/)
-    .map((sentence) => sentence.trim())
-    .filter(Boolean);
-}
-
 function buildSlidesFromContent(content: string): SlideInput[] {
-  const sentences = splitIntoSentences(sanitizeMapStoryContent(content));
-  const slides: SlideInput[] = [];
-
-  for (let index = 0; index < sentences.length; index += 2) {
-    const text = sentences.slice(index, index + 2).join(" ").trim();
-    if (text) {
-      slides.push({
-        text: sanitizeMapStoryText(text),
-        image_url: null,
-        credit_line: null,
-      });
-    }
-  }
-
-  return slides;
+  return splitMapStoryIntoSlideTexts(sanitizeMapStoryContent(content)).map((text) => ({
+    text: sanitizeMapStoryText(text),
+    image_url: null,
+    credit_line: null,
+  }));
 }
 
 async function replaceSlides(supabase: SupabaseClient, storyId: string, slides: SlideInput[]) {
