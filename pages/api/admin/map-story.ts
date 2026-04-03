@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireAdminSession } from "@/lib/server/admin-session";
+import { sanitizeMapStoryContent } from "@/lib/server/mapTargets/sanitizeMapStoryContent";
 
 type MapStoryRow = {
   id: string;
@@ -72,27 +73,6 @@ type YouTubeFields = {
   youtube_url_he?: string | null;
   youtube_url_en?: string | null;
 };
-
-function sanitizeMapStoryContent(input: string): string {
-  return input
-    .replace(/\/n\/n\/?/gi, "\n\n")
-    .replace(/\\n\\n/g, "\n\n")
-    .replace(/\/n\/?/gi, "\n")
-    .replace(/\\n/g, "\n")
-    .replace(/\r\n/g, "\n")
-    .split("\n")
-    .map((line) =>
-      line
-        .replace(/^\s*#{1,6}\s*/g, "")
-        .replace(/^\s*[*•\-\/]+\s*/g, "")
-        .replace(/[*/#]+$/g, "")
-        .trim(),
-    )
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .replace(/[ \t]{2,}/g, " ")
-    .trim();
-}
 
 async function ensureMapTargetExists(
   supabase: SupabaseClient,

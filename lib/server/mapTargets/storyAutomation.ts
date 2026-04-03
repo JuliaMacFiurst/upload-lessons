@@ -6,6 +6,10 @@ import { detectSlideIntent } from "@/lib/media/detectSlideIntent";
 import { runGeminiJsonPrompt } from "@/lib/server/book-admin";
 import { getFlagMedia } from "@/lib/server/media/getFlagMedia";
 import { resolveMedia } from "@/lib/server/media/resolveMedia";
+import {
+  sanitizeMapStoryContent,
+  sanitizeMapStoryText,
+} from "@/lib/server/mapTargets/sanitizeMapStoryContent";
 
 type SlideInput = {
   text: string;
@@ -31,14 +35,14 @@ function splitIntoSentences(content: string): string[] {
 }
 
 function buildSlidesFromContent(content: string): SlideInput[] {
-  const sentences = splitIntoSentences(content);
+  const sentences = splitIntoSentences(sanitizeMapStoryContent(content));
   const slides: SlideInput[] = [];
 
   for (let index = 0; index < sentences.length; index += 2) {
     const text = sentences.slice(index, index + 2).join(" ").trim();
     if (text) {
       slides.push({
-        text,
+        text: sanitizeMapStoryText(text),
         image_url: null,
         credit_line: null,
       });
@@ -80,6 +84,7 @@ async function upsertGeneratedStory(
   targetId: string,
   content: string,
 ): Promise<MapStoryRow> {
+  const sanitizedContent = sanitizeMapStoryContent(content);
   const { data: existing, error: existingError } = await supabase
     .from("map_stories")
     .select("id")
@@ -96,7 +101,7 @@ async function upsertGeneratedStory(
     const { error: updateError } = await supabase
       .from("map_stories")
       .update({
-        content,
+        content: sanitizedContent,
         auto_generated: true,
         auto_generation_model: MAP_TARGET_GENERATION_MODEL,
         is_approved: false,
@@ -116,7 +121,7 @@ async function upsertGeneratedStory(
       type: mapType,
       target_id: targetId,
       language: "ru",
-      content,
+      content: sanitizedContent,
       is_approved: false,
       auto_generated: true,
       auto_generation_model: MAP_TARGET_GENERATION_MODEL,
@@ -325,8 +330,9 @@ export async function generateMapTargetStoryBatchItem(
   const generated = generatedMapStorySchema.parse(
     await runGeminiJsonPrompt<unknown>(prompt),
   );
-  const story = await upsertGeneratedStory(supabase, mapType, targetId, generated.content);
-  const slides = buildSlidesFromContent(generated.content);
+  const sanitizedContent = sanitizeMapStoryContent(generated.content);
+  const story = await upsertGeneratedStory(supabase, mapType, targetId, sanitizedContent);
+  const slides = buildSlidesFromContent(sanitizedContent);
 
   if (slides.length === 0) {
     throw new Error("Generated story could not be parsed into slides.");
@@ -337,7 +343,7 @@ export async function generateMapTargetStoryBatchItem(
 
   return {
     storyId: story.id,
-    content: generated.content,
+    content: sanitizedContent,
     slidesCount: enriched.slides.length,
     mediaStats: enriched.mediaStats,
   };

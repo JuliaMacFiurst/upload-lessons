@@ -1,6 +1,10 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireAdminSession } from "@/lib/server/admin-session";
+import {
+  sanitizeMapStoryContent,
+  sanitizeMapStoryText,
+} from "@/lib/server/mapTargets/sanitizeMapStoryContent";
 import { getFlagMedia } from "@/lib/server/media/getFlagMedia";
 
 type SlideInput = {
@@ -41,14 +45,14 @@ function splitIntoSentences(content: string): string[] {
 }
 
 function buildSlidesFromContent(content: string): SlideInput[] {
-  const sentences = splitIntoSentences(content);
+  const sentences = splitIntoSentences(sanitizeMapStoryContent(content));
   const slides: SlideInput[] = [];
 
   for (let index = 0; index < sentences.length; index += 2) {
     const text = sentences.slice(index, index + 2).join(" ").trim();
     if (text) {
       slides.push({
-        text,
+        text: sanitizeMapStoryText(text),
         image_url: null,
         credit_line: null,
       });
@@ -80,7 +84,8 @@ async function ensureStory(
     return existing as StoryLookupRow;
   }
 
-  const trimmedContent = typeof content === "string" ? content.trim() : "";
+  const trimmedContent =
+    typeof content === "string" ? sanitizeMapStoryContent(content) : "";
   if (!trimmedContent) {
     throw new Error("Story does not exist and content is empty.");
   }
@@ -190,7 +195,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const story = await ensureStory(supabase, mapType, targetId, content);
     const rawSlides =
       slidesRaw?.map((slide: RawSlideInput) => ({
-        text: typeof slide?.text === "string" ? slide.text.trim() : "",
+        text: typeof slide?.text === "string" ? sanitizeMapStoryText(slide.text) : "",
         image_url:
           typeof slide?.image_url === "string" &&
           (!isDisallowedMediaUrl(slide.image_url) ||
