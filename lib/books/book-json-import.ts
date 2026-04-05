@@ -323,7 +323,7 @@ export function buildBookPayloadFromImportedJson(
       return slides === undefined ? explanation : { ...explanation, slides };
     }),
     tests: importedTest ?? current.tests,
-    storyTemplate: current.storyTemplate,
+    storyTemplate: null,
   };
 }
 
