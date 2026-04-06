@@ -1,21 +1,11 @@
-import { useState, useEffect } from 'react';
-import { useSession, useSupabaseClient } from '@supabase/auth-helpers-react';
-import { useRouter } from 'next/router';
+import { useState } from 'react';
+import { useSupabaseClient } from '@supabase/auth-helpers-react';
+import { isAllowedAdminEmail } from '../lib/server/admin-session';
 
 export default function Login() {
   const supabase = useSupabaseClient();
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
-  const session = useSession();
-  const router = useRouter();
-
-  useEffect(() => {
-    if (session) {
-      router.replace('/admin/upload-lesson');
-    }
-  }, [session, router]);
-
-  if (session) return null;
 
   const handleEmailLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,10 +113,10 @@ import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
 export async function getServerSideProps(ctx: GetServerSidePropsContext) {
   const supabase = createServerSupabaseClient(ctx);
   const {
-    data: { session },
-  } = await supabase.auth.getSession();
+    data: { user },
+  } = await supabase.auth.getUser();
 
-  if (session) {
+  if (user && isAllowedAdminEmail(user.email)) {
     return {
       redirect: {
         destination: '/admin/upload-lesson',

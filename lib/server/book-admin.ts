@@ -1,7 +1,5 @@
-import type { NextApiRequest, NextApiResponse } from "next";
 import slugify from "slugify";
-import { createPagesServerClient } from "@supabase/auth-helpers-nextjs";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { type SupabaseClient } from "@supabase/supabase-js";
 import { GoogleGenAI } from "@google/genai";
 import {
   detectFormatViolations,
@@ -53,6 +51,9 @@ import {
   type StoryTemplateInput,
 } from "../books/types";
 import { z } from "zod";
+import { requireAdminSession } from "./admin-session";
+
+export { requireAdminSession } from "./admin-session";
 
 type BookTableRow = {
   id: string;
@@ -191,32 +192,6 @@ export function createDefaultStorySteps() {
     sort_order: index,
     choices: [],
   }));
-}
-
-function getServiceSupabaseClient(): SupabaseClient {
-  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error(
-      "Missing Supabase server credentials. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.",
-    );
-  }
-
-  return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
-}
-
-export async function requireAdminSession(
-  req: NextApiRequest,
-  res: NextApiResponse,
-): Promise<SupabaseClient> {
-  const sessionClient = createPagesServerClient({ req, res });
-  const {
-    data: { session },
-  } = await sessionClient.auth.getSession();
-
-  if (!session) {
-    throw new Error("Unauthorized");
-  }
-
-  return getServiceSupabaseClient();
 }
 
 export function normalizeKeywords(value: string[] | null | undefined): string[] {

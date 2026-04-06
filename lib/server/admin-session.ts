@@ -2,6 +2,26 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { createPagesServerClient } from "@supabase/auth-helpers-nextjs";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+function getAllowedAdminEmails(): string[] {
+  return (process.env.ADMIN_EMAIL ?? "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function isAllowedAdminEmail(email: string | null | undefined): boolean {
+  if (!email) {
+    return false;
+  }
+
+  const allowedEmails = getAllowedAdminEmails();
+  if (allowedEmails.length === 0) {
+    throw new Error("Missing ADMIN_EMAIL.");
+  }
+
+  return allowedEmails.includes(email.trim().toLowerCase());
+}
+
 function getServiceSupabaseClient(): SupabaseClient {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
     throw new Error(
@@ -18,10 +38,11 @@ export async function requireAdminSession(
 ): Promise<SupabaseClient> {
   const sessionClient = createPagesServerClient({ req, res });
   const {
-    data: { session },
-  } = await sessionClient.auth.getSession();
+    data: { user },
+    error,
+  } = await sessionClient.auth.getUser();
 
-  if (!session) {
+  if (error || !user || !isAllowedAdminEmail(user.email)) {
     throw new Error("Unauthorized");
   }
 
