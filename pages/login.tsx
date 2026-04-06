@@ -1,11 +1,12 @@
-import { useState } from 'react';
-import { useSupabaseClient } from '@supabase/auth-helpers-react';
+import { useEffect, useState } from 'react';
+import { useSession, useSupabaseClient } from '@supabase/auth-helpers-react';
 import { useRouter } from 'next/router';
-import { isAllowedAdminEmail } from '../lib/server/admin-session';
 
 export default function Login() {
   const supabase = useSupabaseClient();
+  const session = useSession();
   const router = useRouter();
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const getRedirectPath = () => {
     const nextParam = typeof router.query.next === 'string' ? router.query.next : '';
@@ -15,15 +16,49 @@ export default function Login() {
     return '/admin/upload-lesson';
   };
 
+  useEffect(() => {
+    if (!router.isReady || !session) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const verifyAdmin = async () => {
+      const response = await fetch('/api/admin/session-check', {
+        method: 'GET',
+        credentials: 'include',
+      });
+
+      if (cancelled) {
+        return;
+      }
+
+      if (response.ok) {
+        void router.replace(getRedirectPath());
+        return;
+      }
+
+      setAuthError('Этот аккаунт не входит в список администраторов.');
+      await supabase.auth.signOut();
+    };
+
+    void verifyAdmin();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router, session, supabase]);
+
   const handleGoogleLogin = async () => {
     const redirectPath = getRedirectPath();
+    const callbackPath = `/login?next=${encodeURIComponent(redirectPath)}`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
         redirectTo:
           typeof window === 'undefined'
             ? undefined
-            : `${window.location.origin}${redirectPath}`,
+            : `${window.location.origin}${callbackPath}`,
       },
     });
     if (error) {
@@ -35,6 +70,7 @@ export default function Login() {
     <div style={{ padding: 40, maxWidth: 400, margin: '0 auto', fontFamily: 'sans-serif' }}>
       <h1 style={{ marginBottom: 24 }}>Вход в систему</h1>
       <p style={{ marginBottom: 24, color: '#666' }}>Доступ разрешен только через Google.</p>
+      {authError ? <p style={{ marginBottom: 24, color: '#c0392b' }}>{authError}</p> : null}
 
       <button
         onClick={handleGoogleLogin}
@@ -57,26 +93,4 @@ export default function Login() {
       </button>
     </div>
   );
-}
-import { GetServerSidePropsContext } from 'next';
-import { createServerSupabaseClient } from '@supabase/auth-helpers-nextjs';
-
-export async function getServerSideProps(ctx: GetServerSidePropsContext) {
-  const supabase = createServerSupabaseClient(ctx);
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  if (user && isAllowedAdminEmail(user.email)) {
-    return {
-      redirect: {
-        destination: '/admin/upload-lesson',
-        permanent: false,
-      },
-    };
-  }
-
-  return {
-    props: {},
-  };
 }

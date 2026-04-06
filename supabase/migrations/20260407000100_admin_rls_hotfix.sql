@@ -7,7 +7,7 @@ stable
 as $$
   select
     auth.role() = 'authenticated'
-    and lower(coalesce(auth.jwt() ->> 'email', '')) = lower('your@email.com');
+    and lower(coalesce(auth.jwt() ->> 'email', '')) = lower('juliamakhlinfiurst@gmail.com');
 $$;
 
 comment on function public.is_admin() is 'Returns true only for the configured admin email.';
