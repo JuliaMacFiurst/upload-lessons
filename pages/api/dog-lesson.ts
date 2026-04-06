@@ -22,12 +22,11 @@ type TranslationRow = {
 
 function getSupabaseServerClient() {
   const url = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey =
-    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_KEY;
-  if (!url || !serviceKey) {
-    throw new Error("Missing Supabase server credentials.");
+  const anonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !anonKey) {
+    throw new Error("Missing Supabase public credentials.");
   }
-  return createClient(url, serviceKey, {
+  return createClient(url, anonKey, {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 }
@@ -98,4 +97,3 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(500).json({ error: message });
   }
 }
-

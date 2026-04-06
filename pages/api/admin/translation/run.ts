@@ -1,11 +1,11 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { createServerSupabaseClient } from "@supabase/auth-helpers-nextjs";
 import { createClient } from "@supabase/supabase-js";
 import {
   getTranslationRunProgress,
   startTranslationRun,
 } from "../../../../lib/server/translation-runner";
 import type { TranslationScope } from "../../../../lib/server/translation-analysis";
+import { requireAdminSession } from "../../../../lib/server/admin-session";
 
 type StartRunBody = {
   lang?: string;
@@ -46,12 +46,11 @@ function createSupabaseServiceClient() {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const supabase = createServerSupabaseClient({ req, res });
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) {
-    return res.status(401).json({ error: "Unauthorized" });
+  try {
+    await requireAdminSession(req, res);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unauthorized";
+    return res.status(message === "Unauthorized" ? 401 : 500).json({ error: message });
   }
 
   if (req.method === "GET") {

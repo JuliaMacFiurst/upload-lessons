@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { normalizeAssembledStory } from "../../../../lib/server/story-submissions-admin";
 import { loadTranslationItemsByScope, type TranslationContentType } from "../../../../lib/server/translation-content";
+import { requireAdminSession } from "../../../../lib/server/admin-session";
 
 type Scope = "all" | "lessons" | "map_stories" | "artworks" | "books" | "stories";
 
@@ -180,6 +181,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
     return res.status(405).json({ error: "Method not allowed" });
+  }
+
+  try {
+    await requireAdminSession(req, res);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unauthorized";
+    return res.status(message === "Unauthorized" ? 401 : 500).json({ error: message });
   }
 
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {

@@ -1,9 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { createPagesServerClient } from "@supabase/auth-helpers-nextjs";
 import {
   analyzeTranslationState,
   type TranslationScope,
 } from "../../../../lib/server/translation-analysis";
+import { requireAdminSession } from "../../../../lib/server/admin-session";
 
 function parseScope(value: string | string[] | undefined): TranslationScope {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -38,12 +38,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const supabase = createPagesServerClient({ req, res });
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-  if (!session) {
-    return res.status(401).json({ error: "Unauthorized" });
+  try {
+    await requireAdminSession(req, res);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unauthorized";
+    return res.status(message === "Unauthorized" ? 401 : 500).json({ error: message });
   }
 
   const lang = typeof req.query.lang === "string" ? req.query.lang.trim() : "";
