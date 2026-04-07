@@ -19,10 +19,20 @@ body {
 
 .admin-top-bar__row {
   display: flex;
+  gap: 12px;
 }
 
 .admin-top-bar__row--right {
   justify-content: flex-end;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.handoff-error {
+  margin: 0 0 16px;
+  color: #b42318;
+  font-weight: 600;
+  text-align: right;
 }
 
 .btn-logout {

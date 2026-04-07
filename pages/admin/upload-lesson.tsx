@@ -21,6 +21,7 @@ import { z } from "zod";
 import { useRouter } from "next/router";
 import { useSession, useSupabaseClient } from "@supabase/auth-helpers-react";
 import React from "react";
+import { buildLapLapLaAdminHandoffUrl } from "../../lib/client/laplapla-admin-handoff";
 
 function Spinner() {
   return (
@@ -134,6 +135,8 @@ const UploadLesson = () => {
   const supabaseClient = useSupabaseClient();
 
   const [shareUrl, setShareUrl] = useState<string | null>(null);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const [isOpeningLapLapLa, setIsOpeningLapLapLa] = useState(false);
 
   useEffect(() => {
     if (!session) {
@@ -363,6 +366,35 @@ const UploadLesson = () => {
     setLoading(false);
   };
 
+  const handleOpenLapLapLaAsAdmin = async () => {
+    setHandoffError(null);
+    setIsOpeningLapLapLa(true);
+
+    try {
+      const {
+        data: { session: currentSession },
+        error,
+      } = await supabaseClient.auth.getSession();
+
+      if (error) {
+        throw error;
+      }
+
+      if (!currentSession) {
+        throw new Error("Admin session not found.");
+      }
+
+      const handoffUrl = buildLapLapLaAdminHandoffUrl(currentSession);
+      window.open(handoffUrl, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to open LapLapLa.";
+      setHandoffError(message);
+    } finally {
+      setIsOpeningLapLapLa(false);
+    }
+  };
+
   // --- CSV export handler ---
   const handleExportCSV = () => {
     if (!title || !slug || steps.length === 0) {
@@ -431,8 +463,21 @@ const UploadLesson = () => {
         data-dragging={isDragging ? "true" : "false"}
       >
         <div className="admin-top-bar__row admin-top-bar__row--right">
+          <button
+            type="button"
+            onClick={handleOpenLapLapLaAsAdmin}
+            disabled={isOpeningLapLapLa}
+            className="btn btn-secondary"
+          >
+            {isOpeningLapLapLa ? "Открываем LapLapLa..." : "Open LapLapLa as admin"}
+          </button>
           <AdminLogout />
         </div>
+        {handoffError ? (
+          <p className="handoff-error" role="alert">
+            {handoffError}
+          </p>
+        ) : null}
         <div className="admin-top-bar__row">
           <AdminTabs />
         </div>
