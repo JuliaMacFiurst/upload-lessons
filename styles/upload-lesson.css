@@ -5,9 +5,18 @@ body {
   color: #333;
 }
 
+* {
+  box-sizing: border-box;
+}
+
 .upload-page {
   padding: 2rem;
   position: relative;
+}
+
+.upload-container {
+  width: min(100%, 960px);
+  margin: 0 auto;
 }
 
 .admin-top-bar {
@@ -66,12 +75,35 @@ body {
 }
 
 .form-container {
+  width: 100%;
   max-width: 700px;
   margin: 0 auto;
   background: white;
   padding: 2rem;
   border-radius: 12px;
   box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+}
+
+.upload-lesson__actions {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.upload-lesson__handoff-button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.upload-page .admin-top-bar__row--tabs {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .form-label {
@@ -204,4 +236,28 @@ body {
   margin: 1rem auto;
   border-radius: 10px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+@media (max-width: 768px) {
+  .upload-page {
+    padding: 1rem;
+  }
+
+  .form-container {
+    padding: 1.25rem;
+  }
+
+  .upload-lesson__actions {
+    align-items: stretch;
+    justify-content: stretch;
+  }
+
+  .upload-lesson__actions > * {
+    width: 100%;
+  }
+
+  .upload-lesson__handoff-button,
+  .btn-logout {
+    min-width: 0;
+  }
 }

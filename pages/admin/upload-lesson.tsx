@@ -458,16 +458,16 @@ const UploadLesson = () => {
   return (
     <div className="upload-page">
       <div
-        className="container upload-container form-container"
+        className="container upload-container"
         ref={dropRef}
         data-dragging={isDragging ? "true" : "false"}
       >
-        <div className="admin-top-bar__row admin-top-bar__row--right">
+        <div className="admin-top-bar__row admin-top-bar__row--right upload-lesson__actions">
           <button
             type="button"
             onClick={handleOpenLapLapLaAsAdmin}
             disabled={isOpeningLapLapLa}
-            className="btn btn-secondary"
+            className="btn btn-secondary upload-lesson__handoff-button"
           >
             {isOpeningLapLapLa ? "Открываем LapLapLa..." : "Open LapLapLa as admin"}
           </button>
@@ -478,7 +478,7 @@ const UploadLesson = () => {
             {handoffError}
           </p>
         ) : null}
-        <div className="admin-top-bar__row">
+        <div className="admin-top-bar__row admin-top-bar__row--tabs">
           <AdminTabs />
         </div>
         <h1 className="page-title">Загрузка нового урока</h1>
