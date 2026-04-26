@@ -1,7 +1,6 @@
 import type { Session } from "@supabase/supabase-js";
 
-const DEFAULT_LOCAL_LAPLAPLA_URL = "http://localhost:3000";
-const DEFAULT_PRODUCTION_LAPLAPLA_URL = "https://laplapla.com";
+const DEFAULT_LAPLAPLA_URL = "https://laplapla.vercel.app";
 const DEFAULT_LAPLAPLA_PATH = "/raccoons?lang=ru";
 
 export function getLapLapLaBaseUrl(): string {
@@ -10,9 +9,7 @@ export function getLapLapLaBaseUrl(): string {
     return configuredUrl.replace(/\/+$/, "");
   }
 
-  return process.env.NODE_ENV === "production"
-    ? DEFAULT_PRODUCTION_LAPLAPLA_URL
-    : DEFAULT_LOCAL_LAPLAPLA_URL;
+  return DEFAULT_LAPLAPLA_URL;
 }
 
 export function buildLapLapLaAdminHandoffUrl(session: Session): string {

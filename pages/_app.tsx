@@ -1,5 +1,6 @@
 import type { AppProps } from 'next/app'
 import '../styles/globals.css'
+import '../styles/admin-layout.css'
 import '../styles/upload-lesson.css';
 import '../styles/upload-video.css';
 import '../styles/AdminTranslations.css';

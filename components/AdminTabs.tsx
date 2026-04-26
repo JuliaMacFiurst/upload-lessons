@@ -1,5 +1,4 @@
 
-
 import Link from "next/link";
 import { useRouter } from "next/router";
 
@@ -19,43 +18,29 @@ export function AdminTabs() {
   ];
 
   return (
-    <div
-      style={{
-        display: "flex",
-        gap: 20,
-        marginBottom: 32,
-        borderBottom: "1px solid #e5e5e5",
-      }}
-    >
-      {tabs.map((tab) => {
-        const isActive =
-          router.pathname === tab.href ||
-          (tab.href === "/admin/map-targets" && router.pathname.startsWith("/admin/map-target")) ||
-          (tab.href === "/admin/artworks" && router.pathname.startsWith("/admin/artworks")) ||
-          (tab.href === "/admin/cat-questions" && router.pathname.startsWith("/admin/cat-questions")) ||
-          (tab.href === "/admin/books" && router.pathname.startsWith("/admin/books")) ||
-          (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder")) ||
-          (tab.href === "/admin/story-submissions" && router.pathname.startsWith("/admin/story-submissions"));
+    <nav className="admin-tabs" aria-label="Admin sections">
+      <div className="admin-tabs__list">
+        {tabs.map((tab) => {
+          const isActive =
+            router.pathname === tab.href ||
+            (tab.href === "/admin/map-targets" && router.pathname.startsWith("/admin/map-target")) ||
+            (tab.href === "/admin/artworks" && router.pathname.startsWith("/admin/artworks")) ||
+            (tab.href === "/admin/cat-questions" && router.pathname.startsWith("/admin/cat-questions")) ||
+            (tab.href === "/admin/books" && router.pathname.startsWith("/admin/books")) ||
+            (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder")) ||
+            (tab.href === "/admin/story-submissions" && router.pathname.startsWith("/admin/story-submissions"));
 
-        return (
-          <Link key={tab.href} href={tab.href} legacyBehavior>
-            <a
-              style={{
-                padding: "8px 4px",
-                textDecoration: "none",
-                color: "inherit",
-                borderBottom: isActive
-                  ? "2px solid black"
-                  : "2px solid transparent",
-                fontWeight: isActive ? 600 : 400,
-                cursor: "pointer",
-              }}
-            >
-              {tab.label}
-            </a>
-          </Link>
-        );
-      })}
-    </div>
+          return (
+            <Link key={tab.href} href={tab.href} legacyBehavior>
+              <a
+                className={`admin-tabs__link ${isActive ? "admin-tabs__link--active" : ""}`}
+              >
+                {tab.label}
+              </a>
+            </Link>
+          );
+        })}
+      </div>
+    </nav>
   );
 }

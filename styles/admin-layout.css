@@ -1,0 +1,128 @@
+.admin-top-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.admin-top-bar__row {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.admin-top-bar__row > * {
+  min-width: 0;
+}
+
+.admin-top-bar__row--right {
+  justify-content: flex-end;
+  align-items: center;
+}
+
+.admin-tabs {
+  width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.admin-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.admin-tabs__list {
+  display: flex;
+  gap: 12px;
+  min-width: max-content;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.admin-tabs__link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  text-decoration: none;
+  color: #516173;
+  background: #f4f7fa;
+  border: 1px solid transparent;
+  font-weight: 600;
+  white-space: nowrap;
+  transition:
+    background-color 0.2s ease,
+    color 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.admin-tabs__link:hover {
+  background: #eaf1f7;
+  color: #2f3d4e;
+}
+
+.admin-tabs__link--active {
+  background: #111827;
+  color: #ffffff;
+  border-color: #111827;
+}
+
+.books-admin-page,
+.map-targets-page,
+.admin-translations-page,
+.upload-video {
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .admin-top-bar {
+    margin-bottom: 20px;
+  }
+
+  .admin-top-bar__row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .admin-top-bar__row--right {
+    justify-content: stretch;
+    align-items: stretch;
+  }
+
+  .books-admin-page,
+  .map-targets-page,
+  .admin-translations-page {
+    padding: 16px;
+  }
+
+  .books-panel,
+  .books-subpanel,
+  .books-question,
+  .translations-panel {
+    padding: 16px;
+  }
+
+  .books-actions,
+  .books-actions--compact,
+  .translations-row,
+  .translations-selected-bar,
+  .translations-modal__actions,
+  .translations-activity-actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .books-button,
+  .translations-button {
+    width: 100%;
+  }
+
+  .books-checkbox--inline,
+  .translations-label {
+    min-width: 0;
+  }
+}
