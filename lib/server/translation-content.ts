@@ -14,7 +14,8 @@ export type TranslationScope =
   | "map_stories"
   | "artworks"
   | "books"
-  | "stories";
+  | "stories"
+  | "parrot_music_styles";
 
 export type TranslationContentType =
   | "lesson"
@@ -22,7 +23,8 @@ export type TranslationContentType =
   | "artwork"
   | "book"
   | "story_template"
-  | "story_submission";
+  | "story_submission"
+  | "parrot_music_style";
 
 export type LoadedTranslationItem = {
   contentType: TranslationContentType;
@@ -115,6 +117,18 @@ type StorySubmissionRow = {
   id: string;
   hero_name: string | null;
   assembled_story: unknown;
+};
+
+type ParrotMusicStyleRow = {
+  id: string;
+  title: string | null;
+  description: string | null;
+};
+
+type ParrotMusicStyleSlideRow = {
+  style_id: string;
+  slide_order: number | null;
+  text: string | null;
 };
 
 const STORY_STEP_KEYS = [
@@ -276,6 +290,23 @@ function normalizeArtworkSource(row: ArtworkRow): unknown {
   return {
     title: row.title ?? "",
     description: row.description ?? "",
+  };
+}
+
+function normalizeParrotMusicStyleSource(
+  row: ParrotMusicStyleRow,
+  slides: ParrotMusicStyleSlideRow[],
+): unknown {
+  return {
+    title: row.title ?? "",
+    description: row.description ?? "",
+    slides: slides
+      .filter((slide) => typeof slide.text === "string" && slide.text.trim().length > 0)
+      .sort((left, right) => (left.slide_order ?? 0) - (right.slide_order ?? 0))
+      .map((slide, index) => ({
+        order: slide.slide_order ?? index + 1,
+        text: slide.text ?? "",
+      })),
   };
 }
 
@@ -561,6 +592,38 @@ export async function analyzeStories(supabase: SupabaseClient): Promise<LoadedTr
   return [...templateItems, ...submissionItems];
 }
 
+export async function analyzeParrotMusicStyles(supabase: SupabaseClient): Promise<LoadedTranslationItem[]> {
+  const [stylesRes, slidesRes] = await Promise.all([
+    supabase.from("parrot_music_styles").select("id,title,description"),
+    supabase
+      .from("parrot_music_style_slides")
+      .select("style_id,slide_order,text")
+      .order("slide_order", { ascending: true }),
+  ]);
+
+  if (stylesRes.error) {
+    throw new Error(`Failed to load parrot music styles: ${stylesRes.error.message}`);
+  }
+  if (slidesRes.error) {
+    throw new Error(`Failed to load parrot music style slides: ${slidesRes.error.message}`);
+  }
+
+  const slidesByStyleId = new Map<string, ParrotMusicStyleSlideRow[]>();
+  (((slidesRes.data as ParrotMusicStyleSlideRow[] | null) ?? [])).forEach((row) => {
+    const bucket = slidesByStyleId.get(row.style_id) ?? [];
+    bucket.push(row);
+    slidesByStyleId.set(row.style_id, bucket);
+  });
+
+  return ((stylesRes.data as ParrotMusicStyleRow[] | null) ?? []).map((row) =>
+    createLoadedTranslationItem(
+      "parrot_music_style",
+      row.id,
+      normalizeParrotMusicStyleSource(row, slidesByStyleId.get(row.id) ?? []),
+    ),
+  );
+}
+
 export async function loadTranslationItemsByScope(
   supabase: SupabaseClient,
   scope: TranslationScope,
@@ -582,6 +645,9 @@ export async function loadTranslationItemsByScope(
   if (scope === "all" || scope === "stories") {
     items.push(...(await analyzeStories(supabase)));
   }
+  if (scope === "all" || scope === "parrot_music_styles") {
+    items.push(...(await analyzeParrotMusicStyles(supabase)));
+  }
 
   return items;
 }
@@ -601,8 +667,10 @@ export async function loadTranslationItemByContent(
           : contentType === "book"
             ? await analyzeBooks(supabase)
             : contentType === "story_template"
-              ? (await analyzeStories(supabase)).filter((item) => item.contentType === "story_template")
-              : (await analyzeStories(supabase)).filter((item) => item.contentType === "story_submission");
+            ? (await analyzeStories(supabase)).filter((item) => item.contentType === "story_template")
+              : contentType === "story_submission"
+                ? (await analyzeStories(supabase)).filter((item) => item.contentType === "story_submission")
+                : await analyzeParrotMusicStyles(supabase);
 
   const found = items.find((item) => item.contentId === contentId);
   if (!found) {

@@ -15,6 +15,7 @@ type AnalyzeCounts = {
   artworks: number;
   books: number;
   stories: number;
+  parrotMusicStyles: number;
   total: number;
 };
 
@@ -30,6 +31,7 @@ type AnalyzeByType = {
   artworks: StatusTotals & { total: number };
   books: StatusTotals & { total: number };
   stories: StatusTotals & { total: number };
+  parrotMusicStyles: StatusTotals & { total: number };
 };
 
 type BatchComplexity = {
@@ -209,6 +211,9 @@ function mapContentTypeToBucket(
   if (contentType === "book") {
     return "books";
   }
+  if (contentType === "parrot_music_style") {
+    return "parrotMusicStyles";
+  }
   return "stories";
 }
 
@@ -291,6 +296,7 @@ export async function analyzeTranslationState(
     artworks: { total: 0, ...initStatusTotals() },
     books: { total: 0, ...initStatusTotals() },
     stories: { total: 0, ...initStatusTotals() },
+    parrotMusicStyles: { total: 0, ...initStatusTotals() },
   };
   const statusCounts = initStatusTotals();
 
@@ -317,6 +323,7 @@ export async function analyzeTranslationState(
       artworks: detailedCounts.artworks.total,
       books: detailedCounts.books.total,
       stories: detailedCounts.stories.total,
+      parrotMusicStyles: detailedCounts.parrotMusicStyles.total,
       total: selected.length,
     },
     statusCounts,

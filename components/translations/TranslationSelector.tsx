@@ -87,6 +87,15 @@ export function TranslationSelector(props: Props) {
           />
           Stories only
         </label>
+        <label className="translations-radio">
+          <input
+            type="radio"
+            name="scope"
+            checked={props.scope === "parrot_music_styles"}
+            onChange={() => props.onScopeChange("parrot_music_styles")}
+          />
+          Parrot music styles only
+        </label>
       </div>
 
       <div className="translations-row translations-row--gap">

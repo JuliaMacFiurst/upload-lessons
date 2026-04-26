@@ -306,6 +306,41 @@ function validateBookPayload(payload: unknown): void {
   }
 }
 
+function validateParrotMusicStylePayload(payload: unknown): void {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("Invalid translation payload");
+  }
+
+  const record = payload as {
+    title?: unknown;
+    description?: unknown;
+    slides?: unknown;
+  };
+
+  if (typeof record.title !== "string") {
+    throw new Error("Invalid translation payload");
+  }
+  if (typeof record.description !== "string") {
+    throw new Error("Invalid translation payload");
+  }
+  if (!Array.isArray(record.slides)) {
+    throw new Error("Invalid translation payload");
+  }
+
+  for (const slide of record.slides) {
+    if (!slide || typeof slide !== "object") {
+      throw new Error("Invalid translation payload");
+    }
+    const typed = slide as { order?: unknown; text?: unknown };
+    if (typeof typed.order !== "number" || !Number.isInteger(typed.order)) {
+      throw new Error("Invalid translation payload");
+    }
+    if (typeof typed.text !== "string") {
+      throw new Error("Invalid translation payload");
+    }
+  }
+}
+
 async function buildSourcePayload(args: {
   supabase: ReturnType<typeof createSupabaseServerClient>;
   contentType: ContentType;
@@ -358,7 +393,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (
     !contentType ||
-    !["lesson", "map_story", "artwork", "book", "story_template", "story_submission"].includes(
+    !["lesson", "map_story", "artwork", "book", "story_template", "story_submission", "parrot_music_style"].includes(
       contentType,
     )
   ) {
@@ -431,6 +466,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       validateNonEmptyObjectStrings(translation, ["title", "description"]);
     } else if (contentType === "book") {
       validateBookPayload(translation);
+    } else if (contentType === "parrot_music_style") {
+      validateParrotMusicStylePayload(translation);
     } else {
       validateStoryPayload(translation);
     }

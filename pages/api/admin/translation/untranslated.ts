@@ -4,7 +4,7 @@ import { normalizeAssembledStory } from "../../../../lib/server/story-submission
 import { loadTranslationItemsByScope, type TranslationContentType } from "../../../../lib/server/translation-content";
 import { requireAdminSession } from "../../../../lib/server/admin-session";
 
-type Scope = "all" | "lessons" | "map_stories" | "artworks" | "books" | "stories";
+type Scope = "all" | "lessons" | "map_stories" | "artworks" | "books" | "stories" | "parrot_music_styles";
 
 type TranslationRow = {
   content_id: string;
@@ -48,6 +48,7 @@ function parseScope(scopeRaw: string | undefined): Scope {
     scopeRaw === "artworks" ||
     scopeRaw === "books" ||
     scopeRaw === "stories" ||
+    scopeRaw === "parrot_music_styles" ||
     scopeRaw === "all" ||
     scopeRaw === "lessons"
   ) {
@@ -86,6 +87,7 @@ async function fetchSourceRows(
       fetchSourceRows("artworks", supabase),
       fetchSourceRows("books", supabase),
       fetchSourceRows("stories", supabase),
+      fetchSourceRows("parrot_music_styles", supabase),
     ]);
     return groups.flat();
   }
@@ -144,6 +146,23 @@ async function fetchSourceRows(
       id: row.id,
       title: row.title,
       content_type: "book",
+    }));
+  }
+
+  if (scope === "parrot_music_styles") {
+    const { data, error } = await supabase
+      .from("parrot_music_styles")
+      .select("id,title")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      throw new Error(`Failed to load parrot music styles: ${error.message}`);
+    }
+
+    return ((data as Array<{ id: string; title: string | null }> | null) ?? []).map((row) => ({
+      id: row.id,
+      title: row.title,
+      content_type: "parrot_music_style",
     }));
   }
 
@@ -215,9 +234,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const contentTypes =
       scope === "all"
-        ? (["lesson", "map_story", "artwork", "book", "story_template", "story_submission"] as const)
+        ? (["lesson", "map_story", "artwork", "book", "story_template", "story_submission", "parrot_music_style"] as const)
         : scope === "stories"
         ? (["story_template", "story_submission"] as const)
+        : scope === "parrot_music_styles"
+          ? (["parrot_music_style"] as const)
         : scope === "books"
           ? (["book"] as const)
           : scope === "artworks"

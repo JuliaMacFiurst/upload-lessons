@@ -5,6 +5,7 @@ export type AnalyzeResponse = {
     artworks: number;
     books: number;
     stories: number;
+    parrotMusicStyles: number;
     total: number;
   };
   statusCounts: {
@@ -43,6 +44,12 @@ export type AnalyzeResponse = {
       missing: number;
       outdated: number;
     };
+    parrotMusicStyles: {
+      total: number;
+      translated: number;
+      missing: number;
+      outdated: number;
+    };
   };
   totalCharacters: number;
   estimatedTokens: number;
@@ -64,7 +71,8 @@ export type TranslationScope =
   | "map_stories"
   | "artworks"
   | "books"
-  | "stories";
+  | "stories"
+  | "parrot_music_styles";
 
 export type RunRequest = {
   lang: string;
@@ -83,7 +91,8 @@ export type UntranslatedLesson = {
     | "artwork"
     | "book"
     | "story_template"
-    | "story_submission";
+    | "story_submission"
+    | "parrot_music_style";
   source_tokens?: number;
 };
 

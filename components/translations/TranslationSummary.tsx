@@ -11,6 +11,7 @@ export function TranslationSummary(props: Props) {
     { label: "Artworks", value: props.data.counts.artworks },
     { label: "Books", value: props.data.counts.books },
     { label: "Stories", value: props.data.counts.stories },
+    { label: "Parrot styles", value: props.data.counts.parrotMusicStyles },
     { label: "Total", value: props.data.counts.total },
     { label: "Translated", value: props.data.statusCounts.translated },
     { label: "Missing", value: props.data.statusCounts.missing },

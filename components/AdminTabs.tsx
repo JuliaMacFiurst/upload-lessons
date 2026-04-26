@@ -9,6 +9,7 @@ export function AdminTabs() {
     { href: "/admin/upload-lesson", label: "Уроки" },
     { href: "/admin/map-targets", label: "Карта" },
     { href: "/admin/artworks", label: "Художники" },
+    { href: "/admin/parrot-music-styles", label: "Музыка" },
     { href: "/admin/upload-video", label: "Видео" },
     { href: "/admin/translations", label: "Переводы" },
     { href: "/admin/cat-questions", label: "Вопросы" },
@@ -25,6 +26,7 @@ export function AdminTabs() {
             router.pathname === tab.href ||
             (tab.href === "/admin/map-targets" && router.pathname.startsWith("/admin/map-target")) ||
             (tab.href === "/admin/artworks" && router.pathname.startsWith("/admin/artworks")) ||
+            (tab.href === "/admin/parrot-music-styles" && router.pathname.startsWith("/admin/parrot-music-styles")) ||
             (tab.href === "/admin/cat-questions" && router.pathname.startsWith("/admin/cat-questions")) ||
             (tab.href === "/admin/books" && router.pathname.startsWith("/admin/books")) ||
             (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder")) ||

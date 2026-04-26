@@ -13,7 +13,8 @@ function parseScope(value: string | string[] | undefined): TranslationScope {
     raw === "map_stories" ||
     raw === "artworks" ||
     raw === "books" ||
-    raw === "stories"
+    raw === "stories" ||
+    raw === "parrot_music_styles"
   ) {
     return raw;
   }

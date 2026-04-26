@@ -22,7 +22,8 @@ function isValidScope(value: unknown): value is TranslationScope {
     value === "map_stories" ||
     value === "artworks" ||
     value === "books" ||
-    value === "stories"
+    value === "stories" ||
+    value === "parrot_music_styles"
   );
 }
 
