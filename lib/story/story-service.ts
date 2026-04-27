@@ -115,7 +115,7 @@ export function adaptStoryTemplateToContract(source: StoryTemplateSource): Story
     step.choices[choiceIndex].fragments.push(contractFragment);
   });
 
-  steps.forEach((step, stepIndex) => {
+  steps.forEach((step) => {
     if (step.step_key === "narration") {
       return;
     }

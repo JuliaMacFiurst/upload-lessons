@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { USD_TO_ILS } from "../../lib/ai/pricing";
@@ -81,7 +81,7 @@ export default function AdminTranslationsPage() {
     return `/api/admin/translation/analyze?${params.toString()}`;
   }, [lang, scope, firstNParam]);
 
-  const loadAnalysis = async () => {
+  const loadAnalysis = useCallback(async () => {
     setAnalyzeLoading(true);
     setError(null);
     try {
@@ -93,9 +93,9 @@ export default function AdminTranslationsPage() {
     } finally {
       setAnalyzeLoading(false);
     }
-  };
+  }, [analyzeUrl]);
 
-  const loadProgress = async () => {
+  const loadProgress = useCallback(async () => {
     try {
       const data = await fetchJson<ProgressResponse>("/api/admin/translation/run");
       setProgress(data);
@@ -116,7 +116,7 @@ export default function AdminTranslationsPage() {
       const message = e instanceof Error ? e.message : String(e);
       setError(message);
     }
-  };
+  }, [loadAnalysis]);
 
   useEffect(() => {
     if (!sessionChecked) {
@@ -124,8 +124,7 @@ export default function AdminTranslationsPage() {
     }
     void loadAnalysis();
     void loadProgress();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionChecked]);
+  }, [loadAnalysis, loadProgress, sessionChecked]);
 
   useEffect(() => {
     if (!progress?.running) {
@@ -135,7 +134,7 @@ export default function AdminTranslationsPage() {
       void loadProgress();
     }, 1500);
     return () => clearInterval(timer);
-  }, [progress?.running]);
+  }, [loadProgress, progress?.running]);
 
   const openConfirmation = () => {
     setError(null);

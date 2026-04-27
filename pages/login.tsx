@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import Image from 'next/image';
+import { useEffect, useMemo, useState } from 'react';
 import { useSession, useSupabaseClient } from '@supabase/auth-helpers-react';
 import { useRouter } from 'next/router';
 
@@ -8,13 +9,13 @@ export default function Login() {
   const router = useRouter();
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const getRedirectPath = () => {
+  const redirectPath = useMemo(() => {
     const nextParam = typeof router.query.next === 'string' ? router.query.next : '';
     if (nextParam.startsWith('/')) {
       return nextParam;
     }
     return '/admin/upload-lesson';
-  };
+  }, [router.query.next]);
 
   useEffect(() => {
     if (!router.isReady || !session) {
@@ -34,7 +35,7 @@ export default function Login() {
       }
 
       if (response.ok) {
-        void router.replace(getRedirectPath());
+        void router.replace(redirectPath);
         return;
       }
 
@@ -47,10 +48,9 @@ export default function Login() {
     return () => {
       cancelled = true;
     };
-  }, [router, session, supabase]);
+  }, [redirectPath, router, session, supabase]);
 
   const handleGoogleLogin = async () => {
-    const redirectPath = getRedirectPath();
     const callbackPath = `/login?next=${encodeURIComponent(redirectPath)}`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -88,7 +88,12 @@ export default function Login() {
           cursor: 'pointer',
         }}
       >
-        <img src="https://upload.wikimedia.org/wikipedia/commons/4/4a/Logo_2013_Google.png" alt="Google" style={{ width: 20 }} />
+        <Image
+          src="https://upload.wikimedia.org/wikipedia/commons/4/4a/Logo_2013_Google.png"
+          alt="Google"
+          width={20}
+          height={20}
+        />
         Войти через Google
       </button>
     </div>

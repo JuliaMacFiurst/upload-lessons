@@ -113,11 +113,6 @@ const CANONICAL_QUIZ_FORMAT = formatObject([
   formatField("quiz", formatArray(CANONICAL_QUIZ_QUESTION_FORMAT)),
 ]);
 
-const CANONICAL_STORY_TEXT_FORMAT = formatObject([
-  formatField("text", '"..."'),
-  formatField("short_text", '"..."'),
-]);
-
 const CANONICAL_STORY_FRAGMENT_ONLY_FORMAT = formatObject([formatField("text", '"..."')]);
 
 const CANONICAL_STORY_TEMPLATE_CHOICE_WITH_FRAGMENTS_FORMAT = formatObject([

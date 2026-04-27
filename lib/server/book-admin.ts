@@ -34,8 +34,6 @@ import {
   bookMetaSchema,
   bookTestQuestionSchema,
   bookTestSchema,
-  storyFragmentSchema,
-  storyStepSchema,
   storyTemplateDraftSchema,
   storyTemplateSchema,
   storyTwistSchema,
@@ -51,7 +49,6 @@ import {
   type StoryTemplateInput,
 } from "../books/types";
 import { z } from "zod";
-import { requireAdminSession } from "./admin-session";
 
 export { requireAdminSession } from "./admin-session";
 
@@ -346,7 +343,8 @@ export function safeSlug(input: string): string {
 
 function stripNullId<T extends { id?: string | null }>(item: T): Omit<T, "id"> | T {
   if (item.id == null || item.id === "") {
-    const { id, ...rest } = item;
+    const rest = { ...item };
+    delete rest.id;
     return rest;
   }
   return item;

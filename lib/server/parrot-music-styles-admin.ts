@@ -415,11 +415,14 @@ async function replaceStyleChildren(
   });
 
   if (presetRows.length > 0) {
+    const presetInsertRows = presetRows.map((preset) => {
+      const { variants, ...row } = preset;
+      void variants;
+      return row;
+    });
     const { error: insertPresetError } = await supabase
       .from("parrot_music_style_presets")
-      .insert(
-        presetRows.map(({ variants: _variants, ...row }) => row),
-      );
+      .insert(presetInsertRows);
     if (insertPresetError) {
       throw new Error(`Failed to save style presets: ${insertPresetError.message}`);
     }
@@ -475,10 +478,10 @@ async function readCapybaraModule<T>(
     },
   }).outputText;
 
-  const module = { exports: {} as Record<string, unknown> };
+  const cjsModule = { exports: {} as Record<string, unknown> };
   const context = vm.createContext({
-    module,
-    exports: module.exports,
+    module: cjsModule,
+    exports: cjsModule.exports,
     require: (specifier: string) => {
       if (injectedRequire) {
         return injectedRequire(specifier);
@@ -491,7 +494,7 @@ async function readCapybaraModule<T>(
   });
 
   vm.runInContext(transpiled, context, { filename: filePath });
-  return module.exports as T;
+  return cjsModule.exports as T;
 }
 
 async function loadCapybaraSeeds(): Promise<ImportedStyleSeed[]> {

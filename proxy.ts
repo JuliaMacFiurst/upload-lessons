@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { createMiddlewareClient } from "@supabase/auth-helpers-nextjs";
 import { isAllowedAdminEmail } from "./lib/server/admin-session";
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const res = NextResponse.next();
   const supabase = createMiddlewareClient({ req, res });
   const {
