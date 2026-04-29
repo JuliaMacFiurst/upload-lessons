@@ -15,6 +15,16 @@ export type ResolveMediaResult = {
   source: string;
 };
 
+export type WikimediaSearchCandidate = {
+  title: string;
+  url: string;
+  thumbUrl: string;
+  descriptionUrl: string;
+  user: string | null;
+  licenseShortName: string | null;
+  creditLine: string;
+};
+
 type ResolveAttemptInput = ResolveMediaInput & {
   deadlineAt?: number;
 };
@@ -22,6 +32,7 @@ type ResolveAttemptInput = ResolveMediaInput & {
 type WikimediaImageCandidate = {
   title: string;
   url: string;
+  thumbUrl: string;
   user: string | null;
   licenseShortName: string | null;
   descriptionUrl: string;
@@ -36,6 +47,7 @@ type WikimediaSearchResponse = {
         title?: string;
         imageinfo?: Array<{
           url?: string;
+          thumburl?: string;
           descriptionurl?: string;
           user?: string;
           extmetadata?: {
@@ -114,6 +126,8 @@ const WIKIMEDIA_MAX_RETRIES = 2;
 const MAX_MEDIA_QUERIES = 4;
 const TOTAL_RESOLVE_TIMEOUT_MS = 8000;
 const WIKIMEDIA_FETCH_TIMEOUT_MS = 2500;
+const WIKIMEDIA_BROWSE_FETCH_TIMEOUT_MS = 6000;
+const WIKIMEDIA_BROWSE_TOTAL_TIMEOUT_MS = 15000;
 const PEXELS_FETCH_TIMEOUT_MS = 2500;
 const GIPHY_FETCH_TIMEOUT_MS = 2500;
 
@@ -501,6 +515,7 @@ async function searchWikimediaImages(
   input: ResolveAttemptInput,
   query: string,
   limit: number,
+  timeoutMs = WIKIMEDIA_FETCH_TIMEOUT_MS,
 ): Promise<WikimediaImageCandidate[]> {
   const cacheKey = `${query.trim().toLowerCase()}::${limit}`;
   const cached = wikimediaSearchCache.get(cacheKey);
@@ -531,7 +546,7 @@ async function searchWikimediaImages(
         input,
         `${WIKIMEDIA_API_URL}?${params.toString()}`,
         undefined,
-        WIKIMEDIA_FETCH_TIMEOUT_MS,
+        timeoutMs,
       );
       if (response.ok) {
         const data = (await response.json()) as WikimediaSearchResponse;
@@ -551,6 +566,7 @@ async function searchWikimediaImages(
             return {
               title: page.title,
               url: info.url,
+              thumbUrl: info.thumburl ?? info.url,
               user: info.user ?? null,
               licenseShortName: info.extmetadata?.LicenseShortName?.value ?? null,
               descriptionUrl: info.descriptionurl,
@@ -598,6 +614,29 @@ function formatWikimediaCredit(candidate: WikimediaImageCandidate): string {
     parts.push(candidate.licenseShortName.replace(/<[^>]+>/g, ""));
   }
   return parts.join(" | ");
+}
+
+export async function searchWikimediaCandidates(
+  query: string,
+  limit = 24,
+): Promise<WikimediaSearchCandidate[]> {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const input: ResolveAttemptInput = {
+    slideText: trimmed,
+    targetId: "artworks",
+    mapType: "artworks",
+    deadlineAt: Date.now() + WIKIMEDIA_BROWSE_TOTAL_TIMEOUT_MS,
+  };
+
+  const candidates = await searchWikimediaImages(input, trimmed, limit, WIKIMEDIA_BROWSE_FETCH_TIMEOUT_MS);
+  return candidates.map((candidate) => ({
+    ...candidate,
+    creditLine: formatWikimediaCredit(candidate),
+  }));
 }
 
 async function resolveFromWikimedia(input: ResolveMediaInput): Promise<ResolveMediaResult | null> {

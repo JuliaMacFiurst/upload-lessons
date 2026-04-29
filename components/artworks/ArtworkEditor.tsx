@@ -27,6 +27,16 @@ type UploadImage = {
   previewUrl: string;
 };
 
+type WikimediaCandidate = {
+  title: string;
+  url: string;
+  thumbUrl: string;
+  descriptionUrl: string;
+  user: string | null;
+  licenseShortName: string | null;
+  creditLine: string;
+};
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   const raw = await response.text();
@@ -117,6 +127,13 @@ export function ArtworkEditor({ artworkId = "", isNew = false }: Props) {
   const [deleting, setDeleting] = useState(false);
   const [generatingNames, setGeneratingNames] = useState(false);
   const [generatingDescription, setGeneratingDescription] = useState(false);
+  const [wikimediaModalOpen, setWikimediaModalOpen] = useState(false);
+  const [wikimediaLoading, setWikimediaLoading] = useState(false);
+  const [wikimediaImporting, setWikimediaImporting] = useState(false);
+  const [wikimediaError, setWikimediaError] = useState<string | null>(null);
+  const [wikimediaCandidates, setWikimediaCandidates] = useState<WikimediaCandidate[]>([]);
+  const [wikimediaSelectedUrls, setWikimediaSelectedUrls] = useState<string[]>([]);
+  const [wikimediaSearchExtra, setWikimediaSearchExtra] = useState("");
   const [artistNameCandidates, setArtistNameCandidates] = useState<string[]>([]);
   const [isArtistManuallyEdited, setIsArtistManuallyEdited] = useState(false);
   const [originalArtist, setOriginalArtist] = useState("");
@@ -271,6 +288,95 @@ export function ArtworkEditor({ artworkId = "", isNew = false }: Props) {
       }
       return current.filter((item) => item.id !== imageId);
     });
+  };
+
+  const toggleWikimediaSelection = (url: string) => {
+    setWikimediaSelectedUrls((current) =>
+      current.includes(url) ? current.filter((item) => item !== url) : [...current, url],
+    );
+  };
+
+  const performWikimediaSearch = async (extraQuery?: string) => {
+    const artistName = form.title.trim();
+    if (!artistName) {
+      setError("Сначала укажите имя художника.");
+      return;
+    }
+
+    setWikimediaLoading(true);
+    setWikimediaError(null);
+    setWikimediaSelectedUrls([]);
+
+    try {
+      const query = [artistName, (extraQuery ?? wikimediaSearchExtra).trim()].filter(Boolean).join(" ");
+      const params = new URLSearchParams({ q: query });
+      const result = await fetchJson<{ candidates: WikimediaCandidate[] }>(
+        `/api/admin/artworks/wikimedia-search?${params.toString()}`,
+      );
+      setWikimediaCandidates(result.candidates);
+    } catch (loadError) {
+      setWikimediaError(loadError instanceof Error ? loadError.message : String(loadError));
+      setWikimediaCandidates([]);
+    } finally {
+      setWikimediaLoading(false);
+    }
+  };
+
+  const openWikimediaModal = async () => {
+    if (!form.title.trim()) {
+      setError("Сначала укажите имя художника.");
+      return;
+    }
+
+    setWikimediaModalOpen(true);
+    setWikimediaSearchExtra("");
+    await performWikimediaSearch("");
+  };
+
+  const closeWikimediaModal = () => {
+    if (wikimediaImporting) {
+      return;
+    }
+    setWikimediaModalOpen(false);
+    setWikimediaError(null);
+    setWikimediaSelectedUrls([]);
+  };
+
+  const importSelectedWikimediaImages = async () => {
+    const selected = wikimediaCandidates.filter((candidate) => wikimediaSelectedUrls.includes(candidate.url));
+    if (selected.length === 0) {
+      setWikimediaError("Выберите хотя бы одну картину.");
+      return;
+    }
+
+    setWikimediaImporting(true);
+    setWikimediaError(null);
+
+    try {
+      const prepared = await Promise.all(
+        selected.map(async (candidate, index) => {
+          const response = await fetch(candidate.url);
+          if (!response.ok) {
+            throw new Error(`Не удалось загрузить изображение из Wikimedia: ${candidate.title}`);
+          }
+          const blob = await response.blob();
+          const converted = await blobToWebpFile(blob, `${Date.now()}-${index}`);
+          return {
+            id: crypto.randomUUID(),
+            file: converted,
+            previewUrl: URL.createObjectURL(converted),
+          };
+        }),
+      );
+
+      setNewImages((current) => [...current, ...prepared]);
+      setWikimediaModalOpen(false);
+      setWikimediaSelectedUrls([]);
+    } catch (importError) {
+      setWikimediaError(importError instanceof Error ? importError.message : String(importError));
+    } finally {
+      setWikimediaImporting(false);
+    }
   };
 
   const uploadPreparedImages = async (artist: string, files: File[]) => {
@@ -629,6 +735,11 @@ export function ArtworkEditor({ artworkId = "", isNew = false }: Props) {
             <h2 className="books-panel__title">Изображения</h2>
             <p className="books-section-help">Поддерживаются `jpeg/png`, перед загрузкой всё конвертируется в `webp` с quality 0.8.</p>
           </div>
+          <div className="books-actions">
+            <button type="button" className="books-button books-button--secondary" onClick={() => void openWikimediaModal()}>
+              Найти картины
+            </button>
+          </div>
         </div>
 
         <label className="books-field">
@@ -661,6 +772,106 @@ export function ArtworkEditor({ artworkId = "", isNew = false }: Props) {
           ))}
         </div>
       </section>
+
+      {wikimediaModalOpen ? (
+        <div className="artworks-modal-overlay" role="presentation" onClick={closeWikimediaModal}>
+          <div
+            className="artworks-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="wikimedia-modal-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="artworks-modal__head">
+              <div>
+                <h3 id="wikimedia-modal-title" className="artworks-modal__title">
+                  Картины Wikimedia
+                </h3>
+                <p className="artworks-modal__text">
+                  Поиск по имени художника: <strong>{form.title.trim()}</strong>
+                </p>
+              </div>
+              <button
+                type="button"
+                className="books-button books-button--ghost"
+                onClick={closeWikimediaModal}
+                disabled={wikimediaImporting}
+              >
+                Закрыть
+              </button>
+            </div>
+
+            {wikimediaError ? <div className="books-alert books-alert--error">{wikimediaError}</div> : null}
+
+            <div className="artworks-modal__search">
+              <label className="books-field artworks-modal__search-field">
+                <span className="books-field__label">Уточнить поиск</span>
+                <input
+                  className="books-input"
+                  value={wikimediaSearchExtra}
+                  onChange={(event) => setWikimediaSearchExtra(event.target.value)}
+                  placeholder="например: portrait, self-portrait, blue period"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void performWikimediaSearch();
+                    }
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="books-button books-button--secondary"
+                onClick={() => void performWikimediaSearch()}
+                disabled={wikimediaLoading || wikimediaImporting}
+              >
+                {wikimediaLoading ? "Ищем..." : "Обновить поиск"}
+              </button>
+            </div>
+
+            {wikimediaLoading ? (
+              <p className="artworks-modal__text">Ищем картины...</p>
+            ) : wikimediaCandidates.length === 0 ? (
+              <p className="artworks-modal__text">Ничего не найдено.</p>
+            ) : (
+              <div className="artworks-wikimedia-grid">
+                {wikimediaCandidates.map((candidate) => {
+                  const isSelected = wikimediaSelectedUrls.includes(candidate.url);
+                  return (
+                    <button
+                      key={candidate.url}
+                      type="button"
+                      className={`artworks-wikimedia-card${isSelected ? " artworks-wikimedia-card--selected" : ""}`}
+                      onClick={() => toggleWikimediaSelection(candidate.url)}
+                    >
+                      <div className="artworks-wikimedia-card__check">{isSelected ? "✓" : ""}</div>
+                      <img src={candidate.thumbUrl} alt={candidate.title} className="artworks-wikimedia-card__image" loading="lazy" />
+                      <span className="artworks-wikimedia-card__title">{candidate.title}</span>
+                      <span className="artworks-wikimedia-card__meta">
+                        {candidate.licenseShortName || "License not specified"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="artworks-modal__actions">
+              <span className="artworks-modal__selection">
+                Выбрано: {wikimediaSelectedUrls.length}
+              </span>
+              <button
+                type="button"
+                className="books-button books-button--primary"
+                onClick={() => void importSelectedWikimediaImages()}
+                disabled={wikimediaLoading || wikimediaImporting || wikimediaSelectedUrls.length === 0}
+              >
+                {wikimediaImporting ? "Загружаем..." : "Загрузить"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -9,6 +9,8 @@ import { AdminLogout } from "../../../components/AdminLogout";
 import { AdminTabs } from "../../../components/AdminTabs";
 import type { ArtworkListItem } from "../../../lib/artworks/types";
 
+const MIN_ARTIST_DESCRIPTION_LENGTH = 260;
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   const data = (await response.json()) as T & { error?: string };
@@ -131,7 +133,14 @@ export default function ArtworksAdminIndexPage() {
                       <div className="artworks-table__empty">No image</div>
                     )}
                   </td>
-                  <td>{artwork.title}</td>
+                  <td>
+                    <div className="artworks-table__title-cell">
+                      <span>{artwork.title}</span>
+                      {(artwork.description?.trim().length ?? 0) < MIN_ARTIST_DESCRIPTION_LENGTH ? (
+                        <span className="artworks-table__warning">Текста пока мало</span>
+                      ) : null}
+                    </div>
+                  </td>
                   <td>{artwork.artist}</td>
                   <td>{artwork.category_slug}</td>
                   <td>{artwork.tags.join(", ") || "—"}</td>

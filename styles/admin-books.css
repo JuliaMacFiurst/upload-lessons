@@ -312,6 +312,151 @@
   color: #6b7280;
 }
 
+.artworks-table__title-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.artworks-table__warning {
+  color: #b42318;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.artworks-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(17, 24, 39, 0.52);
+}
+
+.artworks-modal {
+  width: min(1100px, 100%);
+  max-height: min(88vh, 920px);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  overflow: hidden;
+  padding: 20px;
+  border: 1px solid #d8e0ea;
+  border-radius: 20px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.22);
+}
+
+.artworks-modal__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.artworks-modal__title {
+  margin: 0;
+}
+
+.artworks-modal__text {
+  margin: 6px 0 0;
+  color: #607083;
+  line-height: 1.5;
+}
+
+.artworks-modal__search {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+
+.artworks-modal__search-field {
+  flex: 1 1 auto;
+}
+
+.artworks-wikimedia-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.artworks-wikimedia-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid #d8e0ea;
+  border-radius: 16px;
+  background: #fbfdff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.artworks-wikimedia-card--selected {
+  border-color: #0c4b83;
+  background: #eef6ff;
+  box-shadow: 0 0 0 2px rgba(12, 75, 131, 0.12);
+}
+
+.artworks-wikimedia-card__check {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #c4d0dd;
+  color: #0c4b83;
+  font-weight: 800;
+}
+
+.artworks-wikimedia-card__image {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #eef2f7;
+}
+
+.artworks-wikimedia-card__title {
+  font-weight: 700;
+  color: #23425e;
+  line-height: 1.35;
+}
+
+.artworks-wikimedia-card__meta {
+  color: #66768a;
+  font-size: 0.88rem;
+}
+
+.artworks-modal__actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+}
+
+.artworks-modal__selection {
+  color: #445366;
+  font-weight: 600;
+}
+
+@media (max-width: 720px) {
+  .artworks-modal__search {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+
 .artworks-image-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
