@@ -28,7 +28,7 @@ export const canonicalSlideSchema = z.object({
 });
 
 export const canonicalExplanationSectionSchema = z.object({
-  slides: z.array(canonicalSlideSchema).min(1).max(12),
+  slides: z.array(canonicalSlideSchema).min(1),
 });
 
 export const canonicalQuizQuestionSchema = z.object({
