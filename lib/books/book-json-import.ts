@@ -31,6 +31,13 @@ export type ImportedBookTranslationPayload = {
     mode_slug: string;
     slides: Array<{ text: string }>;
   }>;
+  tests?: Array<{
+    title: string;
+    questions: Array<{
+      question: string;
+      answers: Array<{ text: string; correct: boolean }>;
+    }>;
+  }>;
 };
 
 const IGNORED_CATEGORY_LABELS = new Set([
@@ -366,6 +373,72 @@ function mapImportedTest(current: BookEditorResponse["tests"], value: unknown): 
   ];
 }
 
+function readTranslatedTests(value: unknown): ImportedBookTranslationPayload["tests"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === null) {
+    return [];
+  }
+
+  const rawTests = Array.isArray(value) ? value : [value];
+
+  return rawTests.map((item, testIndex) => {
+    const testRecord = asRecord(item, `Поле tests[${testIndex}]`);
+    const title = readOptionalString(testRecord, "title");
+    if (!title) {
+      throw new Error(`Поле \`tests[${testIndex}].title\` обязательно.`);
+    }
+
+    const rawQuestions = testRecord.questions;
+    if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+      throw new Error(`Поле \`tests[${testIndex}].questions\` должно содержать хотя бы один вопрос.`);
+    }
+
+    return {
+      title,
+      questions: rawQuestions.map((questionItem, questionIndex) => {
+        const questionRecord = asRecord(questionItem, `Поле tests[${testIndex}].questions[${questionIndex}]`);
+        const question = readOptionalString(questionRecord, "question");
+        if (!question) {
+          throw new Error(`Поле \`tests[${testIndex}].questions[${questionIndex}].question\` обязательно.`);
+        }
+
+        const rawAnswers = questionRecord.answers;
+        if (!Array.isArray(rawAnswers) || rawAnswers.length === 0) {
+          throw new Error(`Поле \`tests[${testIndex}].questions[${questionIndex}].answers\` должно содержать варианты ответов.`);
+        }
+
+        return {
+          question,
+          answers: rawAnswers.map((answerItem, answerIndex) => {
+            const answerRecord = asRecord(
+              answerItem,
+              `Поле tests[${testIndex}].questions[${questionIndex}].answers[${answerIndex}]`,
+            );
+            const text = readOptionalString(answerRecord, "text");
+            if (!text) {
+              throw new Error(
+                `Поле \`tests[${testIndex}].questions[${questionIndex}].answers[${answerIndex}].text\` обязательно.`,
+              );
+            }
+            if (typeof answerRecord.correct !== "boolean") {
+              throw new Error(
+                `Поле \`tests[${testIndex}].questions[${questionIndex}].answers[${answerIndex}].correct\` должно быть boolean.`,
+              );
+            }
+
+            return {
+              text,
+              correct: answerRecord.correct,
+            };
+          }),
+        };
+      }),
+    };
+  });
+}
+
 export function buildBookPayloadFromImportedJson(
   current: BookEditorResponse,
   rawJson: string,
@@ -438,6 +511,7 @@ export function extractImportedBookTranslations(rawJson: string): Partial<Record
     const author = translationRecord ? readOptionalString(translationRecord, "author") : undefined;
     const description = translationRecord ? readOptionalString(translationRecord, "description") : undefined;
     const explicitCategories = translationRecord ? readImportedCategories(translationRecord, "categories") : undefined;
+    const translatedTests = translationRecord ? readTranslatedTests(translationRecord.tests) : undefined;
     const sections = translationRecord
       ? Object.entries(SECTION_IMPORT_KEYS).flatMap(([modeSlug, importKey]) => {
           const slides = mapImportedSlides(translationRecord, importKey);
@@ -467,6 +541,9 @@ export function extractImportedBookTranslations(rawJson: string): Partial<Record
     }
     if (sections.length > 0) {
       payload.sections = sections;
+    }
+    if (translatedTests !== undefined) {
+      payload.tests = translatedTests;
     }
 
     if (Object.keys(payload).length > 0) {

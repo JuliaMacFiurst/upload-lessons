@@ -109,6 +109,37 @@ const bookJsonTemplate = `{
       "book_in_20_sec_slides": [
         "Slide 1",
         "Slide 2"
+      ],
+      "tests": [
+        {
+          "title": "Quiz title",
+          "questions": [
+            {
+              "question": "Who is the main hero of the story?",
+              "answers": [
+                { "text": "Ged", "correct": true },
+                { "text": "Duny", "correct": false },
+                { "text": "Ogion", "correct": false }
+              ]
+            },
+            {
+              "question": "What is one of the main ideas of the book?",
+              "answers": [
+                { "text": "Power without responsibility is dangerous", "correct": true },
+                { "text": "Magic solves every problem", "correct": false },
+                { "text": "The hero never makes mistakes", "correct": false }
+              ]
+            },
+            {
+              "question": "What tone does the ending leave?",
+              "answers": [
+                { "text": "A sense of growth and hard-earned wisdom", "correct": true },
+                { "text": "Only comedy and lightness", "correct": false },
+                { "text": "Total hopelessness", "correct": false }
+              ]
+            }
+          ]
+        }
       ]
     },
     "he": {
@@ -150,6 +181,37 @@ const bookJsonTemplate = `{
       "book_in_20_sec_slides": [
         "שקופית 1",
         "שקופית 2"
+      ],
+      "tests": [
+        {
+          "title": "כותרת מבחן",
+          "questions": [
+            {
+              "question": "מי הגיבור הראשי של הסיפור?",
+              "answers": [
+                { "text": "גד", "correct": true },
+                { "text": "דני", "correct": false },
+                { "text": "אוגיון", "correct": false }
+              ]
+            },
+            {
+              "question": "מהו אחד הרעיונות המרכזיים של הספר?",
+              "answers": [
+                { "text": "כוח בלי אחריות הוא דבר מסוכן", "correct": true },
+                { "text": "קסם פותר כל בעיה", "correct": false },
+                { "text": "הגיבור אף פעם לא טועה", "correct": false }
+              ]
+            },
+            {
+              "question": "איזו תחושה משאיר הסיום?",
+              "answers": [
+                { "text": "תחושת התבגרות וחוכמה שנרכשה בקושי", "correct": true },
+                { "text": "רק קלילות והומור", "correct": false },
+                { "text": "ייאוש מוחלט", "correct": false }
+              ]
+            }
+          ]
+        }
       ]
     }
   },
@@ -244,7 +306,38 @@ const bookAiPrompt = `**Роль:** Ты — милая и невероятно 
       "conflicts_slides": ["...", "..."],
       "author_message_slides": ["...", "..."],
       "ending_meaning_slides": ["...", "..."],
-      "book_in_20_sec_slides": ["...", "..."]
+      "book_in_20_sec_slides": ["...", "..."],
+      "tests": [
+        {
+          "title": "...",
+          "questions": [
+            {
+              "question": "...",
+              "answers": [
+                { "text": "...", "correct": false },
+                { "text": "...", "correct": true },
+                { "text": "...", "correct": false }
+              ]
+            },
+            {
+              "question": "...",
+              "answers": [
+                { "text": "...", "correct": false },
+                { "text": "...", "correct": true },
+                { "text": "...", "correct": false }
+              ]
+            },
+            {
+              "question": "...",
+              "answers": [
+                { "text": "...", "correct": false },
+                { "text": "...", "correct": true },
+                { "text": "...", "correct": false }
+              ]
+            }
+          ]
+        }
+      ]
     },
     "he": {
       "title": "הקוסם מארץ ים",
@@ -258,7 +351,38 @@ const bookAiPrompt = `**Роль:** Ты — милая и невероятно 
       "conflicts_slides": ["...", "..."],
       "author_message_slides": ["...", "..."],
       "ending_meaning_slides": ["...", "..."],
-      "book_in_20_sec_slides": ["...", "..."]
+      "book_in_20_sec_slides": ["...", "..."],
+      "tests": [
+        {
+          "title": "...",
+          "questions": [
+            {
+              "question": "...",
+              "answers": [
+                { "text": "...", "correct": false },
+                { "text": "...", "correct": true },
+                { "text": "...", "correct": false }
+              ]
+            },
+            {
+              "question": "...",
+              "answers": [
+                { "text": "...", "correct": false },
+                { "text": "...", "correct": true },
+                { "text": "...", "correct": false }
+              ]
+            },
+            {
+              "question": "...",
+              "answers": [
+                { "text": "...", "correct": false },
+                { "text": "...", "correct": true },
+                { "text": "...", "correct": false }
+              ]
+            }
+          ]
+        }
+      ]
     }
   },
   "plot_slides": ["...", "..."],
@@ -293,6 +417,12 @@ const bookAiPrompt = `**Роль:** Ты — милая и невероятно 
   - "author_message_slides"
   - "ending_meaning_slides"
   - "book_in_20_sec_slides"
+- И обязательно переводить "tests":
+  - "title" теста
+  - "question"
+  - "answers[].text"
+  - поле "correct" не менять
+- В примере ниже tests показаны развёрнуто: ИИ должен возвращать перевод всех вопросов и всех ответов, а не только заголовок теста.
 - Эти переводы автоматически сохраняются в "content_translations".
 
 ## КРИТИЧЕСКИЕ ПРАВИЛА

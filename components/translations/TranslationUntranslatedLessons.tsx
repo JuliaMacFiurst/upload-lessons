@@ -29,6 +29,13 @@ type ManualProgressState = {
   finished: boolean;
 };
 
+type ManualPasteState = {
+  item: UntranslatedLesson;
+  value: string;
+  saving: boolean;
+  loading: boolean;
+};
+
 const GEMINI_INPUT_COST_PER_1M = 0.1;
 const GEMINI_OUTPUT_COST_PER_1M = 0.4;
 const OUTPUT_TOKEN_FACTOR = 1.05;
@@ -88,6 +95,7 @@ export function TranslationUntranslatedLessons({
   const [confirmState, setConfirmState] = useState<ConfirmState | null>(null);
   const [confirmLoading, setConfirmLoading] = useState(false);
   const [manualProgress, setManualProgress] = useState<ManualProgressState>(buildFinishedProgress);
+  const [manualPaste, setManualPaste] = useState<ManualPasteState | null>(null);
 
   useEffect(() => {
     setExpanded(false);
@@ -95,6 +103,7 @@ export function TranslationUntranslatedLessons({
     setSelected({});
     setPreviewJson(null);
     setConfirmState(null);
+    setManualPaste(null);
   }, [lang, scope]);
 
   const loadLessons = async () => {
@@ -169,6 +178,123 @@ export function TranslationUntranslatedLessons({
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       onMessage(message, "error");
+    } finally {
+      setBusy(key, false);
+    }
+  };
+
+  const copySourceJson = async (item: Pick<UntranslatedLesson, "id" | "content_type">) => {
+    const key = itemKey(item);
+    setBusy(key, true);
+    try {
+      const data = await fetchJson<{
+        sourcePreview?: boolean;
+        sourcePayload?: unknown;
+      }>("/api/admin/translation/translate-one", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content_type: item.content_type,
+          content_id: item.id,
+          lang,
+          sourcePreview: true,
+        }),
+      });
+
+      if (!data.sourcePreview) {
+        throw new Error("Source JSON is unavailable.");
+      }
+
+      const translationTemplate = {
+        content_type: item.content_type,
+        content_id: item.id,
+        translations: {
+          en: data.sourcePayload,
+          he: data.sourcePayload,
+        },
+      };
+      const serialized = JSON.stringify(translationTemplate, null, 2);
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(serialized);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = serialized;
+        textarea.style.position = "fixed";
+        textarea.style.left = "-9999px";
+        textarea.style.top = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
+      onMessage("JSON объекта скопирован в буфер обмена.", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onMessage(message, "error");
+    } finally {
+      setBusy(key, false);
+    }
+  };
+
+  const openManualPaste = async (item: UntranslatedLesson) => {
+    setPreviewJson(null);
+    setManualPaste({
+      item,
+      value: "",
+      saving: false,
+      loading: false,
+    });
+  };
+
+  const saveManualTranslation = async () => {
+    if (!manualPaste) {
+      return;
+    }
+
+    const key = itemKey(manualPaste.item);
+    setBusy(key, true);
+    setManualPaste((current) => (current ? { ...current, saving: true } : current));
+    setPreviewJson(null);
+
+    try {
+      const parsed = JSON.parse(manualPaste.value) as unknown;
+      const parsedRecord = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : null;
+      const manualTranslations =
+        parsedRecord && parsedRecord.translations && typeof parsedRecord.translations === "object" && !Array.isArray(parsedRecord.translations)
+          ? parsedRecord.translations
+          : parsedRecord;
+
+      if (!manualTranslations || typeof manualTranslations !== "object" || Array.isArray(manualTranslations)) {
+        throw new Error("Вставьте JSON с объектом translations или сразу с ключами en/he.");
+      }
+
+      await fetchJson<{ ok?: boolean; upToDate?: boolean; savedLanguages?: string[] }>("/api/admin/translation/translate-one", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          content_type: manualPaste.item.content_type,
+          content_id: manualPaste.item.id,
+          lang,
+          preview: false,
+          manualTranslations,
+        }),
+      });
+
+      removeItem(manualPaste.item.content_type, manualPaste.item.id);
+      setManualPaste(null);
+      await onTranslationComplete?.();
+      onMessage("Ручные переводы сохранены в базу.", "success");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      onMessage(message, "error");
+      setManualPaste((current) => (current ? { ...current, saving: false } : current));
     } finally {
       setBusy(key, false);
     }
@@ -326,43 +452,111 @@ export function TranslationUntranslatedLessons({
               {items.map((item) => {
                 const key = itemKey(item);
                 return (
-                  <div className="translations-list__row" key={key}>
-                    <span>
-                      <input
-                        type="checkbox"
-                        checked={!!selected[key]}
-                        disabled={manualProgress.running}
-                        onChange={(e) => {
-                          setSelected((prev) => ({
-                            ...prev,
-                            [key]: e.target.checked,
-                          }));
-                        }}
-                      />
-                    </span>
-                    <span>{item.title ?? "Untitled"}</span>
-                    <span>{item.content_type}</span>
-                    <span>{item.source_tokens ?? 0}</span>
-                    <div className="translations-list__actions">
-                      <button
-                        className="translations-button translations-button--secondary"
-                        disabled={!!busyIds[key] || manualProgress.running}
-                        onClick={() => {
-                          void previewOne(item);
-                        }}
-                      >
-                        Preview translation
-                      </button>
-                      <button
-                        className="translations-button translations-button--primary"
-                        disabled={!!busyIds[key] || manualProgress.running}
-                        onClick={() => {
-                          openSingleTranslateConfirm(item);
-                        }}
-                      >
-                        Перевести
-                      </button>
+                  <div key={key}>
+                    <div className="translations-list__row">
+                      <span>
+                        <input
+                          type="checkbox"
+                          checked={!!selected[key]}
+                          disabled={manualProgress.running}
+                          onChange={(e) => {
+                            setSelected((prev) => ({
+                              ...prev,
+                              [key]: e.target.checked,
+                            }));
+                          }}
+                        />
+                      </span>
+                      <span>{item.title ?? "Untitled"}</span>
+                      <span>{item.content_type}</span>
+                      <span>{item.source_tokens ?? 0}</span>
+                      <div className="translations-list__actions">
+                        <button
+                          className="translations-button translations-button--secondary"
+                          disabled={!!busyIds[key] || manualProgress.running}
+                          onClick={() => {
+                            void copySourceJson(item);
+                          }}
+                        >
+                          Скопировать JSON
+                        </button>
+                        <button
+                          className="translations-button translations-button--secondary"
+                          disabled={!!busyIds[key] || manualProgress.running}
+                          onClick={() => {
+                            void openManualPaste(item);
+                          }}
+                        >
+                          Вставить переводы
+                        </button>
+                        <button
+                          className="translations-button translations-button--secondary"
+                          disabled={!!busyIds[key] || manualProgress.running}
+                          onClick={() => {
+                            void previewOne(item);
+                          }}
+                        >
+                          Preview translation
+                        </button>
+                        <button
+                          className="translations-button translations-button--primary"
+                          disabled={!!busyIds[key] || manualProgress.running}
+                          onClick={() => {
+                            openSingleTranslateConfirm(item);
+                          }}
+                        >
+                          Перевести
+                        </button>
+                      </div>
                     </div>
+                    {manualPaste && itemKey(manualPaste.item) === key && (
+                      <div className="translations-manual-editor">
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+                          <strong>Ручные переводы: {displayItemName(manualPaste.item)}</strong>
+                          <div style={{ display: "flex", gap: 8 }}>
+                            <button
+                              className="translations-button translations-button--secondary"
+                              disabled={manualPaste.saving || manualPaste.loading}
+                              onClick={() => setManualPaste(null)}
+                            >
+                              Отмена
+                            </button>
+                            <button
+                              className="translations-button translations-button--primary"
+                              disabled={manualPaste.saving || manualPaste.loading || !manualPaste.value.trim()}
+                              onClick={() => {
+                                void saveManualTranslation();
+                              }}
+                            >
+                              {manualPaste.loading
+                                ? "Подготовка..."
+                                : manualPaste.saving
+                                  ? "Сохранение..."
+                                  : "Сохранить переводы"}
+                            </button>
+                          </div>
+                        </div>
+                        <textarea
+                          className="translations-input"
+                          style={{ minHeight: 280, width: "100%", fontFamily: "monospace" }}
+                          value={manualPaste.value}
+                          onChange={(event) =>
+                            setManualPaste((current) =>
+                              current
+                                ? {
+                                    ...current,
+                                    value: event.target.value,
+                                  }
+                                : current,
+                            )
+                          }
+                          placeholder="Вставьте JSON перевода сюда"
+                        />
+                        <p className="translations-hint" style={{ marginTop: 8 }}>
+                          Ожидается JSON с объектом `translations`, внутри которого есть `en` и `he`, или объект сразу с ключами `en` и `he`.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 );
               })}

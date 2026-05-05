@@ -248,6 +248,12 @@
   overflow: auto;
 }
 
+.translations-manual-editor {
+  border-top: 1px solid #f4e8dc;
+  background: #fffdfa;
+  padding: 12px;
+}
+
 .translations-mock-banner {
   display: inline-flex;
   align-items: center;

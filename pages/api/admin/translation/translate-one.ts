@@ -15,7 +15,85 @@ type RequestBody = {
   content_id?: string;
   lang?: string;
   preview?: boolean;
+  sourcePreview?: boolean;
+  manualTranslation?: unknown;
+  manualTranslations?: unknown;
 };
+
+function normalizeTranslationForSave(args: {
+  contentType: ContentType;
+  sourcePayload: unknown;
+  rawTranslation: unknown;
+}): unknown {
+  return args.contentType === "lesson"
+    ? coerceLessonToOriginalShape(
+        args.sourcePayload as LessonTextPayload,
+        coerceLessonPayload(args.rawTranslation),
+      )
+    : args.rawTranslation;
+}
+
+function validateTranslationByType(contentType: ContentType, sourcePayload: unknown, translation: unknown): void {
+  if (contentType === "lesson") {
+    const reason = getInvalidTranslationReason(translation);
+
+    if (reason) {
+      throw new Error(`Invalid translation: ${reason}`);
+    }
+
+    validateTranslationPayload({
+      contentType: "lesson",
+      originalPayload: sourcePayload,
+      translatedPayload: translation,
+    });
+    return;
+  }
+
+  if (contentType === "map_story") {
+    validateNonEmptyObjectStrings(translation, ["content"]);
+    return;
+  }
+  if (contentType === "artwork") {
+    validateNonEmptyObjectStrings(translation, ["title", "description"]);
+    return;
+  }
+  if (contentType === "book") {
+    validateBookPayloadAgainstSource(sourcePayload, translation);
+    return;
+  }
+  if (contentType === "parrot_music_style") {
+    validateParrotMusicStylePayloadAgainstSource(sourcePayload, translation);
+    return;
+  }
+
+  validateStoryPayload(translation);
+}
+
+async function saveTranslationRow(args: {
+  supabase: ReturnType<typeof createSupabaseServerClient>;
+  contentType: ContentType;
+  contentId: string;
+  language: string;
+  sourceHash: string;
+  translation: unknown;
+}): Promise<void> {
+  const { error: upsertError } = await args.supabase.from("content_translations").upsert(
+    {
+      content_type: args.contentType,
+      content_id: args.contentId,
+      language: args.language,
+      source_hash: args.sourceHash,
+      translation: args.translation,
+      updated_at: new Date().toISOString(),
+    },
+    {
+      onConflict: "content_type,content_id,language",
+    },
+  );
+  if (upsertError) {
+    throw new Error(upsertError.message);
+  }
+}
 
 const TRANSLATION_MOCK_MODEL = process.env.TRANSLATION_MOCK_MODEL === "true";
 
@@ -306,6 +384,58 @@ function validateBookPayload(payload: unknown): void {
   }
 }
 
+function validateBookPayloadAgainstSource(sourcePayload: unknown, translatedPayload: unknown): void {
+  validateBookPayload(translatedPayload);
+
+  if (!sourcePayload || typeof sourcePayload !== "object") {
+    throw new Error("Invalid source payload");
+  }
+
+  const sourceRecord = sourcePayload as { sections?: unknown };
+  const translatedRecord = translatedPayload as { sections?: unknown };
+  const sourceSections = Array.isArray(sourceRecord.sections) ? sourceRecord.sections : [];
+  const translatedSections = Array.isArray(translatedRecord.sections) ? translatedRecord.sections : [];
+
+  if (translatedSections.length !== sourceSections.length) {
+    throw new Error(`Section count mismatch: expected ${sourceSections.length}, got ${translatedSections.length}.`);
+  }
+
+  const sourceBySlug = new Map<string, number>();
+  sourceSections.forEach((section) => {
+    if (!section || typeof section !== "object") {
+      return;
+    }
+    const typed = section as { mode_slug?: unknown; slides?: unknown };
+    const modeSlug = typeof typed.mode_slug === "string" ? typed.mode_slug : "";
+    const slides = Array.isArray(typed.slides) ? typed.slides : [];
+    if (modeSlug) {
+      sourceBySlug.set(modeSlug, slides.length);
+    }
+  });
+
+  for (const section of translatedSections) {
+    if (!section || typeof section !== "object") {
+      throw new Error("Invalid translation payload");
+    }
+
+    const typed = section as { mode_slug?: unknown; slides?: unknown };
+    const modeSlug = typeof typed.mode_slug === "string" ? typed.mode_slug : "";
+    const slides = Array.isArray(typed.slides) ? typed.slides : null;
+
+    if (!modeSlug || slides === null) {
+      throw new Error("Invalid translation payload");
+    }
+
+    const expectedCount = sourceBySlug.get(modeSlug);
+    if (expectedCount === undefined) {
+      throw new Error(`Unknown section in translation: ${modeSlug}.`);
+    }
+    if (slides.length !== expectedCount) {
+      throw new Error(`Slide count mismatch for section "${modeSlug}": expected ${expectedCount}, got ${slides.length}.`);
+    }
+  }
+}
+
 function validateParrotMusicStylePayload(payload: unknown): void {
   if (!payload || typeof payload !== "object") {
     throw new Error("Invalid translation payload");
@@ -338,6 +468,21 @@ function validateParrotMusicStylePayload(payload: unknown): void {
     if (typeof typed.text !== "string") {
       throw new Error("Invalid translation payload");
     }
+  }
+}
+
+function validateParrotMusicStylePayloadAgainstSource(sourcePayload: unknown, translatedPayload: unknown): void {
+  validateParrotMusicStylePayload(translatedPayload);
+
+  const sourceSlides = Array.isArray((sourcePayload as { slides?: unknown } | null | undefined)?.slides)
+    ? ((sourcePayload as { slides: unknown[] }).slides)
+    : [];
+  const translatedSlides = Array.isArray((translatedPayload as { slides?: unknown } | null | undefined)?.slides)
+    ? ((translatedPayload as { slides: unknown[] }).slides)
+    : [];
+
+  if (translatedSlides.length !== sourceSlides.length) {
+    throw new Error(`Slide count mismatch: expected ${sourceSlides.length}, got ${translatedSlides.length}.`);
   }
 }
 
@@ -390,6 +535,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const contentId = typeof body.content_id === "string" ? body.content_id.trim() : "";
   const lang = typeof body.lang === "string" ? body.lang.trim() : "";
   const preview = body.preview === true;
+  const sourcePreview = body.sourcePreview === true;
+  const hasManualTranslation = body.manualTranslation !== undefined;
+  const hasManualTranslations = body.manualTranslations !== undefined;
 
   if (
     !contentType ||
@@ -410,6 +558,56 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       contentId,
     });
 
+    if (sourcePreview) {
+      return res.status(200).json({ sourcePreview: true, sourcePayload });
+    }
+
+    if (hasManualTranslations) {
+      const manualTranslations =
+        typeof body.manualTranslations === "string"
+          ? JSON.parse(body.manualTranslations)
+          : body.manualTranslations;
+
+      if (!manualTranslations || typeof manualTranslations !== "object" || Array.isArray(manualTranslations)) {
+        return res.status(400).json({ error: "manualTranslations must be an object." });
+      }
+
+      const translationEntries = Object.entries(manualTranslations as Record<string, unknown>)
+        .filter(([language, value]) => (language === "en" || language === "he") && value !== undefined && value !== null);
+
+      if (translationEntries.length === 0) {
+        return res.status(400).json({ error: "No en/he translations were provided." });
+      }
+
+      for (const [manualLang, rawTranslation] of translationEntries) {
+        const normalizedTranslation = normalizeTranslationForSave({
+          contentType,
+          sourcePayload,
+          rawTranslation,
+        });
+
+        validateTranslationByType(contentType, sourcePayload, normalizedTranslation);
+
+        let safeJson: unknown;
+        try {
+          safeJson = JSON.parse(JSON.stringify(normalizedTranslation));
+        } catch {
+          return res.status(422).json({ error: `Invalid translation payload for ${manualLang}` });
+        }
+
+        await saveTranslationRow({
+          supabase,
+          contentType,
+          contentId,
+          language: manualLang,
+          sourceHash,
+          translation: safeJson,
+        });
+      }
+
+      return res.status(200).json({ ok: true, savedLanguages: translationEntries.map(([language]) => language) });
+    }
+
     const { data: existingTranslation, error: existingError } = await supabase
       .from("content_translations")
       .select("id,source_hash")
@@ -425,51 +623,36 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ upToDate: true });
     }
 
-    const rawTranslation = TRANSLATION_MOCK_MODEL
-      ? contentType === "lesson"
-        ? mockTranslateLesson(sourcePayload as LessonTextPayload, lang)
-        : mockTranslateGeneric(sourcePayload, lang)
-      : await translateWithGemini(sourcePayload, lang);
-
-    const translation =
-      contentType === "lesson"
-        ? coerceLessonToOriginalShape(
-            sourcePayload as LessonTextPayload,
-            coerceLessonPayload(rawTranslation),
-          )
-        : rawTranslation;
-
-    if (contentType === "lesson") {
-      const reason = getInvalidTranslationReason(translation);
-
-      if (reason) {
-        const title =
-          typeof (sourcePayload as { title?: unknown }).title === "string"
-            ? (sourcePayload as { title?: string }).title
-            : "";
-
-        console.error(
-          `Invalid translation detected for lesson ${contentId}${title ? ` (${title})` : ""}: ${reason}`,
-        );
-
-        return res.status(422).json({ error: `Invalid translation: ${reason}` });
-      }
-
-      validateTranslationPayload({
-        contentType: "lesson",
-        originalPayload: sourcePayload,
-        translatedPayload: translation,
+    let translation: unknown;
+    if (hasManualTranslation) {
+      const manualTranslation =
+        typeof body.manualTranslation === "string"
+          ? JSON.parse(body.manualTranslation)
+          : body.manualTranslation;
+      translation = normalizeTranslationForSave({
+        contentType,
+        sourcePayload,
+        rawTranslation: manualTranslation,
       });
-    } else if (contentType === "map_story") {
-      validateNonEmptyObjectStrings(translation, ["content"]);
-    } else if (contentType === "artwork") {
-      validateNonEmptyObjectStrings(translation, ["title", "description"]);
-    } else if (contentType === "book") {
-      validateBookPayload(translation);
-    } else if (contentType === "parrot_music_style") {
-      validateParrotMusicStylePayload(translation);
     } else {
-      validateStoryPayload(translation);
+      const rawTranslation = TRANSLATION_MOCK_MODEL
+        ? contentType === "lesson"
+          ? mockTranslateLesson(sourcePayload as LessonTextPayload, lang)
+          : mockTranslateGeneric(sourcePayload, lang)
+        : await translateWithGemini(sourcePayload, lang);
+
+      translation = normalizeTranslationForSave({
+        contentType,
+        sourcePayload,
+        rawTranslation,
+      });
+    }
+
+    try {
+      validateTranslationByType(contentType, sourcePayload, translation);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Invalid translation payload";
+      return res.status(422).json({ error: message });
     }
 
     let safeJson: unknown;
@@ -483,22 +666,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(200).json({ preview: true, translation: safeJson });
     }
 
-    const { error: upsertError } = await supabase.from("content_translations").upsert(
-      {
-        content_type: contentType,
-        content_id: contentId,
-        language: lang,
-        source_hash: sourceHash,
-        translation: safeJson,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: "content_type,content_id,language",
-      },
-    );
-    if (upsertError) {
-      return res.status(500).json({ error: upsertError.message });
-    }
+    await saveTranslationRow({
+      supabase,
+      contentType,
+      contentId,
+      language: lang,
+      sourceHash,
+      translation: safeJson,
+    });
 
     return res.status(200).json({ ok: true });
   } catch (error) {

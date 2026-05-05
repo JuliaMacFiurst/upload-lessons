@@ -33,6 +33,9 @@ function mergeBookTranslationPayload(
   if (incoming.categories !== undefined) {
     merged.categories = incoming.categories;
   }
+  if (incoming.tests !== undefined) {
+    merged.tests = incoming.tests;
+  }
   if (incoming.sections !== undefined) {
     const existingSections = Array.isArray(existing?.sections)
       ? (existing?.sections as Array<Record<string, unknown>>)
