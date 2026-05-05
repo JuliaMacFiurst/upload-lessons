@@ -8,6 +8,8 @@ import { AdminTabs } from "../../../components/AdminTabs";
 import { AdminLogout } from "../../../components/AdminLogout";
 import {
   buildBookPayloadFromImportedJson,
+  extractImportedBookCategories,
+  extractImportedBookTranslations,
   extractBookSeedFromImportedJson,
 } from "../../../lib/books/book-json-import";
 import type { BookEditorResponse, BookListItem, CategoryOption } from "../../../lib/books/types";
@@ -41,6 +43,359 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
     throw new Error(data.error ?? "Request failed.");
   }
   return data;
+}
+
+const bookJsonTemplate = `{
+  "title": "Волшебник Земноморья",
+  "author": "Урсула Ле Гуин",
+  "year": 1968,
+  "description": "Короткое описание книги",
+  "keywords": "магия, взросление, тень",
+  "age": "10–14 лет",
+  "reading_time": "6–8 часов",
+  "categories": [
+    {
+      "name": "фэнтези",
+      "translations": {
+        "en": "Fantasy",
+        "he": "פנטזיה"
+      }
+    },
+    {
+      "name": "классика",
+      "translations": {
+        "en": "Classic",
+        "he": "קלאסיקה"
+      }
+    }
+  ],
+  "translations": {
+    "en": {
+      "title": "A Wizard of Earthsea",
+      "author": "Ursula Le Guin",
+      "description": "A short description of the book",
+      "categories": [
+        "Fantasy",
+        "Classic"
+      ],
+      "plot_slides": [
+        "Slide 1",
+        "Slide 2"
+      ],
+      "characters_slides": [
+        "Slide 1",
+        "Slide 2"
+      ],
+      "idea_slides": [
+        "Slide 1",
+        "Slide 2"
+      ],
+      "philosophy_slides": [
+        "Slide 1",
+        "Slide 2"
+      ],
+      "conflicts_slides": [
+        "Slide 1",
+        "Slide 2"
+      ],
+      "author_message_slides": [
+        "Slide 1",
+        "Slide 2"
+      ],
+      "ending_meaning_slides": [
+        "Slide 1",
+        "Slide 2"
+      ],
+      "book_in_20_sec_slides": [
+        "Slide 1",
+        "Slide 2"
+      ]
+    },
+    "he": {
+      "title": "הקוסם מארץ ים",
+      "author": "אורסולה לה גווין",
+      "description": "תיאור קצר של הספר",
+      "categories": [
+        "פנטזיה",
+        "קלאסיקה"
+      ],
+      "plot_slides": [
+        "שקופית 1",
+        "שקופית 2"
+      ],
+      "characters_slides": [
+        "שקופית 1",
+        "שקופית 2"
+      ],
+      "idea_slides": [
+        "שקופית 1",
+        "שקופית 2"
+      ],
+      "philosophy_slides": [
+        "שקופית 1",
+        "שקופית 2"
+      ],
+      "conflicts_slides": [
+        "שקופית 1",
+        "שקופית 2"
+      ],
+      "author_message_slides": [
+        "שקופית 1",
+        "שקופית 2"
+      ],
+      "ending_meaning_slides": [
+        "שקופית 1",
+        "שקופית 2"
+      ],
+      "book_in_20_sec_slides": [
+        "שקופית 1",
+        "שקופית 2"
+      ]
+    }
+  },
+  "plot_slides": [
+    "Слайд 1",
+    "Слайд 2"
+  ],
+  "characters_slides": [
+    "Слайд 1",
+    "Слайд 2"
+  ],
+  "idea_slides": [
+    "Слайд 1",
+    "Слайд 2"
+  ],
+  "philosophy_slides": [
+    "Слайд 1",
+    "Слайд 2"
+  ],
+  "conflicts_slides": [
+    "Слайд 1",
+    "Слайд 2"
+  ],
+  "author_message_slides": [
+    "Слайд 1",
+    "Слайд 2"
+  ],
+  "ending_meaning_slides": [
+    "Слайд 1",
+    "Слайд 2"
+  ],
+  "book_in_20_sec_slides": [
+    "Слайд 1",
+    "Слайд 2"
+  ],
+  "test": {
+    "title": "Название теста",
+    "description": "Короткое описание",
+    "questions": [
+      {
+        "question": "Вопрос",
+        "options": ["A", "B", "C"],
+        "correct_answer": 2
+      }
+    ]
+  }
+}`;
+
+const bookAiPrompt = `**Роль:** Ты — милая и невероятно умная капибара-литератор. Ты создаешь контент для детского сайта laplapla.com в формате слайд-шоу. Твоя задача — объяснять книги так, чтобы это выглядело как сценарий для вирусного Reels или YouTube Shorts.
+
+Ты создаёшь контент для образовательного сайта в формате коротких слайдов (шортсов / рилсов).
+
+Задача:
+Сгенерировать JSON с разбором книги.
+
+Важно:
+- у книги может быть несколько категорий
+- это нормально и не считается ошибкой
+- поле "categories" всегда массив
+- в "translations.en.categories" и "translations.he.categories" тоже можно и нужно передавать несколько категорий, если книге подходят несколько жанров или тематик
+
+Формат строго следующий. Не менять структуру и не добавлять поля:
+
+\`\`\`json
+{
+  "title": "Волшебник Земноморья",
+  "author": "Урсула Ле Гуин",
+  "year": 1968,
+  "description": "Короткое описание книги",
+  "keywords": "магия, взросление, тень",
+  "age": "10–14 лет",
+  "reading_time": "6–8 часов",
+  "categories": [
+    {
+      "name": "фэнтези",
+      "translations": {
+        "en": "Fantasy",
+        "he": "פנטזיה"
+      }
+    }
+  ],
+  "translations": {
+    "en": {
+      "title": "A Wizard of Earthsea",
+      "author": "Ursula Le Guin",
+      "description": "A short description of the book",
+      "categories": ["Fantasy"],
+      "plot_slides": ["...", "..."],
+      "characters_slides": ["...", "..."],
+      "idea_slides": ["...", "..."],
+      "philosophy_slides": ["...", "..."],
+      "conflicts_slides": ["...", "..."],
+      "author_message_slides": ["...", "..."],
+      "ending_meaning_slides": ["...", "..."],
+      "book_in_20_sec_slides": ["...", "..."]
+    },
+    "he": {
+      "title": "הקוסם מארץ ים",
+      "author": "אורסולה לה גווין",
+      "description": "תיאור קצר של הספר",
+      "categories": ["פנטזיה"],
+      "plot_slides": ["...", "..."],
+      "characters_slides": ["...", "..."],
+      "idea_slides": ["...", "..."],
+      "philosophy_slides": ["...", "..."],
+      "conflicts_slides": ["...", "..."],
+      "author_message_slides": ["...", "..."],
+      "ending_meaning_slides": ["...", "..."],
+      "book_in_20_sec_slides": ["...", "..."]
+    }
+  },
+  "plot_slides": ["...", "..."],
+  "characters_slides": ["...", "..."],
+  "idea_slides": ["...", "..."],
+  "philosophy_slides": ["...", "..."],
+  "conflicts_slides": ["...", "..."],
+  "author_message_slides": ["...", "..."],
+  "ending_meaning_slides": ["...", "..."],
+  "book_in_20_sec_slides": ["...", "..."],
+  "test": {
+    "title": "Название теста",
+    "description": "Короткое описание",
+    "questions": [
+      {
+        "question": "Вопрос",
+        "options": ["A", "B", "C"],
+        "correct_answer": 2
+      }
+    ]
+  }
+}
+\`\`\`
+
+Важно:
+- В "translations.en" и "translations.he" нужно переводить не только "title", "author", "description" и "categories", но и все массивы слайдов:
+  - "plot_slides"
+  - "characters_slides"
+  - "idea_slides"
+  - "philosophy_slides"
+  - "conflicts_slides"
+  - "author_message_slides"
+  - "ending_meaning_slides"
+  - "book_in_20_sec_slides"
+- Эти переводы автоматически сохраняются в "content_translations".
+
+## КРИТИЧЕСКИЕ ПРАВИЛА
+
+### 1. ОСОБЕННО ВАЖНО: plot_slides
+
+Строгая структура:
+- 2 первых — мощные крючки
+- 9 следующих — связное развитие истории
+- 1 последний — вопрос-триггер для комментариев
+- длина текста подходит под формат шортса длиной 30-50 секунд
+
+Требования к plot_slides:
+- это не набор фраз, а цельная история
+- каждый слайд логически продолжает предыдущий
+- язык простой, разговорный
+- короткие предложения
+- без воды и общих фраз
+- обязательно нарастание напряжения
+
+Финальный слайд:
+- формулируется как вопрос
+- должен задевать лично
+- должен вызывать внутренний конфликт
+- должен провоцировать комментарии
+- избегать банальных вопросов типа "что важнее"
+- делать упор на моральный выбор или личный опыт
+
+Примеры хороших финалов:
+- "если все против тебя — ты останешься собой?"
+- "если никто не узнает — это всё ещё имеет значение?"
+- "если правда делает тебя одиноким — стоит ли её держаться?"
+
+### 2. СТИЛЬ ВСЕХ СЛАЙДОВ
+
+- короткие строки
+- одна мысль = один слайд
+- читается за 1–2 секунды
+- разговорный русский язык
+- как будто объясняешь подростку
+
+### 3. characters_slides
+
+- не просто имена
+- формат: "Имя — роль/суть"
+- максимум 7 элементов
+
+### 4. idea / philosophy / conflicts
+
+- не пересказывать сюжет
+- давать смысл
+- избегать банальностей
+- каждый слайд — отдельная мысль
+
+### 5. philosophy_slides
+
+Обязательно:
+- постепенное углубление
+- в конце — философский вопрос, но другой, чем в plot
+
+### 6. test
+
+- 5-7 вопросов
+- по 3 варианта ответа
+- correct_answer = индекс 1, 2 или 3
+- вопросы простые, но по сути
+
+### 7. ОБЩИЙ ТОН
+
+- живой
+- эмоциональный
+- без пафоса
+- без сложных слов
+- без академического стиля
+
+## ГЛАВНАЯ ЦЕЛЬ
+
+Сделать так, чтобы:
+- пользователь не пролистнул первые 2 слайда
+- досмотрел до конца
+- захотел написать комментарий
+- заинтересовался книгой
+
+Теперь создай JSON для книги:
+
+[вставь название книги и автора]`;
+
+async function copyTextToClipboard(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  document.execCommand("copy");
+  document.body.removeChild(textarea);
 }
 
 export default function AdminBooksIndexPage() {
@@ -173,6 +528,16 @@ export default function AdminBooksIndexPage() {
 
     try {
       const seed = extractBookSeedFromImportedJson(jsonImportValue);
+      const importedCategories = extractImportedBookCategories(jsonImportValue);
+
+      for (const category of importedCategories) {
+        await fetchJson<{ category: CategoryOption }>("/api/admin/book-categories", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: category.name }),
+        });
+      }
+
       const bookResult = await fetchJson<{ existing: boolean; book: BookListItem }>("/api/admin/books", {
         method: "POST",
         headers: {
@@ -183,13 +548,18 @@ export default function AdminBooksIndexPage() {
 
       const editor = await fetchJson<BookEditorResponse>(`/api/admin/books/${bookResult.book.id}`);
       const payload = buildBookPayloadFromImportedJson(editor, jsonImportValue);
+      const importedTranslations = extractImportedBookTranslations(jsonImportValue);
       await fetchJson<{ ok: true; data: BookEditorResponse }>(`/api/admin/books/${bookResult.book.id}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          ...payload,
+          importedTranslations,
+        }),
       });
 
       await loadBooks();
+      await loadBookCategories();
       setSuccess(bookResult.existing ? "Книга обновлена из JSON. Открываю редактор." : "Книга создана из JSON. Открываю редактор.");
       await router.push(`/admin/books/${bookResult.book.id}`);
     } catch (fetchError) {
@@ -220,6 +590,28 @@ export default function AdminBooksIndexPage() {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
     } finally {
       setCreatingCategory(false);
+    }
+  };
+
+  const copyJsonTemplate = async () => {
+    setError(null);
+    setSuccess(null);
+    try {
+      await copyTextToClipboard(bookJsonTemplate);
+      setSuccess("Пример JSON книги скопирован в буфер обмена.");
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Не удалось скопировать JSON.");
+    }
+  };
+
+  const copyAiPrompt = async () => {
+    setError(null);
+    setSuccess(null);
+    try {
+      await copyTextToClipboard(bookAiPrompt);
+      setSuccess("Промпт для ИИ скопирован в буфер обмена.");
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Не удалось скопировать промпт.");
     }
   };
 
@@ -339,7 +731,7 @@ export default function AdminBooksIndexPage() {
           <div>
             <h2 className="books-panel__title">Категории книг</h2>
             <p className="books-section-help">
-              Если импорт JSON падает из-за новой категории, добавьте её здесь и повторите импорт.
+              Новые категории из JSON теперь создаются автоматически. Этот блок нужен для ручного управления справочником.
             </p>
           </div>
         </div>
@@ -399,16 +791,36 @@ export default function AdminBooksIndexPage() {
               Вставьте полный JSON книги. Книга будет создана или найдена по `title`, затем данные сохранятся в базу.
             </p>
           </div>
-          <button
-            type="button"
-            className="books-button books-button--primary"
-            disabled={importingBookJson || !jsonImportValue.trim()}
-            onClick={() => {
-              void importBookFromJson();
-            }}
-          >
-            {importingBookJson ? "Импорт..." : "Импортировать JSON"}
-          </button>
+          <div className="books-actions">
+            <button
+              type="button"
+              className="books-button books-button--secondary"
+              onClick={() => {
+                void copyJsonTemplate();
+              }}
+            >
+              Скопировать пример JSON
+            </button>
+            <button
+              type="button"
+              className="books-button books-button--secondary"
+              onClick={() => {
+                void copyAiPrompt();
+              }}
+            >
+              Скопировать промпт для ИИ
+            </button>
+            <button
+              type="button"
+              className="books-button books-button--primary"
+              disabled={importingBookJson || !jsonImportValue.trim()}
+              onClick={() => {
+                void importBookFromJson();
+              }}
+            >
+              {importingBookJson ? "Импорт..." : "Импортировать JSON"}
+            </button>
+          </div>
         </div>
 
         <label className="books-field">
@@ -426,43 +838,20 @@ export default function AdminBooksIndexPage() {
           />
           <span className="books-field__help">
             Поддерживаются поля title, author, year, description, keywords, age, reading_time, categories, *_slides и test.
+            `categories` можно передавать как массив строк или массив объектов с переводами. Если в `translations.en/he`
+            передать `*_slides`, их тексты тоже автоматически сохранятся в `content_translations`.
+            Несколько категорий для одной книги разрешены и не считаются ошибкой.
           </span>
         </label>
 
         <div className="books-import-help">
           <strong>Поддерживаемый формат</strong>
-          <pre className="books-import-help__code">{`{
-  "title": "Волшебник Земноморья",
-  "author": "Урсула Ле Гуин",
-  "year": 1968,
-  "description": "Короткое описание книги",
-  "keywords": "магия, взросление, тень",
-  "age": "10–14 лет",
-  "reading_time": "6–8 часов",
-  "categories": ["фэнтези", "классика"],
-  "plot_slides": ["...", "..."],
-  "characters_slides": ["...", "..."],
-  "idea_slides": ["...", "..."],
-  "philosophy_slides": ["...", "..."],
-  "conflicts_slides": ["...", "..."],
-  "author_message_slides": ["...", "..."],
-  "ending_meaning_slides": ["...", "..."],
-  "book_in_20_sec_slides": ["...", "..."],
-  "test": {
-    "title": "Название теста",
-    "description": "Короткое описание",
-    "questions": [
-      {
-        "question": "Вопрос",
-        "options": ["A", "B", "C"],
-        "correct_answer": 2
-      }
-    ]
-  }
-}`}</pre>
+          <pre className="books-import-help__code">{bookJsonTemplate}</pre>
           <p className="books-section-help">
             `correct_answer` указывается как номер ответа, начиная с 1. `reading_time` можно вставлять числом или строкой
-            вроде `45 мин` или `6–8 часов`.
+            вроде `45 мин` или `6–8 часов`. Если в `categories` придёт новая категория, она будет создана автоматически.
+            Переведённые `*_slides` внутри `translations.en/he` тоже импортируются автоматически.
+            Книга может иметь несколько категорий одновременно.
           </p>
         </div>
       </section>

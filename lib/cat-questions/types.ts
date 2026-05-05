@@ -13,6 +13,7 @@ export const catSlideInputSchema = z.object({
 
 export const catTranslationPayloadSchema = z.object({
   prompt: z.string().trim().min(1),
+  category: z.string().trim().min(1).optional(),
   slides: z.array(z.object({
     order: z.number().int().min(1),
     text: z.string().trim().min(1),

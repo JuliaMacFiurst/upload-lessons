@@ -15,6 +15,23 @@ const SECTION_IMPORT_KEYS = {
 type SectionSlug = keyof typeof SECTION_IMPORT_KEYS;
 
 type LooseRecord = Record<string, unknown>;
+type ImportedCategory = {
+  name: string;
+  translations?: {
+    en?: string;
+    he?: string;
+  };
+};
+export type ImportedBookTranslationPayload = {
+  title?: string;
+  author?: string | null;
+  description?: string | null;
+  categories?: string[];
+  sections?: Array<{
+    mode_slug: string;
+    slides: Array<{ text: string }>;
+  }>;
+};
 
 const IGNORED_CATEGORY_LABELS = new Set([
   "детская",
@@ -99,6 +116,62 @@ function readStringArray(record: LooseRecord, key: string): string[] | undefined
       throw new Error(`Элемент \`${key}[${index}]\` должен быть непустой строкой.`);
     }
     return item.trim();
+  });
+}
+
+function readImportedCategories(record: LooseRecord, key: string): ImportedCategory[] | undefined {
+  if (!hasOwn(record, key)) {
+    return undefined;
+  }
+
+  const value = record[key];
+  if (!Array.isArray(value)) {
+    throw new Error(`Поле \`${key}\` должно быть массивом строк или объектов категорий.`);
+  }
+
+  return value.map((item, index) => {
+    if (typeof item === "string") {
+      const name = item.trim();
+      if (!name) {
+        throw new Error(`Элемент \`${key}[${index}]\` должен быть непустой строкой.`);
+      }
+      return { name };
+    }
+
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      throw new Error(`Элемент \`${key}[${index}]\` должен быть строкой или объектом.`);
+    }
+
+    const categoryRecord = item as LooseRecord;
+    const name =
+      readOptionalString(categoryRecord, "name") ??
+      readOptionalString(categoryRecord, "label") ??
+      readOptionalString(categoryRecord, "title") ??
+      readOptionalString(categoryRecord, "ru");
+
+    if (!name) {
+      throw new Error(`Поле \`${key}[${index}].name\` обязательно.`);
+    }
+
+    const translationsRecord = hasOwn(categoryRecord, "translations") && categoryRecord.translations
+      && typeof categoryRecord.translations === "object"
+      && !Array.isArray(categoryRecord.translations)
+      ? (categoryRecord.translations as LooseRecord)
+      : undefined;
+
+    const en =
+      (translationsRecord ? readOptionalString(translationsRecord, "en") : undefined) ??
+      readOptionalString(categoryRecord, "en") ??
+      undefined;
+    const he =
+      (translationsRecord ? readOptionalString(translationsRecord, "he") : undefined) ??
+      readOptionalString(categoryRecord, "he") ??
+      undefined;
+
+    return {
+      name,
+      translations: en || he ? { ...(en ? { en } : {}), ...(he ? { he } : {}) } : undefined,
+    };
   });
 }
 
@@ -213,6 +286,20 @@ function mapImportedSlides(raw: LooseRecord, key: string) {
   return slides.map((text) => ({ text }));
 }
 
+function readImportedTranslationRecord(record: LooseRecord, language: "en" | "he"): LooseRecord | null {
+  const translations = record.translations;
+  if (!translations || typeof translations !== "object" || Array.isArray(translations)) {
+    return null;
+  }
+
+  const translation = (translations as LooseRecord)[language];
+  if (!translation || typeof translation !== "object" || Array.isArray(translation)) {
+    return null;
+  }
+
+  return translation as LooseRecord;
+}
+
 function mapImportedTest(current: BookEditorResponse["tests"], value: unknown): BookEditorPayload["tests"] | undefined {
   if (value === undefined) {
     return undefined;
@@ -292,7 +379,7 @@ export function buildBookPayloadFromImportedJson(
   const importedKeywords = hasOwn(raw, "keywords")
     ? parseKeywords(readOptionalString(raw, "keywords"))
     : undefined;
-  const importedCategories = readStringArray(raw, "categories");
+  const importedCategories = readImportedCategories(raw, "categories");
   const importedTest = mapImportedTest(current.tests, raw.test);
   const importedYear = readOptionalNumber(raw, "year");
   const importedReadingTime = parseReadingTime(raw.reading_time);
@@ -312,7 +399,7 @@ export function buildBookPayloadFromImportedJson(
       age_group: importedAge !== undefined ? importedAge : current.book.age_group,
       reading_time: importedReadingTime !== undefined ? importedReadingTime : current.book.reading_time,
     },
-    categoryIds: importedCategories ? resolveCategoryIds(importedCategories, current.categories) : current.categoryIds,
+    categoryIds: importedCategories ? resolveCategoryIds(importedCategories.map((item) => item.name), current.categories) : current.categoryIds,
     explanations: current.explanations.map((explanation) => {
       const importKey = SECTION_IMPORT_KEYS[explanation.mode_slug as SectionSlug];
       if (!importKey) {
@@ -325,6 +412,69 @@ export function buildBookPayloadFromImportedJson(
     tests: importedTest ?? current.tests,
     storyTemplate: null,
   };
+}
+
+export function extractImportedBookCategories(rawJson: string): ImportedCategory[] {
+  const raw = parseImportedBookJson(rawJson);
+  return readImportedCategories(raw, "categories") ?? [];
+}
+
+export function extractImportedBookTranslations(rawJson: string): Partial<Record<"en" | "he", ImportedBookTranslationPayload>> {
+  const raw = parseImportedBookJson(rawJson);
+  const importedCategories = readImportedCategories(raw, "categories") ?? [];
+  const byLanguage: Partial<Record<"en" | "he", ImportedBookTranslationPayload>> = {};
+
+  for (const language of ["en", "he"] as const) {
+    const translationRecord = readImportedTranslationRecord(raw, language);
+    const categoryNames = importedCategories
+      .map((category) => category.translations?.[language]?.trim() ?? "")
+      .filter(Boolean);
+
+    if (!translationRecord && categoryNames.length === 0) {
+      continue;
+    }
+
+    const title = translationRecord ? readOptionalString(translationRecord, "title") : undefined;
+    const author = translationRecord ? readOptionalString(translationRecord, "author") : undefined;
+    const description = translationRecord ? readOptionalString(translationRecord, "description") : undefined;
+    const explicitCategories = translationRecord ? readImportedCategories(translationRecord, "categories") : undefined;
+    const sections = translationRecord
+      ? Object.entries(SECTION_IMPORT_KEYS).flatMap(([modeSlug, importKey]) => {
+          const slides = mapImportedSlides(translationRecord, importKey);
+          if (slides === undefined) {
+            return [];
+          }
+          return [{ mode_slug: modeSlug, slides }];
+        })
+      : [];
+
+    const payload: ImportedBookTranslationPayload = {};
+    if (title !== undefined) {
+      payload.title = title;
+    }
+    if (author !== undefined) {
+      payload.author = author;
+    }
+    if (description !== undefined) {
+      payload.description = description;
+    }
+
+    const normalizedCategories = explicitCategories
+      ? explicitCategories.map((category) => category.name)
+      : categoryNames;
+    if (normalizedCategories.length > 0) {
+      payload.categories = normalizedCategories;
+    }
+    if (sections.length > 0) {
+      payload.sections = sections;
+    }
+
+    if (Object.keys(payload).length > 0) {
+      byLanguage[language] = payload;
+    }
+  }
+
+  return byLanguage;
 }
 
 export function parseImportedBookJson(rawJson: string): LooseRecord {

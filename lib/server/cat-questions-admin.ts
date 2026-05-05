@@ -107,6 +107,7 @@ function normalizeTranslations(
 
     normalized[language] = {
       prompt: translation.prompt.trim(),
+      category: translation.category?.trim() || undefined,
       slides,
     };
   }
@@ -180,6 +181,7 @@ function normalizeTranslation(value: unknown): CatTranslationPayload | undefined
 
   const record = value as Record<string, unknown>;
   const prompt = getString(record, ["prompt", "prompt_ru", "question", "title"]);
+  const category = getString(record, ["category", "category_translation"]);
   if (!prompt) {
     return undefined;
   }
@@ -193,7 +195,39 @@ function normalizeTranslation(value: unknown): CatTranslationPayload | undefined
     return undefined;
   }
 
-  return { prompt, slides };
+  return { prompt, ...(category ? { category } : {}), slides };
+}
+
+function normalizeCategoryInput(value: unknown): {
+  name: string | null;
+  translations: Partial<Record<"en" | "he", string>>;
+} {
+  if (typeof value === "string") {
+    return { name: value.trim() || null, translations: {} };
+  }
+
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { name: null, translations: {} };
+  }
+
+  const record = value as Record<string, unknown>;
+  const name =
+    getString(record, ["name", "label", "title", "ru", "category"]) ?? null;
+
+  const translationsRecord = record.translations && typeof record.translations === "object" && !Array.isArray(record.translations)
+    ? (record.translations as Record<string, unknown>)
+    : null;
+
+  const en = getString(translationsRecord ?? record, ["en"]);
+  const he = getString(translationsRecord ?? record, ["he"]);
+
+  return {
+    name,
+    translations: {
+      ...(en ? { en } : {}),
+      ...(he ? { he } : {}),
+    },
+  };
 }
 
 export function parseCatQuestionJson(value: string): CatQuestionPayload {
@@ -206,6 +240,7 @@ export function parseCatQuestionJson(value: string): CatQuestionPayload {
   const translationsRecord = record.translations && typeof record.translations === "object"
     ? (record.translations as Record<string, unknown>)
     : {};
+  const category = normalizeCategoryInput(record.category);
 
   const rawKind = getString(record, ["kind"]);
   const prompt = getString(record, ["prompt", "prompt_ru", "question", "title"]);
@@ -213,20 +248,29 @@ export function parseCatQuestionJson(value: string): CatQuestionPayload {
   const translations = {
     en: normalizeTranslation(translationsRecord.en ?? {
       prompt: record.prompt_en,
+      category: category.translations.en,
       slides: record.slides_en ?? record.texts_en,
     }),
     he: normalizeTranslation(translationsRecord.he ?? {
       prompt: record.prompt_he,
+      category: category.translations.he,
       slides: record.slides_he ?? record.texts_he,
     }),
   };
+
+  if (translations.en && !translations.en.category && category.translations.en) {
+    translations.en.category = category.translations.en;
+  }
+  if (translations.he && !translations.he.category && category.translations.he) {
+    translations.he.category = category.translations.he;
+  }
 
   return catQuestionPayloadSchema.parse({
     legacy_id: getString(record, ["legacy_id", "id"]),
     base_key: getString(record, ["base_key", "baseKey", "key"]),
     kind: rawKind === "full" ? "full" : "text",
     prompt,
-    category: getString(record, ["category"]) ?? null,
+    category: category.name,
     is_active: typeof record.is_active === "boolean" ? record.is_active : true,
     sort_order: getNumber(record, ["sort_order", "sortOrder"]) ?? null,
     slides,

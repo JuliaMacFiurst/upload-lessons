@@ -28,7 +28,13 @@ const sampleJson = `{
   "base_key": "why-sky-blue",
   "kind": "text",
   "prompt": "Почему небо голубое?",
-  "category": "Физика",
+  "category": {
+    "name": "Физика",
+    "translations": {
+      "en": "Physics",
+      "he": "פיזיקה"
+    }
+  },
   "slides": [
     { "order": 1, "text": "Мяу! Свет солнца кажется белым, но внутри него спрятаны разные цвета." },
     { "order": 2, "text": "Воздух сильнее рассеивает голубые лучи, поэтому они летят к нашим глазам со всех сторон." }
@@ -36,9 +42,18 @@ const sampleJson = `{
   "translations": {
     "en": {
       "prompt": "Why is the sky blue?",
+      "category": "Physics",
       "slides": [
         { "order": 1, "text": "Meow! Sunlight looks white, but it contains many colors." },
         { "order": 2, "text": "Air scatters blue light more strongly, so blue reaches our eyes from every direction." }
+      ]
+    },
+    "he": {
+      "prompt": "למה השמיים כחולים?",
+      "category": "פיזיקה",
+      "slides": [
+        { "order": 1, "text": "מיאו! אור השמש נראה לבן, אבל הוא מכיל הרבה צבעים." },
+        { "order": 2, "text": "האוויר מפזר אור כחול חזק יותר, ולכן הוא מגיע לעיניים שלנו מכל כיוון." }
       ]
     }
   }
@@ -48,7 +63,13 @@ const emptyQuestionJsonTemplate = `{
   "base_key": "",
   "kind": "text",
   "prompt": "",
-  "category": "",
+  "category": {
+    "name": "",
+    "translations": {
+      "en": "",
+      "he": ""
+    }
+  },
   "slides": [
     { "order": 1, "text": "" },
     { "order": 2, "text": "" },
@@ -57,6 +78,7 @@ const emptyQuestionJsonTemplate = `{
   "translations": {
     "en": {
       "prompt": "",
+      "category": "",
       "slides": [
         { "order": 1, "text": "" },
         { "order": 2, "text": "" },
@@ -65,6 +87,7 @@ const emptyQuestionJsonTemplate = `{
     },
     "he": {
       "prompt": "",
+      "category": "",
       "slides": [
         { "order": 1, "text": "" },
         { "order": 2, "text": "" },
@@ -73,6 +96,86 @@ const emptyQuestionJsonTemplate = `{
     }
   }
 }`;
+
+const catQuestionAiPrompt = `### Prompt: Научный котик-блогер (JSON Edition)
+
+**Роль:** Ты — милый и невероятно умный котик-ученый. Ты создаешь контент для детского сайта laplapla.com в формате слайд-шоу. Твоя задача — объяснять науку так, чтобы это выглядело как сценарий для вирусного Reels или YouTube Shorts.
+
+**Стиль контента:**
+1. **Крючок (Hook):** Первый слайд должен шокировать, ломать стереотип или задавать провокационный вопрос. Никаких «Привет, сегодня мы узнаем...». Сразу к делу.
+2. **Динамика:** Короткие, четкие фразы. Минимум терминов, максимум забавных сравнений (с кошачьим бытом, едой или понятными детям вещами).
+3. **Голос персонажа:** Используй кошачьи атрибуты («лапки», «усы», «мяу»), но сохраняй научную точность. Тон — экспертный, но дерзкий и дружелюбный.
+4. **Удержание:** Каждый слайд должен заставлять перелистнуть на следующий.
+5. **Финал:** Последний слайд (8-й) — это открытый вопрос по теме, который вызывает желание поспорить или поделиться мнением, без прямого призыва «пиши в комментах».
+
+**Технические требования:**
+- Верни ТОЛЬКО валидный JSON.
+- Ровно 8 слайдов в основном массиве "slides".
+- Поля "base_key" (kebab-case), "kind" (всегда "text"), "category", "prompt".
+- Категория должна быть объектом с русским названием и переводами:
+  - \`"category": { "name": "Физика", "translations": { "en": "Physics", "he": "פיזיקה" } }\`
+- Обязательные переводы на английский ("en") и иврит ("he").
+- Перевод должен сохранять юмор и драйв, а не быть подстрочником.
+- Внутри "translations.en" и "translations.he" обязательно должен быть перевод категории в поле "category".
+
+**Верни JSON строго в таком формате:**
+
+\`\`\`json
+{
+  "base_key": "why-sky-blue",
+  "kind": "text",
+  "prompt": "Почему небо голубое?",
+  "category": {
+    "name": "Физика",
+    "translations": {
+      "en": "Physics",
+      "he": "פיזיקה"
+    }
+  },
+  "slides": [
+    { "order": 1, "text": "..." },
+    { "order": 2, "text": "..." },
+    { "order": 3, "text": "..." },
+    { "order": 4, "text": "..." },
+    { "order": 5, "text": "..." },
+    { "order": 6, "text": "..." },
+    { "order": 7, "text": "..." },
+    { "order": 8, "text": "..." }
+  ],
+  "translations": {
+    "en": {
+      "prompt": "Why is the sky blue?",
+      "category": "Physics",
+      "slides": [
+        { "order": 1, "text": "..." },
+        { "order": 2, "text": "..." },
+        { "order": 3, "text": "..." },
+        { "order": 4, "text": "..." },
+        { "order": 5, "text": "..." },
+        { "order": 6, "text": "..." },
+        { "order": 7, "text": "..." },
+        { "order": 8, "text": "..." }
+      ]
+    },
+    "he": {
+      "prompt": "למה השמיים כחולים?",
+      "category": "פיזיקה",
+      "slides": [
+        { "order": 1, "text": "..." },
+        { "order": 2, "text": "..." },
+        { "order": 3, "text": "..." },
+        { "order": 4, "text": "..." },
+        { "order": 5, "text": "..." },
+        { "order": 6, "text": "..." },
+        { "order": 7, "text": "..." },
+        { "order": 8, "text": "..." }
+      ]
+    }
+  }
+}
+\`\`\`
+
+**Пример темы для генерации:** "Почему динозавры исчезли, а крокодилы выжили?" или любой другой научный вопрос.`;
 
 async function copyTextToClipboard(value: string) {
   if (navigator.clipboard?.writeText) {
@@ -179,6 +282,17 @@ export default function CatQuestionsAdminPage() {
     }
   };
 
+  const copyAiPrompt = async () => {
+    setError(null);
+    setSuccess(null);
+    try {
+      await copyTextToClipboard(catQuestionAiPrompt);
+      setSuccess("Промпт для ИИ скопирован в буфер обмена.");
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Не удалось скопировать промпт.");
+    }
+  };
+
   const totalPages = Math.max(1, Math.ceil(total / 100));
 
   if (!sessionChecked) {
@@ -213,7 +327,7 @@ export default function CatQuestionsAdminPage() {
           <div>
             <h2 className="books-panel__title">Импорт готового JSON</h2>
             <p className="books-section-help">
-              Вставьте один вопрос. Русский текст сохраняется как canonical, переводы en/he уйдут в `content_translations`.
+              Вставьте один вопрос. Русский текст сохраняется как canonical, переводы en/he уйдут в `content_translations`, включая перевод категории.
             </p>
           </div>
           <div className="books-actions">
@@ -225,6 +339,15 @@ export default function CatQuestionsAdminPage() {
               }}
             >
               Скопировать пример JSON
+            </button>
+            <button
+              type="button"
+              className="books-button books-button--secondary"
+              onClick={() => {
+                void copyAiPrompt();
+              }}
+            >
+              Скопировать промпт для ИИ
             </button>
             <button
               type="button"
@@ -247,6 +370,9 @@ export default function CatQuestionsAdminPage() {
             onChange={(event) => setJsonImportValue(event.target.value)}
             placeholder={sampleJson}
           />
+          <span className="books-field__help">
+            Поле `category` можно передавать строкой по старому формату или объектом с `name` и `translations`.
+          </span>
         </label>
       </section>
 
