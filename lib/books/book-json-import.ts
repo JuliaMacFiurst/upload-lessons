@@ -523,7 +523,7 @@ export function extractImportedBookTranslations(rawJson: string): Partial<Record
       : [];
 
     const payload: ImportedBookTranslationPayload = {};
-    if (title !== undefined) {
+    if (title !== undefined && title !== null) {
       payload.title = title;
     }
     if (author !== undefined) {
