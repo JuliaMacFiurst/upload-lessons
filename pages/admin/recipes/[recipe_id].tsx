@@ -9,12 +9,13 @@ import type { RecipeRecord } from "../../../lib/recipes/types";
 
 type RecipeLayoutElement = {
   id: string;
-  kind: "title" | "country" | "image" | "text" | "list" | "steps";
+  kind: "title" | "country" | "image" | "asset" | "logo" | "text" | "list" | "steps";
   label: string;
   source:
     | "title"
     | "country"
     | "image_url"
+    | "custom_image"
     | "raccoon_caption"
     | "cooking_time"
     | "ingredients"
@@ -28,9 +29,21 @@ type RecipeLayoutElement = {
   width: number;
   height?: number;
   fontSize: number;
+  fontFamily?: RecipeFontFamily;
+  textColor?: string;
+  backgroundEnabled?: boolean;
+  backgroundColor?: string;
+  backgroundOpacity?: number;
+  underlineEnabled?: boolean;
+  boldEnabled?: boolean;
+  arcBend?: number;
   rotation: number;
+  flipX?: boolean;
+  flipY?: boolean;
   align: "left" | "center" | "right";
   visible: boolean;
+  url?: string;
+  path?: string;
 };
 
 type RecipeLayout = {
@@ -39,6 +52,19 @@ type RecipeLayout = {
     height: number;
   };
   elements: RecipeLayoutElement[];
+  assets?: RecipeSavedAsset[];
+};
+
+type RecipeSavedAsset = {
+  label: string;
+  url: string;
+  path: string;
+  kind: RecipeCropMode;
+  setKey: string;
+  tag: string;
+  name: string;
+  index: number;
+  createdAt: string;
 };
 
 type DragState = {
@@ -52,6 +78,27 @@ type DragState = {
 type RecipeStudioLanguage = "ru" | "en" | "he";
 type RecipeMediaKind = "dish" | "recipe_asset_sheet" | "raccoon_sticker_sheet";
 type RecipeCropMode = "recipe_asset" | "raccoon_sticker";
+type RecipeFontFamily = "Nunito" | "Varela Round" | "Caveat" | "Amatic SC" | "Arial";
+
+type MediaLibraryObject = {
+  key: string;
+  size: number;
+  lastModified: string | null;
+  publicUrl: string;
+};
+
+type MediaLibraryResponse = {
+  prefix: string;
+  folders: string[];
+  objects: MediaLibraryObject[];
+  nextContinuationToken: string | null;
+};
+
+type MediaTreeNode = {
+  prefix: string;
+  label: string;
+  children: MediaTreeNode[];
+};
 
 type CropRect = {
   x: number;
@@ -66,6 +113,75 @@ type CropInteraction = {
   startClientY: number;
   startRect: CropRect;
 };
+
+type LayerDragState = {
+  id: string;
+};
+
+type LayoutUpdater = (current: RecipeLayout) => RecipeLayout;
+
+type TransformState = {
+  action: "resize" | "rotate";
+  id: string;
+  startClientX: number;
+  startClientY: number;
+  startWidth: number;
+  startHeight?: number;
+  startFontSize: number;
+  startRotation: number;
+  startAngle: number;
+  centerX: number;
+  centerY: number;
+};
+
+const RECIPE_FONTS: Array<{ label: string; value: RecipeFontFamily; css: string }> = [
+  { label: "Nunito", value: "Nunito", css: "Nunito, Arial, sans-serif" },
+  { label: "Varela Round", value: "Varela Round", css: "\"Varela Round\", Arial, sans-serif" },
+  { label: "Caveat", value: "Caveat", css: "Caveat, cursive" },
+  { label: "Amatic SC", value: "Amatic SC", css: "\"Amatic SC\", cursive" },
+  { label: "Arial", value: "Arial", css: "Arial, sans-serif" },
+];
+
+const LOGO_OPTIONS = [
+  {
+    label: "Логотип с буквами",
+    url: "https://media.laplapla.com/stickers/laplapla-logo-letters.webp",
+    path: "stickers/laplapla-logo-letters.webp",
+  },
+  {
+    label: "Лапка",
+    url: "https://media.laplapla.com/stickers/laplapla-logo.png",
+    path: "stickers/laplapla-logo.png",
+  },
+];
+
+const GRADIENT_PRESETS = [
+  { label: "Vanilla mint", from: "#fff4cf", to: "#b9efe4" },
+  { label: "Berry milk", from: "#ffe2ec", to: "#d7f2ff" },
+  { label: "Mango sky", from: "#ffe2a8", to: "#b7defa" },
+  { label: "Leaf cream", from: "#ecf8c8", to: "#fff2dc" },
+  { label: "Lilac peach", from: "#eadcff", to: "#ffd7c2" },
+];
+
+const ASSET_TAGS = [
+  { label: "asset", value: "asset" },
+  { label: "decor", value: "decor" },
+  { label: "food", value: "food" },
+  { label: "frame", value: "frame" },
+  { label: "label", value: "label" },
+  { label: "line", value: "line" },
+  { label: "logo", value: "logo" },
+  { label: "ribbon", value: "ribbon" },
+  { label: "star", value: "star" },
+  { label: "sticker", value: "sticker" },
+];
+
+const ROOT_MEDIA_FOLDERS = ["bedtime_story/", "recipes/", "stickers/"];
+const KNOWN_MEDIA_FOLDERS_BY_PREFIX: Record<string, string[]> = {
+  "recipes/": ["recipes/assets/", "recipes/exports/", "recipes/recipes-pics/"],
+  "stickers/": ["stickers/capybara-stickers/", "stickers/raccoon-stickers/"],
+};
+const RECIPE_PREVIEW_CANVAS_WIDTH = 520;
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
@@ -163,11 +279,75 @@ function drawWrappedText(
   y: number,
   maxWidth: number,
   lineHeight: number,
+  underline = false,
 ) {
   const lines = wrapText(context, text, maxWidth);
   lines.forEach((line, index) => {
-    context.fillText(line, x, y + index * lineHeight);
+    const lineY = y + index * lineHeight;
+    context.fillText(line, x, lineY);
+    if (underline) {
+      const width = context.measureText(line).width;
+      const align = context.textAlign;
+      const startX = align === "center" ? x - width / 2 : align === "right" || align === "end" ? x - width : x;
+      context.save();
+      context.beginPath();
+      context.lineWidth = Math.max(1, context.lineWidth);
+      context.moveTo(startX, lineY + lineHeight * 0.96);
+      context.lineTo(startX + width, lineY + lineHeight * 0.96);
+      context.strokeStyle = context.fillStyle;
+      context.stroke();
+      context.restore();
+    }
   });
+}
+
+function drawArcText(
+  context: CanvasRenderingContext2D,
+  text: string,
+  centerX: number,
+  baselineY: number,
+  maxWidth: number,
+  bend: number,
+  underline = false,
+) {
+  const cleanText = text.trim();
+  if (!cleanText) {
+    return;
+  }
+  const measuredWidth = Math.min(maxWidth, context.measureText(cleanText).width);
+  const arcStrength = Math.max(-100, Math.min(100, bend)) / 100;
+  if (Math.abs(arcStrength) < 0.02 || cleanText.length < 2) {
+    context.fillText(cleanText, centerX, baselineY);
+    return;
+  }
+
+  const radius = Math.max(measuredWidth * 0.7, measuredWidth / Math.max(0.12, Math.abs(arcStrength)));
+  const direction = arcStrength > 0 ? -1 : 1;
+  const totalAngle = measuredWidth / radius;
+  let currentAngle = -totalAngle / 2;
+
+  context.save();
+  context.translate(centerX, baselineY + direction * radius);
+  for (const character of cleanText) {
+    const charWidth = context.measureText(character).width;
+    const charAngle = charWidth / radius;
+    const angle = currentAngle + charAngle / 2;
+    context.save();
+    context.rotate(angle);
+    context.translate(0, -direction * radius);
+    context.rotate(direction > 0 ? angle + Math.PI : angle);
+    context.fillText(character, 0, 0);
+    if (underline) {
+      context.beginPath();
+      context.moveTo(-charWidth / 2, 4);
+      context.lineTo(charWidth / 2, 4);
+      context.strokeStyle = context.fillStyle;
+      context.stroke();
+    }
+    context.restore();
+    currentAngle += charAngle;
+  }
+  context.restore();
 }
 
 function publicR2Url(path: string) {
@@ -186,22 +366,198 @@ function withCacheBuster(url: string | null | undefined, key: string | number | 
   return `${url}${separator}v=${encodeURIComponent(String(key))}`;
 }
 
+function proxiedMediaUrl(url: string) {
+  if (!url) {
+    return "";
+  }
+  const publicBase = (process.env.NEXT_PUBLIC_R2_PUBLIC_URL || "https://media.laplapla.com").replace(/\/+$/, "");
+  try {
+    const parsedUrl = new URL(url);
+    const parsedBase = new URL(publicBase);
+    if (parsedUrl.host !== parsedBase.host) {
+      return url;
+    }
+    const key = decodeURIComponent(parsedUrl.pathname.replace(/^\/+/, ""));
+    return `/api/admin/recipes/media-object?key=${encodeURIComponent(key)}`;
+  } catch {
+    return url;
+  }
+}
+
+function fontCss(fontFamily: RecipeFontFamily | undefined) {
+  return RECIPE_FONTS.find((font) => font.value === fontFamily)?.css ?? RECIPE_FONTS[0].css;
+}
+
+function fontValue(value: unknown): RecipeFontFamily {
+  return RECIPE_FONTS.some((font) => font.value === value) ? value as RecipeFontFamily : "Nunito";
+}
+
+function colorValue(value: unknown, fallback = "#18202d") {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+}
+
+function opacityValue(value: unknown, fallback = 0.62) {
+  const numberValue = Number(value);
+  return Number.isFinite(numberValue) ? Math.max(0, Math.min(1, numberValue)) : fallback;
+}
+
+function hexToRgba(hex: string, opacity: number) {
+  const value = colorValue(hex, "#ffffff").replace("#", "");
+  const red = parseInt(value.slice(0, 2), 16);
+  const green = parseInt(value.slice(2, 4), 16);
+  const blue = parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${opacity})`;
+}
+
+function isTextElement(element: RecipeLayoutElement) {
+  return element.kind !== "image" && element.kind !== "asset" && element.kind !== "logo";
+}
+
+function mediaLabelFromKey(key: string) {
+  const fileName = key.split("/").filter(Boolean).pop() ?? key;
+  return fileName.replace(/\.[a-z0-9]+$/i, "");
+}
+
+function elementTemplateSnapshot(layout: RecipeLayout) {
+  return layout.elements.map((element) => ({
+    id: element.id,
+    label: element.label,
+    kind: element.kind,
+    source: element.source,
+    path: element.path,
+    url: element.url,
+    x: Number(element.x.toFixed(2)),
+    y: Number(element.y.toFixed(2)),
+    width: Number(element.width.toFixed(2)),
+    height: element.height === undefined ? undefined : Number(element.height.toFixed(2)),
+    fontSize: element.fontSize,
+    fontFamily: element.fontFamily ?? "Nunito",
+    textColor: element.textColor ?? "#18202d",
+    backgroundEnabled: element.backgroundEnabled === true,
+    backgroundColor: element.backgroundColor ?? "#ffffff",
+    backgroundOpacity: element.backgroundOpacity ?? 0.62,
+    underlineEnabled: element.underlineEnabled === true,
+    boldEnabled: element.boldEnabled !== false,
+    arcBend: element.arcBend ?? 0,
+    rotation: element.rotation,
+    flipX: element.flipX === true,
+    flipY: element.flipY === true,
+    align: element.align,
+    visible: element.visible,
+  }));
+}
+
+function mediaFoldersForPrefix(prefix: string, folders: string[]) {
+  const requiredFolders = prefix ? KNOWN_MEDIA_FOLDERS_BY_PREFIX[prefix] ?? [] : ROOT_MEDIA_FOLDERS;
+  return Array.from(new Set([...requiredFolders, ...folders]))
+    .filter((folder) => folder !== prefix)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+function mediaBreadcrumbs(prefix: string) {
+  const parts = prefix.split("/").filter(Boolean);
+  return parts.map((part, index) => ({
+    label: part,
+    prefix: `${parts.slice(0, index + 1).join("/")}/`,
+  }));
+}
+
+function normalizeSavedAssets(value: unknown): RecipeSavedAsset[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): RecipeSavedAsset | null => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const record = item as Partial<RecipeSavedAsset>;
+      if (!record.url || !record.path) {
+        return null;
+      }
+      return {
+        label: record.label || mediaLabelFromKey(record.path),
+        url: record.url,
+        path: record.path,
+        kind: record.kind === "raccoon_sticker" ? "raccoon_sticker" : "recipe_asset",
+        setKey: record.setKey || "",
+        tag: record.tag || "asset",
+        name: record.name || mediaLabelFromKey(record.path),
+        index: Number(record.index || 1),
+        createdAt: record.createdAt || new Date().toISOString(),
+      };
+    })
+    .filter((item): item is RecipeSavedAsset => item !== null);
+}
+
+function fallbackMediaTree(): MediaTreeNode {
+  return {
+    prefix: "",
+    label: "laplapla-public-media",
+    children: ROOT_MEDIA_FOLDERS.map((rootFolder) => ({
+      prefix: rootFolder,
+      label: rootFolder.replace(/\/$/, ""),
+      children: (KNOWN_MEDIA_FOLDERS_BY_PREFIX[rootFolder] ?? []).map((childFolder) => ({
+        prefix: childFolder,
+        label: childFolder.split("/").filter(Boolean).pop() ?? childFolder,
+        children: [],
+      })),
+    })),
+  };
+}
+
+function offscreenHandlePosition(element: RecipeLayoutElement) {
+  const centerX = element.x + element.width / 2;
+  const centerY = element.y + (element.height ?? 8) / 2;
+  const isOffscreen =
+    element.x + element.width < 0 ||
+    element.x > 100 ||
+    element.y + (element.height ?? 8) < 0 ||
+    element.y > 100;
+
+  return {
+    isOffscreen,
+    x: Math.max(2, Math.min(98, centerX)),
+    y: Math.max(2, Math.min(98, centerY)),
+  };
+}
+
+function selectedOverlayGeometry(element: RecipeLayoutElement) {
+  return {
+    left: element.x,
+    top: element.y,
+    width: element.width,
+    height: element.height ?? Math.max(6, element.fontSize * 0.22),
+    rotation: element.rotation,
+  };
+}
+
 function defaultLayout(): RecipeLayout {
+  const textBase = {
+    textColor: "#18202d",
+    backgroundColor: "#ffffff",
+    backgroundOpacity: 0.62,
+    underlineEnabled: false,
+    boldEnabled: true,
+    arcBend: 0,
+  };
   return {
     canvas: { width: 1000, height: 1500 },
+    assets: [],
     elements: [
-      { id: "brand", kind: "text", label: "Логотип", source: "laplapla_interaction_caption", x: 7, y: 4, width: 30, fontSize: 18, rotation: 0, align: "left", visible: true },
-      { id: "country", kind: "country", label: "Страна", source: "country", x: 7, y: 9, width: 48, fontSize: 18, rotation: 0, align: "left", visible: true },
-      { id: "title", kind: "title", label: "Название", source: "title", x: 7, y: 13, width: 72, fontSize: 48, rotation: 0, align: "left", visible: true },
-      { id: "image", kind: "image", label: "Картинка блюда", source: "image_url", x: 18, y: 24, width: 64, height: 19, fontSize: 16, rotation: -2, align: "center", visible: true },
-      { id: "caption", kind: "text", label: "Фраза енотика", source: "raccoon_caption", x: 47, y: 42, width: 42, fontSize: 22, rotation: 2, align: "center", visible: true },
-      { id: "time", kind: "text", label: "Время", source: "cooking_time", x: 7, y: 45, width: 34, fontSize: 20, rotation: 0, align: "center", visible: true },
-      { id: "ingredients", kind: "list", label: "Ингредиенты", source: "ingredients", x: 7, y: 52, width: 38, fontSize: 18, rotation: 0, align: "left", visible: true },
-      { id: "steps", kind: "steps", label: "Шаги", source: "cooking_steps", x: 48, y: 52, width: 44, fontSize: 17, rotation: 0, align: "left", visible: true },
-      { id: "fact", kind: "text", label: "Факт", source: "fact", x: 8, y: 76, width: 84, fontSize: 17, rotation: 0, align: "center", visible: true },
-      { id: "advice", kind: "text", label: "Совет", source: "raccoon_advice", x: 8, y: 84, width: 40, fontSize: 17, rotation: -1, align: "left", visible: true },
-      { id: "serving", kind: "text", label: "Подача", source: "serving_instructions", x: 53, y: 84, width: 39, fontSize: 17, rotation: 1, align: "left", visible: true },
-      { id: "interaction", kind: "text", label: "CTA", source: "laplapla_interaction_caption", x: 12, y: 94, width: 76, fontSize: 18, rotation: 0, align: "center", visible: true },
+      { id: "brand", kind: "logo", label: "Логотип", source: "custom_image", x: 7, y: 4, width: 18, height: 8, fontSize: 16, fontFamily: "Nunito", rotation: 0, align: "center", visible: true, url: LOGO_OPTIONS[0].url, path: LOGO_OPTIONS[0].path },
+      { ...textBase, id: "country", kind: "country", label: "Страна", source: "country", x: 7, y: 9, width: 48, fontSize: 18, fontFamily: "Varela Round", backgroundEnabled: false, rotation: 0, align: "left", visible: true },
+      { ...textBase, id: "title", kind: "title", label: "Название", source: "title", x: 7, y: 13, width: 72, fontSize: 48, fontFamily: "Amatic SC", backgroundEnabled: false, rotation: 0, align: "left", visible: true },
+      { id: "image", kind: "image", label: "Картинка блюда", source: "image_url", x: 18, y: 24, width: 64, height: 19, fontSize: 16, fontFamily: "Nunito", rotation: -2, align: "center", visible: true },
+      { ...textBase, id: "caption", kind: "text", label: "Фраза енотика", source: "raccoon_caption", x: 47, y: 42, width: 42, fontSize: 22, fontFamily: "Caveat", backgroundEnabled: true, rotation: 2, align: "center", visible: true },
+      { ...textBase, id: "time", kind: "text", label: "Время", source: "cooking_time", x: 7, y: 45, width: 34, fontSize: 20, fontFamily: "Nunito", backgroundEnabled: true, rotation: 0, align: "center", visible: true },
+      { ...textBase, id: "ingredients", kind: "list", label: "Ингредиенты", source: "ingredients", x: 7, y: 52, width: 38, fontSize: 18, fontFamily: "Nunito", backgroundEnabled: true, rotation: 0, align: "left", visible: true },
+      { ...textBase, id: "steps", kind: "steps", label: "Шаги", source: "cooking_steps", x: 48, y: 52, width: 44, fontSize: 17, fontFamily: "Nunito", backgroundEnabled: true, rotation: 0, align: "left", visible: true },
+      { ...textBase, id: "fact", kind: "text", label: "Факт", source: "fact", x: 8, y: 76, width: 84, fontSize: 17, fontFamily: "Nunito", backgroundEnabled: true, rotation: 0, align: "center", visible: true },
+      { ...textBase, id: "advice", kind: "text", label: "Совет", source: "raccoon_advice", x: 8, y: 84, width: 40, fontSize: 17, fontFamily: "Nunito", backgroundEnabled: true, rotation: -1, align: "left", visible: true },
+      { ...textBase, id: "serving", kind: "text", label: "Подача", source: "serving_instructions", x: 53, y: 84, width: 39, fontSize: 17, fontFamily: "Nunito", backgroundEnabled: true, rotation: 1, align: "left", visible: true },
+      { ...textBase, id: "interaction", kind: "text", label: "CTA", source: "laplapla_interaction_caption", x: 12, y: 94, width: 76, fontSize: 18, fontFamily: "Varela Round", backgroundEnabled: true, rotation: 0, align: "center", visible: true },
     ],
   };
 }
@@ -224,18 +580,83 @@ function normalizeLayout(value: unknown): RecipeLayout {
       }
       const element = item as Partial<RecipeLayoutElement>;
       const fallbackElement = fallback.elements.find((candidate) => candidate.id === element.id);
-      if (!element.id || !element.source || !fallbackElement) {
+      if (!element.id || !element.source) {
         return null;
       }
+      if (element.id === "brand") {
+        return {
+          ...fallback.elements[0],
+          ...element,
+          kind: "logo",
+          source: "custom_image",
+          label: element.label ?? "Логотип",
+          x: Number(element.x ?? fallback.elements[0].x),
+          y: Number(element.y ?? fallback.elements[0].y),
+          width: Number(element.width ?? fallback.elements[0].width),
+          height: element.height === undefined ? fallback.elements[0].height : Number(element.height),
+          fontSize: Number(element.fontSize ?? fallback.elements[0].fontSize),
+          fontFamily: fontValue(element.fontFamily),
+          textColor: colorValue(element.textColor),
+          backgroundColor: colorValue(element.backgroundColor, "#ffffff"),
+          backgroundOpacity: opacityValue(element.backgroundOpacity),
+          backgroundEnabled: element.backgroundEnabled === true,
+          underlineEnabled: element.underlineEnabled === true,
+          boldEnabled: element.boldEnabled !== false,
+          arcBend: Number(element.arcBend ?? 0),
+          rotation: Number(element.rotation ?? fallback.elements[0].rotation),
+          align: element.align ?? fallback.elements[0].align,
+          url: element.url || LOGO_OPTIONS[0].url,
+          path: element.path || LOGO_OPTIONS[0].path,
+          flipX: element.flipX === true,
+          flipY: element.flipY === true,
+          visible: element.visible !== false,
+        };
+      }
+      const baseElement: RecipeLayoutElement = fallbackElement ?? {
+        id: element.id,
+        kind: element.kind === "logo" ? "logo" : element.kind === "asset" ? "asset" : "image",
+        label: element.label ?? "Изображение",
+        source: "custom_image",
+        x: 16,
+        y: 16,
+        width: 24,
+        height: 12,
+        fontSize: 16,
+        fontFamily: "Nunito",
+        textColor: "#18202d",
+        backgroundColor: "#ffffff",
+        backgroundOpacity: 0.62,
+        backgroundEnabled: false,
+        underlineEnabled: false,
+        boldEnabled: true,
+        arcBend: 0,
+        rotation: 0,
+        flipX: false,
+        flipY: false,
+        align: "center",
+        visible: true,
+      };
       const normalizedElement: RecipeLayoutElement = {
-        ...fallbackElement,
+        ...baseElement,
         ...element,
-        x: Number(element.x ?? fallbackElement.x),
-        y: Number(element.y ?? fallbackElement.y),
-        width: Number(element.width ?? fallbackElement.width),
-        height: element.height === undefined ? fallbackElement.height : Number(element.height),
-        fontSize: Number(element.fontSize ?? fallbackElement.fontSize),
-        rotation: Number(element.rotation ?? fallbackElement.rotation),
+        kind: element.kind === "asset" || element.kind === "logo" ? element.kind : baseElement.kind,
+        source: element.source === "custom_image" ? "custom_image" : baseElement.source,
+        x: Number(element.x ?? baseElement.x),
+        y: Number(element.y ?? baseElement.y),
+        width: Number(element.width ?? baseElement.width),
+        height: element.height === undefined ? baseElement.height : Number(element.height),
+        fontSize: Number(element.fontSize ?? baseElement.fontSize),
+        fontFamily: fontValue(element.fontFamily),
+        textColor: colorValue(element.textColor, baseElement.textColor ?? "#18202d"),
+        backgroundColor: colorValue(element.backgroundColor, baseElement.backgroundColor ?? "#ffffff"),
+        backgroundOpacity: opacityValue(element.backgroundOpacity, baseElement.backgroundOpacity ?? 0.62),
+        backgroundEnabled: element.backgroundEnabled ?? baseElement.backgroundEnabled ?? false,
+        underlineEnabled: element.underlineEnabled === true,
+        boldEnabled: element.boldEnabled ?? baseElement.boldEnabled ?? true,
+        arcBend: Number(element.arcBend ?? baseElement.arcBend ?? 0),
+        rotation: Number(element.rotation ?? baseElement.rotation),
+        flipX: element.flipX === true,
+        flipY: element.flipY === true,
         visible: element.visible !== false,
       };
       return normalizedElement;
@@ -249,6 +670,7 @@ function normalizeLayout(value: unknown): RecipeLayout {
 
   return {
     canvas: fallback.canvas,
+    assets: normalizeSavedAssets((record as { assets?: unknown }).assets),
     elements: merged,
   };
 }
@@ -285,7 +707,7 @@ function recipePayload(recipe: RecipeRecord, layout: RecipeLayout) {
 function recipeTextForLanguage(
   recipe: RecipeRecord,
   language: RecipeStudioLanguage,
-  key: Exclude<RecipeLayoutElement["source"], "image_url">,
+  key: Exclude<RecipeLayoutElement["source"], "image_url" | "custom_image">,
 ): string | string[] {
   const translation = language === "ru" ? null : recipe.translations[language];
 
@@ -324,12 +746,12 @@ function valueForElement(
   element: RecipeLayoutElement,
   language: RecipeStudioLanguage,
 ): string | string[] {
-  if (element.id === "brand") {
-    return "LapLapLa";
-  }
-
   if (element.source === "image_url") {
     return withCacheBuster(recipe.image_url, recipe.updated_at);
+  }
+
+  if (element.source === "custom_image") {
+    return element.url ?? "";
   }
 
   return recipeTextForLanguage(recipe, language, element.source);
@@ -348,49 +770,57 @@ async function renderRecipeToPngBlob(
     throw new Error("Canvas is not available in this browser.");
   }
 
+  await document.fonts.ready;
+
   const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
   gradient.addColorStop(0, recipe.gradient_from || "#fff4cf");
   gradient.addColorStop(1, recipe.gradient_to || "#b9efe4");
   context.fillStyle = gradient;
   context.fillRect(0, 0, canvas.width, canvas.height);
   context.textBaseline = "top";
+  const exportScale = canvas.width / RECIPE_PREVIEW_CANVAS_WIDTH;
 
-  for (const element of layout.elements.filter((item) => item.visible)) {
+  for (const element of [...layout.elements].reverse().filter((item) => item.visible)) {
     const x = (element.x / 100) * canvas.width;
     const y = (element.y / 100) * canvas.height;
     const width = (element.width / 100) * canvas.width;
     const height = element.height ? (element.height / 100) * canvas.height : undefined;
     const value = valueForElement(recipe, element, language);
-    const padding = 20;
+    const fontSize = element.fontSize * exportScale;
+    const padding = 8 * exportScale;
+    const fallbackHeight = fontSize * 3;
 
     context.save();
-    context.translate(x + width / 2, y + (height ?? element.fontSize * 3) / 2);
+    context.translate(x + width / 2, y + (height ?? fallbackHeight) / 2);
     context.rotate((element.rotation * Math.PI) / 180);
-    context.translate(-width / 2, -(height ?? element.fontSize * 3) / 2);
+    context.scale(element.flipX ? -1 : 1, element.flipY ? -1 : 1);
+    context.translate(-width / 2, -(height ?? fallbackHeight) / 2);
 
-    if (element.kind === "image") {
+    if (element.kind === "image" || element.kind === "asset" || element.kind === "logo") {
       const imageHeight = height ?? 285;
-      roundedRectPath(context, 0, 0, width, imageHeight, 24);
-      context.fillStyle = "rgba(255, 255, 255, 0.42)";
-      context.fill();
+      const isDishImage = element.source === "image_url";
 
       if (typeof value === "string" && value) {
-        const image = await loadCanvasImage(value);
+        const image = await loadCanvasImage(proxiedMediaUrl(value));
         if (image) {
           const imageRatio = image.width / image.height;
           const boxRatio = width / imageHeight;
           const drawWidth = imageRatio > boxRatio ? width : imageHeight * imageRatio;
           const drawHeight = imageRatio > boxRatio ? width / imageRatio : imageHeight;
-          context.save();
-          roundedRectPath(context, 0, 0, width, imageHeight, 24);
-          context.clip();
+          if (isDishImage) {
+            context.save();
+            roundedRectPath(context, 0, 0, width, imageHeight, 8 * exportScale);
+            context.clip();
+          }
           context.drawImage(image, (width - drawWidth) / 2, (imageHeight - drawHeight) / 2, drawWidth, drawHeight);
-          context.restore();
+          if (isDishImage) {
+            context.restore();
+          }
         } else {
           context.fillStyle = "#68778c";
-          context.font = "700 34px Arial, sans-serif";
+          context.font = `700 ${34 * exportScale}px ${fontCss(element.fontFamily)}`;
           context.textAlign = "center";
-          context.fillText("dish image", width / 2, imageHeight / 2 - 18);
+          context.fillText(element.label || "image", width / 2, imageHeight / 2 - 18);
         }
       }
 
@@ -398,31 +828,33 @@ async function renderRecipeToPngBlob(
       continue;
     }
 
-    if (element.kind !== "title" && element.kind !== "country") {
-      const blockHeight = Math.max(height ?? 0, element.fontSize * (Array.isArray(value) ? value.length + 1.4 : 3.2));
-      roundedRectPath(context, 0, 0, width, blockHeight, 20);
-      context.fillStyle = "rgba(255, 255, 255, 0.62)";
+    if (isTextElement(element) && element.backgroundEnabled !== false) {
+      const blockHeight = Math.max(height ?? 0, fontSize * (Array.isArray(value) ? value.length + 1.4 : 3.2));
+      roundedRectPath(context, 0, 0, width, blockHeight, 8 * exportScale);
+      context.fillStyle = hexToRgba(element.backgroundColor ?? "#ffffff", element.backgroundOpacity ?? 0.62);
       context.fill();
     }
 
-    context.fillStyle = "#18202d";
-    context.font = `${element.kind === "title" || element.kind === "country" ? 900 : 700} ${element.fontSize}px Arial, sans-serif`;
+    context.fillStyle = element.textColor ?? "#18202d";
+    context.font = `${element.boldEnabled !== false ? 900 : 400} ${fontSize}px ${fontCss(element.fontFamily)}`;
     context.textAlign = element.align;
     context.direction = language === "he" ? "rtl" : "ltr";
 
     const textX = element.align === "center" ? width / 2 : element.align === "right" ? width - padding : padding;
     const textY = element.kind === "title" || element.kind === "country" ? 0 : padding;
-    const lineHeight = element.fontSize * 1.22;
+    const lineHeight = fontSize * 1.18;
     const maxTextWidth = Math.max(20, width - padding * 2);
 
     if (Array.isArray(value)) {
       let offsetY = textY;
       for (const item of value) {
-        drawWrappedText(context, item, textX, offsetY, maxTextWidth, lineHeight);
+        drawWrappedText(context, item, textX, offsetY, maxTextWidth, lineHeight, element.underlineEnabled === true);
         offsetY += wrapText(context, item, maxTextWidth).length * lineHeight + lineHeight * 0.3;
       }
+    } else if (element.arcBend && Math.abs(element.arcBend) > 1) {
+      drawArcText(context, value, width / 2, textY + lineHeight * 0.9, maxTextWidth, element.arcBend, element.underlineEnabled === true);
     } else {
-      drawWrappedText(context, value, textX, textY, maxTextWidth, lineHeight);
+      drawWrappedText(context, value, textX, textY, maxTextWidth, lineHeight, element.underlineEnabled === true);
     }
 
     context.restore();
@@ -445,6 +877,13 @@ export default function RecipeEditorPage() {
   const recipeId = typeof router.query.recipe_id === "string" ? router.query.recipe_id : "";
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const dragStateRef = useRef<DragState | null>(null);
+  const transformStateRef = useRef<TransformState | null>(null);
+  const layerDragStateRef = useRef<LayerDragState | null>(null);
+  const historyPastRef = useRef<RecipeLayout[]>([]);
+  const historyFutureRef = useRef<RecipeLayout[]>([]);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastAutosaveSignatureRef = useRef("");
+  const layoutLoadedRef = useRef(false);
   const cropStageRef = useRef<HTMLDivElement | null>(null);
   const cropBoxRef = useRef<HTMLDivElement | null>(null);
   const cropInteractionRef = useRef<CropInteraction | null>(null);
@@ -467,10 +906,25 @@ export default function RecipeEditorPage() {
   const [cropNaturalSize, setCropNaturalSize] = useState({ width: 0, height: 0 });
   const [assetCropIndex, setAssetCropIndex] = useState(1);
   const [stickerCropIndex, setStickerCropIndex] = useState(1);
+  const [cropAssetName, setCropAssetName] = useState("");
+  const [cropAssetTag, setCropAssetTag] = useState("asset");
   const [savingCrop, setSavingCrop] = useState(false);
   const [savedCropUrls, setSavedCropUrls] = useState<Array<{ label: string; url: string }>>([]);
+  const [mediaPrefix, setMediaPrefix] = useState("");
+  const [mediaLibrary, setMediaLibrary] = useState<MediaLibraryResponse | null>(null);
+  const [mediaLoading, setMediaLoading] = useState(false);
+  const [mediaError, setMediaError] = useState<string | null>(null);
+  const [mediaTree, setMediaTree] = useState<MediaTreeNode>(fallbackMediaTree);
+  const [mediaTreeLoading, setMediaTreeLoading] = useState(false);
+  const [mediaRefreshKey, setMediaRefreshKey] = useState(0);
+  const [selectedMediaObject, setSelectedMediaObject] = useState<MediaLibraryObject | null>(null);
+  const [renameMediaName, setRenameMediaName] = useState("");
+  const [renameMediaTag, setRenameMediaTag] = useState("asset");
+  const [renamingMedia, setRenamingMedia] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [historyVersion, setHistoryVersion] = useState(0);
+  const [autosaveState, setAutosaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -492,21 +946,105 @@ export default function RecipeEditorPage() {
     fetchJson<{ recipe: RecipeRecord }>(`/api/admin/recipes/${recipeId}`)
       .then((data) => {
         const loadedLayout = normalizeLayout(data.recipe.layout_json);
+        layoutLoadedRef.current = true;
+        historyPastRef.current = [];
+        historyFutureRef.current = [];
+        setHistoryVersion((current) => current + 1);
+        lastAutosaveSignatureRef.current = JSON.stringify({
+          layout: loadedLayout,
+          gradient_from: data.recipe.gradient_from,
+          gradient_to: data.recipe.gradient_to,
+        });
         setRecipe(data.recipe);
         setLayout(loadedLayout);
         setJsonValue(recipeToEditableJson(data.recipe));
         setAssetSetName(data.recipe.asset_set_key ?? "");
         setStickerSetName(data.recipe.sticker_set_key ?? "");
+        setSavedCropUrls((loadedLayout.assets ?? []).map((asset) => ({
+          label: asset.label,
+          url: withCacheBuster(asset.url, asset.createdAt),
+        })));
         setSelectedId(loadedLayout.elements[0]?.id ?? "title");
       })
       .catch((fetchError) => setError(fetchError instanceof Error ? fetchError.message : String(fetchError)))
       .finally(() => setLoading(false));
   }, [recipeId, sessionChecked]);
 
+  useEffect(() => {
+    if (!sessionChecked) {
+      return;
+    }
+
+    setMediaLoading(true);
+    setMediaError(null);
+    fetchJson<MediaLibraryResponse>(`/api/admin/recipes/media-library?prefix=${encodeURIComponent(mediaPrefix)}`)
+      .then(setMediaLibrary)
+      .catch((fetchError) => setMediaError(fetchError instanceof Error ? fetchError.message : String(fetchError)))
+      .finally(() => setMediaLoading(false));
+  }, [mediaPrefix, mediaRefreshKey, sessionChecked]);
+
+  useEffect(() => {
+    if (!sessionChecked) {
+      return;
+    }
+
+    setMediaTreeLoading(true);
+    fetchJson<{ tree: MediaTreeNode }>(`/api/admin/recipes/media-tree?depth=7`)
+      .then((data) => setMediaTree(data.tree))
+      .catch(() => setMediaTree(fallbackMediaTree()))
+      .finally(() => setMediaTreeLoading(false));
+  }, [mediaRefreshKey, sessionChecked]);
+
+  useEffect(() => {
+    if (!recipe || !layoutLoadedRef.current) {
+      return;
+    }
+
+    const signature = JSON.stringify({
+      layout,
+      gradient_from: recipe.gradient_from,
+      gradient_to: recipe.gradient_to,
+    });
+    if (signature === lastAutosaveSignatureRef.current) {
+      return;
+    }
+
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+    }
+
+    setAutosaveState("saving");
+    autosaveTimerRef.current = setTimeout(() => {
+      fetchJson<{ recipe: RecipeRecord }>(`/api/admin/recipes/${recipe.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipe: recipePayload(recipe, layout) }),
+      })
+        .then((data) => {
+          lastAutosaveSignatureRef.current = signature;
+          setRecipe(data.recipe);
+          setJsonValue(recipeToEditableJson(data.recipe));
+          setAutosaveState("saved");
+        })
+        .catch(() => setAutosaveState("error"));
+    }, 900);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+      }
+    };
+  }, [layout, recipe]);
+
   const selectedElement = useMemo(
     () => layout.elements.find((element) => element.id === selectedId) ?? layout.elements[0],
     [layout.elements, selectedId],
   );
+  const mediaFolders = useMemo(
+    () => mediaFoldersForPrefix(mediaPrefix, mediaLibrary?.folders ?? []),
+    [mediaLibrary?.folders, mediaPrefix],
+  );
+  const mediaCrumbs = useMemo(() => mediaBreadcrumbs(mediaPrefix), [mediaPrefix]);
 
   const activeCropSetKey =
     cropMode === "recipe_asset"
@@ -525,13 +1063,223 @@ export default function RecipeEditorPage() {
         )
       : "";
 
+  const pushLayoutHistory = (snapshot: RecipeLayout) => {
+    historyPastRef.current = [...historyPastRef.current.slice(-79), snapshot];
+    historyFutureRef.current = [];
+    setHistoryVersion((current) => current + 1);
+  };
+
+  const applyLayoutChange = (updater: LayoutUpdater) => {
+    setLayout((current) => {
+      pushLayoutHistory(current);
+      return updater(current);
+    });
+  };
+
+  const undoLayout = () => {
+    setLayout((current) => {
+      const previous = historyPastRef.current.at(-1);
+      if (!previous) {
+        return current;
+      }
+      historyPastRef.current = historyPastRef.current.slice(0, -1);
+      historyFutureRef.current = [current, ...historyFutureRef.current].slice(0, 80);
+      setHistoryVersion((value) => value + 1);
+      setSelectedId(previous.elements.some((element) => element.id === selectedId) ? selectedId : previous.elements[0]?.id ?? "title");
+      return previous;
+    });
+  };
+
+  const redoLayout = () => {
+    setLayout((current) => {
+      const next = historyFutureRef.current[0];
+      if (!next) {
+        return current;
+      }
+      historyFutureRef.current = historyFutureRef.current.slice(1);
+      historyPastRef.current = [...historyPastRef.current.slice(-79), current];
+      setHistoryVersion((value) => value + 1);
+      setSelectedId(next.elements.some((element) => element.id === selectedId) ? selectedId : next.elements[0]?.id ?? "title");
+      return next;
+    });
+  };
+
   const updateElement = (id: string, patch: Partial<RecipeLayoutElement>) => {
-    setLayout((current) => ({
+    applyLayoutChange((current) => ({
       ...current,
       elements: current.elements.map((element) => (
         element.id === id ? { ...element, ...patch } : element
       )),
     }));
+  };
+
+  const moveLayer = (draggedId: string, targetId: string) => {
+    if (draggedId === targetId) {
+      return;
+    }
+
+    applyLayoutChange((current) => {
+      const draggedIndex = current.elements.findIndex((element) => element.id === draggedId);
+      const targetIndex = current.elements.findIndex((element) => element.id === targetId);
+      if (draggedIndex < 0 || targetIndex < 0) {
+        return current;
+      }
+
+      const nextElements = [...current.elements];
+      const [draggedElement] = nextElements.splice(draggedIndex, 1);
+      nextElements.splice(targetIndex, 0, draggedElement);
+      return {
+        ...current,
+        elements: nextElements,
+      };
+    });
+  };
+
+  const addImageElement = (
+    item: { label: string; url: string; path?: string },
+    kind: Extract<RecipeLayoutElement["kind"], "asset" | "logo"> = "asset",
+    position?: { x: number; y: number },
+  ) => {
+    const idPrefix = kind === "logo" ? "logo" : "asset";
+    const id = `${idPrefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    const nextElement: RecipeLayoutElement = {
+      id,
+      kind,
+      label: item.label,
+      source: "custom_image",
+      x: position?.x ?? (kind === "logo" ? 72 : 40),
+      y: position?.y ?? (kind === "logo" ? 4 : 38),
+      width: kind === "logo" ? 18 : 22,
+      height: kind === "logo" ? 8 : 12,
+      fontSize: 16,
+      fontFamily: "Nunito",
+      rotation: 0,
+      flipX: false,
+      flipY: false,
+      align: "center",
+      visible: true,
+      url: item.url,
+      path: item.path,
+    };
+
+    applyLayoutChange((current) => ({
+      ...current,
+      elements: [...current.elements, nextElement],
+    }));
+    setSelectedId(id);
+  };
+
+  const setBrandLogo = (logo: typeof LOGO_OPTIONS[number]) => {
+    const existingBrand = layout.elements.find((element) => element.id === "brand");
+    if (existingBrand) {
+      updateElement("brand", {
+        kind: "logo",
+        source: "custom_image",
+        label: "Логотип",
+        url: logo.url,
+        path: logo.path,
+        width: existingBrand.width || 18,
+        height: existingBrand.height || 8,
+        fontSize: 16,
+        align: "center",
+        visible: true,
+      });
+      setSelectedId("brand");
+      return;
+    }
+
+    addImageElement(logo, "logo");
+  };
+
+  const removeElement = (id: string) => {
+    applyLayoutChange((current) => {
+      const nextElements = current.elements.filter((element) => element.id !== id);
+      return {
+        ...current,
+        elements: nextElements.length > 0 ? nextElements : current.elements,
+      };
+    });
+    setSelectedId((current) => (current === id ? layout.elements.find((element) => element.id !== id)?.id ?? "title" : current));
+  };
+
+  const selectMediaForRename = (object: MediaLibraryObject) => {
+    const label = mediaLabelFromKey(object.key);
+    const existingTag = ASSET_TAGS.find((tag) => label === tag.value || label.startsWith(`${tag.value}-`))?.value ?? "asset";
+    setSelectedMediaObject(object);
+    setRenameMediaTag(existingTag);
+    setRenameMediaName(label.replace(new RegExp(`^${existingTag}-`), ""));
+  };
+
+  const renameSelectedMedia = async () => {
+    if (!selectedMediaObject) {
+      return;
+    }
+
+    setRenamingMedia(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const data = await fetchJson<{ key: string; oldKey: string; publicUrl: string }>("/api/admin/recipes/media-library/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: selectedMediaObject.key,
+          name: renameMediaName,
+          tag: renameMediaTag,
+          deleteOriginal: true,
+        }),
+      });
+
+      applyLayoutChange((current) => ({
+        ...current,
+        elements: current.elements.map((element) => (
+          element.path === data.oldKey
+            ? { ...element, path: data.key, url: data.publicUrl, label: mediaLabelFromKey(data.key) }
+            : element
+        )),
+      }));
+      setSelectedMediaObject({
+        ...selectedMediaObject,
+        key: data.key,
+        publicUrl: data.publicUrl,
+      });
+      setMediaRefreshKey((current) => current + 1);
+      setSuccess(`Ассет переименован: ${data.key}`);
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : String(renameError));
+    } finally {
+      setRenamingMedia(false);
+    }
+  };
+
+  const renderMediaTreeNode = (node: MediaTreeNode, depth = 0) => (
+    <div key={node.prefix || "root"} className="recipe-media-tree-node">
+      <button
+        type="button"
+        className={mediaPrefix === node.prefix ? "recipe-media-tree-button recipe-media-tree-button--active" : "recipe-media-tree-button"}
+        style={{ paddingLeft: `${10 + depth * 14}px` }}
+        onClick={() => setMediaPrefix(node.prefix)}
+      >
+        <span>{node.children.length > 0 ? "v" : "-"}</span>
+        <strong>{node.label}</strong>
+      </button>
+      {node.children.length > 0 ? (
+        <div className="recipe-media-tree-children">
+          {node.children.map((child) => renderMediaTreeNode(child, depth + 1))}
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const logTemplate = () => {
+    const snapshot = {
+      canvas: layout.canvas,
+      gradient_from: recipe?.gradient_from,
+      gradient_to: recipe?.gradient_to,
+      elements: elementTemplateSnapshot(layout),
+    };
+    console.log("Recipe Studio template", snapshot);
+    setSuccess("Шаблон выведен в console.log.");
   };
 
   const saveRecipe = async (nextRecipe: RecipeRecord, nextLayout: RecipeLayout) => {
@@ -576,6 +1324,7 @@ export default function RecipeEditorPage() {
       return;
     }
     event.currentTarget.setPointerCapture(event.pointerId);
+    pushLayoutHistory(layout);
     dragStateRef.current = {
       id: element.id,
       startClientX: event.clientX,
@@ -596,14 +1345,97 @@ export default function RecipeEditorPage() {
     const rect = canvas.getBoundingClientRect();
     const dx = ((event.clientX - drag.startClientX) / rect.width) * 100;
     const dy = ((event.clientY - drag.startClientY) / rect.height) * 100;
-    updateElement(drag.id, {
-      x: Math.max(0, Math.min(95, drag.startX + dx)),
-      y: Math.max(0, Math.min(96, drag.startY + dy)),
-    });
+    setLayout((current) => ({
+      ...current,
+      elements: current.elements.map((element) => (
+        element.id === drag.id
+          ? { ...element, x: drag.startX + dx, y: drag.startY + dy }
+          : element
+      )),
+    }));
   };
 
   const endDrag = () => {
     dragStateRef.current = null;
+  };
+
+  const startElementTransform = (
+    event: React.PointerEvent<HTMLElement>,
+    element: RecipeLayoutElement,
+    action: TransformState["action"],
+  ) => {
+    if (!canvasRef.current) {
+      return;
+    }
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    pushLayoutHistory(layout);
+    const canvasRect = canvasRef.current.getBoundingClientRect();
+    const centerX = canvasRect.left + ((element.x + element.width / 2) / 100) * canvasRect.width;
+    const centerY = canvasRect.top + ((element.y + (element.height ?? 8) / 2) / 100) * canvasRect.height;
+    transformStateRef.current = {
+      action,
+      id: element.id,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startWidth: element.width,
+      startHeight: element.height,
+      startFontSize: element.fontSize,
+      startRotation: element.rotation,
+      startAngle: Math.atan2(event.clientY - centerY, event.clientX - centerX) * 180 / Math.PI,
+      centerX,
+      centerY,
+    };
+    setSelectedId(element.id);
+  };
+
+  const moveElementTransform = (event: React.PointerEvent<HTMLDivElement>) => {
+    const transform = transformStateRef.current;
+    const canvas = canvasRef.current;
+    if (!transform || !canvas) {
+      return;
+    }
+    const rect = canvas.getBoundingClientRect();
+
+    if (transform.action === "resize") {
+      const dx = ((event.clientX - transform.startClientX) / rect.width) * 100;
+      const dy = ((event.clientY - transform.startClientY) / rect.height) * 100;
+      setLayout((current) => ({
+        ...current,
+        elements: current.elements.map((element) => (
+          element.id === transform.id
+            ? (() => {
+                const nextWidth = Math.max(2, transform.startWidth + dx);
+                const nextHeight = Math.max(2, (transform.startHeight ?? 8) + dy);
+                const textScale = isTextElement(element)
+                  ? Math.max(0.2, Math.min(5, Math.max(nextWidth / Math.max(1, transform.startWidth), nextHeight / Math.max(1, transform.startHeight ?? 8))))
+                  : 1;
+                return {
+                  ...element,
+                  width: nextWidth,
+                  height: nextHeight,
+                  fontSize: isTextElement(element) ? Math.max(6, transform.startFontSize * textScale) : element.fontSize,
+                };
+              })()
+            : element
+        )),
+      }));
+      return;
+    }
+
+    const angle = Math.atan2(event.clientY - transform.centerY, event.clientX - transform.centerX) * 180 / Math.PI;
+    setLayout((current) => ({
+      ...current,
+      elements: current.elements.map((element) => (
+        element.id === transform.id
+          ? { ...element, rotation: transform.startRotation + angle - transform.startAngle }
+          : element
+      )),
+    }));
+  };
+
+  const endElementTransform = () => {
+    transformStateRef.current = null;
   };
 
   const startCropInteraction = (
@@ -784,6 +1616,7 @@ export default function RecipeEditorPage() {
       };
       const response = await fetchJson<{
         publicUrl: string;
+        path: string;
         index: number;
       }>(`/api/admin/recipes/${recipe.id}/crop`, {
         method: "POST",
@@ -792,14 +1625,49 @@ export default function RecipeEditorPage() {
           kind: cropMode,
           setKey,
           index: activeCropIndex,
+          assetName: cropAssetName,
+          assetTag: cropAssetTag,
           crop,
         }),
       });
 
+      const label = mediaLabelFromKey(response.path);
+      const savedAsset: RecipeSavedAsset = {
+        label,
+        url: response.publicUrl,
+        path: response.path,
+        kind: cropMode,
+        setKey,
+        tag: cropAssetTag || "asset",
+        name: cropAssetName || label,
+        index: response.index,
+        createdAt: new Date().toISOString(),
+      };
+      const nextLayout: RecipeLayout = {
+        ...layout,
+        assets: [
+          savedAsset,
+          ...(layout.assets ?? []).filter((asset) => asset.path !== savedAsset.path),
+        ],
+      };
+      applyLayoutChange(() => nextLayout);
+      const savedRecipe = await fetchJson<{ recipe: RecipeRecord }>(`/api/admin/recipes/${recipe.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipe: recipePayload(recipe, nextLayout) }),
+      });
+      lastAutosaveSignatureRef.current = JSON.stringify({
+        layout: nextLayout,
+        gradient_from: savedRecipe.recipe.gradient_from,
+        gradient_to: savedRecipe.recipe.gradient_to,
+      });
+      setRecipe(savedRecipe.recipe);
+      setJsonValue(recipeToEditableJson(savedRecipe.recipe));
       setSavedCropUrls((current) => [
-        { label: `${cropMode === "recipe_asset" ? "asset" : "sticker"} ${response.index}`, url: response.publicUrl },
+        { label, url: withCacheBuster(response.publicUrl, Date.now()) },
         ...current,
       ]);
+      setMediaRefreshKey((current) => current + 1);
       if (cropMode === "recipe_asset") {
         setAssetCropIndex((current) => current + 1);
       } else {
@@ -1077,6 +1945,29 @@ export default function RecipeEditorPage() {
                 </label>
                 <div className="books-grid books-grid--2">
                   <label className="books-field">
+                    <span className="books-field__label">Тип детали</span>
+                    <select
+                      className="books-input"
+                      value={cropAssetTag}
+                      onChange={(event) => setCropAssetTag(event.target.value)}
+                    >
+                      {ASSET_TAGS.map((tag) => (
+                        <option key={tag.value} value={tag.value}>{tag.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="books-field">
+                    <span className="books-field__label">Название детали</span>
+                    <input
+                      className="books-input"
+                      value={cropAssetName}
+                      onChange={(event) => setCropAssetName(event.target.value)}
+                      placeholder="yellow-note"
+                    />
+                  </label>
+                </div>
+                <div className="books-grid books-grid--2">
+                  <label className="books-field">
                     <span className="books-field__label">X %</span>
                     <input className="books-input" type="number" value={Math.round(cropRect.x)} onChange={(event) => setCropRect((current) => ({ ...current, x: Number(event.target.value) }))} />
                   </label>
@@ -1153,6 +2044,235 @@ export default function RecipeEditorPage() {
                 </button>
               </div>
             </div>
+
+            <div className="recipe-design-strip">
+              <div className="recipe-gradient-panel">
+                <div className="recipe-gradient-presets">
+                  {GRADIENT_PRESETS.map((preset) => (
+                    <button
+                      key={preset.label}
+                      type="button"
+                      className="recipe-gradient-swatch"
+                      title={preset.label}
+                      style={{ background: `linear-gradient(135deg, ${preset.from}, ${preset.to})` }}
+                      onClick={() => setRecipe((current) => current ? { ...current, gradient_from: preset.from, gradient_to: preset.to } : current)}
+                    />
+                  ))}
+                </div>
+                <label className="recipe-color-input">
+                  <span>Фон 1</span>
+                  <input
+                    type="color"
+                    value={recipe.gradient_from || "#fff4cf"}
+                    onChange={(event) => setRecipe((current) => current ? { ...current, gradient_from: event.target.value } : current)}
+                  />
+                </label>
+                <label className="recipe-color-input">
+                  <span>Фон 2</span>
+                  <input
+                    type="color"
+                    value={recipe.gradient_to || "#b9efe4"}
+                    onChange={(event) => setRecipe((current) => current ? { ...current, gradient_to: event.target.value } : current)}
+                  />
+                </label>
+              </div>
+
+              <div className="recipe-logo-panel">
+                {LOGO_OPTIONS.map((logo) => (
+                  <button
+                    key={logo.path}
+                    type="button"
+                    className="recipe-logo-choice"
+                    onClick={() => setBrandLogo(logo)}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={logo.url} alt="" />
+                    <span>{logo.label}</span>
+                  </button>
+                ))}
+              </div>
+
+              <button
+                type="button"
+                className="books-button books-button--ghost"
+                disabled={historyPastRef.current.length === 0}
+                onClick={undoLayout}
+              >
+                Undo
+              </button>
+              <button
+                type="button"
+                className="books-button books-button--ghost"
+                disabled={historyFutureRef.current.length === 0}
+                onClick={redoLayout}
+              >
+                Redo
+              </button>
+              <span className="recipe-autosave-state">
+                {autosaveState === "saving" ? "autosave..." : autosaveState === "saved" ? "saved" : autosaveState === "error" ? "autosave error" : ""}
+                {historyVersion > -1 ? "" : ""}
+              </span>
+              <button
+                type="button"
+                className="books-button books-button--ghost"
+                onClick={logTemplate}
+              >
+                Console template
+              </button>
+            </div>
+
+            <div className="recipe-media-library">
+              <div className="recipe-media-library__head">
+                <strong>Ассеты из R2</strong>
+                <span>{mediaPrefix || "laplapla-public-media/"}</span>
+              </div>
+              <div className="recipe-media-library__crumbs">
+                <button
+                  type="button"
+                  className={!mediaPrefix ? "recipe-crumb-button recipe-crumb-button--active" : "recipe-crumb-button"}
+                  onClick={() => setMediaPrefix("")}
+                >
+                  Корень
+                </button>
+                {mediaCrumbs.map((crumb) => (
+                  <button
+                    type="button"
+                    key={crumb.prefix}
+                    className={mediaPrefix === crumb.prefix ? "recipe-crumb-button recipe-crumb-button--active" : "recipe-crumb-button"}
+                    onClick={() => setMediaPrefix(crumb.prefix)}
+                  >
+                    {crumb.label}
+                  </button>
+                ))}
+              </div>
+              <div className="recipe-media-browser">
+                <aside className="recipe-media-tree">
+                  <div className="recipe-media-tree__title">
+                    <span>Папки</span>
+                    {mediaTreeLoading ? <small>загрузка...</small> : null}
+                  </div>
+                  {renderMediaTreeNode(mediaTree)}
+                </aside>
+
+                <div className="recipe-media-window">
+                  <div className="recipe-media-window__bar">
+                    <strong>{mediaPrefix || "laplapla-public-media/"}</strong>
+                    {mediaPrefix ? (
+                      <button
+                        type="button"
+                        className="recipe-folder-button"
+                        onClick={() => {
+                          const parts = mediaPrefix.split("/").filter(Boolean);
+                          setMediaPrefix(parts.slice(0, -1).join("/") + (parts.length > 1 ? "/" : ""));
+                        }}
+                      >
+                        На уровень выше
+                      </button>
+                    ) : null}
+                  </div>
+
+                  {mediaLoading ? <div className="books-section-help">Загрузка R2...</div> : null}
+                  {mediaError ? <div className="books-alert books-alert--error">{mediaError}</div> : null}
+
+                  <div className="recipe-media-library__folders">
+                    {mediaFolders.map((folder) => (
+                      <button
+                        type="button"
+                        key={folder}
+                        className="recipe-folder-tile"
+                        onClick={() => setMediaPrefix(folder)}
+                      >
+                        <span>folder</span>
+                        <strong>{folder.slice(mediaPrefix.length).replace(/\/$/, "")}</strong>
+                      </button>
+                    ))}
+                  </div>
+
+                  {selectedMediaObject ? (
+                    <div className="recipe-media-rename-panel">
+                      <div className="recipe-media-rename-panel__preview">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={selectedMediaObject.publicUrl} alt="" />
+                        <span>{selectedMediaObject.key}</span>
+                      </div>
+                      <label className="books-field">
+                        <span className="books-field__label">Тип</span>
+                        <select
+                          className="books-input"
+                          value={renameMediaTag}
+                          onChange={(event) => setRenameMediaTag(event.target.value)}
+                        >
+                          {ASSET_TAGS.map((tag) => (
+                            <option key={tag.value} value={tag.value}>{tag.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="books-field">
+                        <span className="books-field__label">Название</span>
+                        <input
+                          className="books-input"
+                          value={renameMediaName}
+                          onChange={(event) => setRenameMediaName(event.target.value)}
+                          placeholder="yellow-note"
+                        />
+                      </label>
+                      <div className="books-actions">
+                        <button
+                          type="button"
+                          className="books-button books-button--secondary"
+                          disabled={renamingMedia}
+                          onClick={() => addImageElement({
+                            label: mediaLabelFromKey(selectedMediaObject.key),
+                            url: selectedMediaObject.publicUrl,
+                            path: selectedMediaObject.key,
+                          }, "asset")}
+                        >
+                          Добавить
+                        </button>
+                        <button
+                          type="button"
+                          className="books-button books-button--success"
+                          disabled={renamingMedia}
+                          onClick={() => {
+                            void renameSelectedMedia();
+                          }}
+                        >
+                          {renamingMedia ? "Переименование..." : "Переименовать"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  <div className="recipe-media-library__assets">
+                    {mediaLibrary?.objects.map((object) => {
+                      const label = mediaLabelFromKey(object.key);
+                      return (
+                    <button
+                      type="button"
+                      key={object.key}
+                      className="recipe-asset-thumb"
+                      draggable
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData("application/x-laplapla-media-url", object.publicUrl);
+                        event.dataTransfer.setData("application/x-laplapla-media-path", object.key);
+                        event.dataTransfer.setData("application/x-laplapla-media-label", label);
+                      }}
+                      onClick={() => selectMediaForRename(object)}
+                      onDoubleClick={() => addImageElement({ label, url: object.publicUrl, path: object.key }, "asset")}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={object.publicUrl} alt="" />
+                      <span>{label}</span>
+                    </button>
+                      );
+                    })}
+                    {!mediaLoading && mediaLibrary?.objects.length === 0 && mediaFolders.length === 0 ? (
+                      <div className="recipe-media-empty">В этой папке пока нет изображений.</div>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            </div>
             {Object.keys(recipe.exported_image_urls).length > 0 ? (
               <div className="recipe-export-links">
                 {(["ru", "en", "he"] as const).map((language) => (
@@ -1172,10 +2292,38 @@ export default function RecipeEditorPage() {
                   style={{
                     background: `linear-gradient(155deg, ${recipe.gradient_from || "#fff4cf"}, ${recipe.gradient_to || "#b9efe4"})`,
                   }}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const url = event.dataTransfer.getData("application/x-laplapla-media-url");
+                    const path = event.dataTransfer.getData("application/x-laplapla-media-path");
+                    const label = event.dataTransfer.getData("application/x-laplapla-media-label") || mediaLabelFromKey(path);
+                    if (!url || !canvasRef.current) {
+                      return;
+                    }
+                    const rect = canvasRef.current.getBoundingClientRect();
+                    addImageElement(
+                      { label, url, path },
+                      "asset",
+                      {
+                        x: Math.max(0, Math.min(88, ((event.clientX - rect.left) / rect.width) * 100 - 10)),
+                        y: Math.max(0, Math.min(92, ((event.clientY - rect.top) / rect.height) * 100 - 6)),
+                      },
+                    );
+                  }}
+                  onPointerMove={(event) => {
+                    moveElementTransform(event);
+                  }}
+                  onPointerUp={endElementTransform}
+                  onPointerCancel={endElementTransform}
                 >
-                  {layout.elements.filter((element) => element.visible).map((element) => {
+                  {[...layout.elements].reverse().filter((element) => element.visible).map((element) => {
                     const value = valueForElement(recipe, element, studioLanguage);
                     const isSelected = selectedId === element.id;
+                    const layerIndex = layout.elements.findIndex((candidate) => candidate.id === element.id);
+                    const textElement = isTextElement(element);
                     return (
                       <div
                         key={element.id}
@@ -1184,23 +2332,40 @@ export default function RecipeEditorPage() {
                           left: `${element.x}%`,
                           top: `${element.y}%`,
                           width: `${element.width}%`,
-                          minHeight: element.height ? `${element.height}%` : undefined,
+                          height: element.height ? `${element.height}%` : undefined,
+                          minHeight: element.height ? undefined : undefined,
                           fontSize: `${element.fontSize}px`,
+                          fontFamily: fontCss(element.fontFamily),
+                          color: element.textColor ?? "#18202d",
+                          background: textElement ? (element.backgroundEnabled === false ? "transparent" : hexToRgba(element.backgroundColor ?? "#ffffff", element.backgroundOpacity ?? 0.48)) : undefined,
+                          fontWeight: textElement && element.boldEnabled === false ? 400 : undefined,
+                          textDecoration: textElement && element.underlineEnabled ? "underline" : undefined,
                           textAlign: element.align,
-                          transform: `rotate(${element.rotation}deg)`,
+                          transform: `rotate(${element.rotation}deg) scale(${element.flipX ? -1 : 1}, ${element.flipY ? -1 : 1})`,
+                          zIndex: layout.elements.length - layerIndex,
                         }}
                         onPointerDown={(event) => startDrag(event, element)}
                         onPointerMove={moveDrag}
                         onPointerUp={endDrag}
                         onPointerCancel={endDrag}
                       >
-                        {element.kind === "image" ? (
+                        {element.kind === "image" || element.kind === "asset" || element.kind === "logo" ? (
                           typeof value === "string" && value ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={value} alt="" />
                           ) : (
-                            <span>dish image</span>
+                            <span>image</span>
                           )
+                        ) : !Array.isArray(value) && element.arcBend && Math.abs(element.arcBend) > 1 ? (
+                          <span
+                            className="recipe-arc-text"
+                            style={{
+                              transform: `translateY(${element.arcBend > 0 ? "8%" : "-8%"}) skewY(${Math.max(-18, Math.min(18, -element.arcBend / 4))}deg)`,
+                              borderRadius: `${Math.abs(element.arcBend)}% / 38%`,
+                            }}
+                          >
+                            {value}
+                          </span>
                         ) : Array.isArray(value) ? (
                           <ul>
                             {value.map((item, index) => (
@@ -1213,22 +2378,103 @@ export default function RecipeEditorPage() {
                       </div>
                     );
                   })}
+                  {selectedElement && selectedElement.visible ? (
+                    <div
+                      className="recipe-element-controls-overlay"
+                      style={{
+                        left: `${selectedOverlayGeometry(selectedElement).left}%`,
+                        top: `${selectedOverlayGeometry(selectedElement).top}%`,
+                        width: `${selectedOverlayGeometry(selectedElement).width}%`,
+                        height: `${selectedOverlayGeometry(selectedElement).height}%`,
+                        transform: `rotate(${selectedOverlayGeometry(selectedElement).rotation}deg)`,
+                        zIndex: 1001,
+                      }}
+                    >
+                      <span
+                        className="recipe-element-resize-handle"
+                        onPointerDown={(event) => startElementTransform(event, selectedElement, "resize")}
+                      />
+                      <span
+                        className="recipe-element-rotate-handle"
+                        onPointerDown={(event) => startElementTransform(event, selectedElement, "rotate")}
+                      />
+                    </div>
+                  ) : null}
+                  {layout.elements.filter((element) => element.visible).map((element) => {
+                    const handle = offscreenHandlePosition(element);
+                    if (!handle.isOffscreen) {
+                      return null;
+                    }
+                    const isSelected = selectedId === element.id;
+                    return (
+                      <div
+                        key={`${element.id}-offscreen-handle`}
+                        className={isSelected ? "recipe-studio-offscreen-handle recipe-studio-offscreen-handle--selected" : "recipe-studio-offscreen-handle"}
+                        style={{
+                          left: `${handle.x}%`,
+                          top: `${handle.y}%`,
+                          zIndex: 1000,
+                        }}
+                        title={element.label}
+                        onPointerDown={(event) => startDrag(event, element)}
+                        onPointerMove={moveDrag}
+                        onPointerUp={endDrag}
+                        onPointerCancel={endDrag}
+                      >
+                        {element.label.slice(0, 2)}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
               <aside className="recipe-studio-sidebar">
                 <h2 className="books-panel__title">Элементы</h2>
+                <p className="books-section-help">Верхний слой в списке рисуется поверх остальных.</p>
                 <div className="recipe-studio-elements">
                   {layout.elements.map((element) => (
-                    <button
-                      type="button"
+                    <div
                       key={element.id}
                       className={selectedId === element.id ? "recipe-studio-list-button recipe-studio-list-button--active" : "recipe-studio-list-button"}
+                      draggable
+                      onDragStart={(event) => {
+                        layerDragStateRef.current = { id: element.id };
+                        event.dataTransfer.effectAllowed = "move";
+                        event.dataTransfer.setData("text/plain", element.id);
+                      }}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                      }}
+                      onDrop={(event) => {
+                        event.preventDefault();
+                        const draggedId = layerDragStateRef.current?.id || event.dataTransfer.getData("text/plain");
+                        moveLayer(draggedId, element.id);
+                      }}
+                      onDragEnd={() => {
+                        layerDragStateRef.current = null;
+                      }}
                       onClick={() => setSelectedId(element.id)}
                     >
-                      <span>{element.label}</span>
-                      <small>{element.visible ? "visible" : "hidden"}</small>
-                    </button>
+                      <span className="recipe-studio-list-button__label">
+                        <small className="recipe-studio-list-button__handle">move</small>
+                        <span>{element.label}</span>
+                      </span>
+                      <span className="recipe-studio-list-button__meta">
+                        <small>{element.visible ? "visible" : "hidden"}</small>
+                        <button
+                          type="button"
+                          className="recipe-layer-delete-button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            removeElement(element.id);
+                          }}
+                          title="Удалить слой"
+                        >
+                          x
+                        </button>
+                      </span>
+                    </div>
                   ))}
                 </div>
 
@@ -1242,6 +2488,70 @@ export default function RecipeEditorPage() {
                       />
                       <span>Показывать элемент</span>
                     </label>
+
+                    {isTextElement(selectedElement) ? (
+                      <div className="recipe-text-style-controls">
+                        <label className="recipe-color-input">
+                          <span>Цвет текста</span>
+                          <input
+                            type="color"
+                            value={selectedElement.textColor ?? "#18202d"}
+                            onChange={(event) => updateElement(selectedElement.id, { textColor: event.target.value })}
+                          />
+                        </label>
+                        <label className="recipe-color-input">
+                          <span>Фон текста</span>
+                          <input
+                            type="color"
+                            value={selectedElement.backgroundColor ?? "#ffffff"}
+                            onChange={(event) => updateElement(selectedElement.id, { backgroundColor: event.target.value })}
+                          />
+                        </label>
+                        <label className="books-field recipe-opacity-field">
+                          <span className="books-field__label">Прозрачность фона</span>
+                          <input
+                            className="books-input"
+                            type="range"
+                            min={0}
+                            max={100}
+                            value={Math.round((selectedElement.backgroundOpacity ?? 0.62) * 100)}
+                            onChange={(event) => updateElement(selectedElement.id, { backgroundOpacity: Number(event.target.value) / 100 })}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className={selectedElement.backgroundEnabled === false ? "books-button books-button--ghost" : "books-button books-button--primary"}
+                          onClick={() => updateElement(selectedElement.id, { backgroundEnabled: selectedElement.backgroundEnabled === false })}
+                        >
+                          Фон
+                        </button>
+                        <button
+                          type="button"
+                          className={selectedElement.underlineEnabled ? "books-button books-button--primary" : "books-button books-button--ghost"}
+                          onClick={() => updateElement(selectedElement.id, { underlineEnabled: !selectedElement.underlineEnabled })}
+                        >
+                          Подчеркнуть
+                        </button>
+                        <button
+                          type="button"
+                          className={selectedElement.boldEnabled === false ? "books-button books-button--ghost" : "books-button books-button--primary"}
+                          onClick={() => updateElement(selectedElement.id, { boldEnabled: selectedElement.boldEnabled === false })}
+                        >
+                          Жирный
+                        </button>
+                        <label className="books-field recipe-opacity-field">
+                          <span className="books-field__label">Арка текста</span>
+                          <input
+                            className="books-input"
+                            type="range"
+                            min={-100}
+                            max={100}
+                            value={Math.round(selectedElement.arcBend ?? 0)}
+                            onChange={(event) => updateElement(selectedElement.id, { arcBend: Number(event.target.value) })}
+                          />
+                        </label>
+                      </div>
+                    ) : null}
 
                     <div className="books-grid books-grid--2">
                       <label className="books-field">
@@ -1257,8 +2567,24 @@ export default function RecipeEditorPage() {
                         <input className="books-input" type="number" value={Math.round(selectedElement.width)} onChange={(event) => updateElement(selectedElement.id, { width: Number(event.target.value) })} />
                       </label>
                       <label className="books-field">
-                        <span className="books-field__label">Шрифт</span>
+                        <span className="books-field__label">Высота</span>
+                        <input className="books-input" type="number" value={Math.round(selectedElement.height ?? 0)} onChange={(event) => updateElement(selectedElement.id, { height: Number(event.target.value) || undefined })} />
+                      </label>
+                      <label className="books-field">
+                        <span className="books-field__label">Размер текста</span>
                         <input className="books-input" type="number" value={Math.round(selectedElement.fontSize)} onChange={(event) => updateElement(selectedElement.id, { fontSize: Number(event.target.value) })} />
+                      </label>
+                      <label className="books-field">
+                        <span className="books-field__label">Шрифт</span>
+                        <select
+                          className="books-input"
+                          value={selectedElement.fontFamily ?? "Nunito"}
+                          onChange={(event) => updateElement(selectedElement.id, { fontFamily: event.target.value as RecipeFontFamily })}
+                        >
+                          {RECIPE_FONTS.map((font) => (
+                            <option key={font.value} value={font.value}>{font.label}</option>
+                          ))}
+                        </select>
                       </label>
                       <label className="books-field">
                         <span className="books-field__label">Поворот</span>
@@ -1277,6 +2603,33 @@ export default function RecipeEditorPage() {
                         </select>
                       </label>
                     </div>
+                    {selectedElement.kind === "image" || selectedElement.kind === "asset" || selectedElement.kind === "logo" ? (
+                      <div className="books-actions">
+                        <button
+                          type="button"
+                          className={selectedElement.flipX ? "books-button books-button--primary" : "books-button books-button--ghost"}
+                          onClick={() => updateElement(selectedElement.id, { flipX: !selectedElement.flipX })}
+                        >
+                          Зеркалить X
+                        </button>
+                        <button
+                          type="button"
+                          className={selectedElement.flipY ? "books-button books-button--primary" : "books-button books-button--ghost"}
+                          onClick={() => updateElement(selectedElement.id, { flipY: !selectedElement.flipY })}
+                        >
+                          Зеркалить Y
+                        </button>
+                      </div>
+                    ) : null}
+                    {selectedElement.source === "custom_image" ? (
+                      <button
+                        type="button"
+                        className="books-button books-button--ghost"
+                        onClick={() => removeElement(selectedElement.id)}
+                      >
+                        Удалить картинку
+                      </button>
+                    ) : null}
                   </div>
                 ) : null}
               </aside>

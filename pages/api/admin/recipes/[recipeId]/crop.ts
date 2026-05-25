@@ -1,7 +1,7 @@
 import sharp from "sharp";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminSession } from "../../../../../lib/server/admin-session";
-import { uploadPublicR2Object } from "../../../../../lib/server/r2-storage";
+import { fetchPublicR2Object, uploadPublicR2Object } from "../../../../../lib/server/r2-storage";
 
 export const config = {
   api: {
@@ -17,6 +17,8 @@ type CropBody = {
   kind?: CropKind;
   setKey?: string;
   index?: number;
+  assetName?: string;
+  assetTag?: string;
   crop?: {
     x?: number;
     y?: number;
@@ -25,6 +27,19 @@ type CropBody = {
   };
 };
 
+const ALLOWED_TAGS = new Set([
+  "asset",
+  "decor",
+  "food",
+  "frame",
+  "label",
+  "line",
+  "logo",
+  "ribbon",
+  "star",
+  "sticker",
+]);
+
 function normalizeStorageSegment(value: string) {
   return value
     .trim()
@@ -32,22 +47,6 @@ function normalizeStorageSegment(value: string) {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-}
-
-function publicMediaUrl(path: string) {
-  const base = process.env.R2_PUBLIC_URL?.trim().replace(/\/+$/, "");
-  if (!base) {
-    throw new Error("Missing R2_PUBLIC_URL.");
-  }
-  return `${base}/${path.split("/").map((segment) => encodeURIComponent(segment)).join("/")}`;
-}
-
-async function fetchSourceImage(path: string): Promise<Buffer> {
-  const response = await fetch(publicMediaUrl(path), { cache: "no-store" });
-  if (!response.ok) {
-    throw new Error(`Failed to load source sheet (${response.status}).`);
-  }
-  return Buffer.from(await response.arrayBuffer());
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -81,6 +80,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const index = Number.isInteger(body.index) && Number(body.index) > 0 ? Number(body.index) : 1;
+    const assetTag = normalizeStorageSegment(body.assetTag ?? "");
+    if (assetTag && !ALLOWED_TAGS.has(assetTag)) {
+      return res.status(400).json({ error: "Unsupported asset tag." });
+    }
+    const assetName = normalizeStorageSegment(body.assetName ?? "");
     const crop = body.crop ?? {};
     const left = Math.max(0, Math.round(Number(crop.x ?? 0)));
     const top = Math.max(0, Math.round(Number(crop.y ?? 0)));
@@ -92,8 +96,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? `recipes/assets/${setKey}`
         : `stickers/raccoon-stickers/${setKey}`;
     const sourcePath = `${basePath}/source.webp`;
-    const outputPath = `${basePath}/${setKey}_${index}.webp`;
-    const source = await fetchSourceImage(sourcePath);
+    const outputName = assetName
+      ? [assetTag, assetName, String(index)].filter(Boolean).join("-")
+      : [setKey, assetTag, String(index)].filter(Boolean).join("-");
+    const outputPath = `${basePath}/${outputName}.webp`;
+    const source = await fetchPublicR2Object(sourcePath);
     const metadata = await sharp(source).metadata();
 
     if (!metadata.width || !metadata.height) {
