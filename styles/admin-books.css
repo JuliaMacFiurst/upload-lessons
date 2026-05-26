@@ -340,11 +340,21 @@
 }
 
 .recipe-gradient-panel,
-.recipe-logo-panel {
+.recipe-logo-panel,
+.recipe-free-text-form {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
   align-items: center;
+}
+
+.recipe-free-text-form {
+  min-width: min(420px, 100%);
+}
+
+.recipe-free-text-form .books-input {
+  min-width: 220px;
+  flex: 1 1 220px;
 }
 
 .recipe-gradient-presets {
@@ -516,9 +526,16 @@
 .recipe-media-library__head {
   display: flex;
   flex-wrap: wrap;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
   color: #223044;
+}
+
+.recipe-media-library__head > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
 }
 
 .recipe-media-library__head span {

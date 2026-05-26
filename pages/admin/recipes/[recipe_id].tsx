@@ -17,6 +17,7 @@ type RecipeLayoutElement = {
     | "country"
     | "image_url"
     | "custom_image"
+    | "custom_text"
     | "raccoon_caption"
     | "cooking_time"
     | "ingredients"
@@ -47,6 +48,8 @@ type RecipeLayoutElement = {
   path?: string;
   groupId?: string;
   stepIndex?: number;
+  customText?: string;
+  customTextTranslations?: Partial<Record<RecipeStudioLanguage, string>>;
   languageStyles?: Partial<Record<RecipeStudioLanguage, Partial<RecipeLanguageStyle>>>;
 };
 
@@ -535,6 +538,7 @@ function elementTemplateSnapshot(layout: RecipeLayout) {
     visible: element.visible,
     groupId: element.groupId,
     stepIndex: element.stepIndex,
+    customTextTranslations: element.customTextTranslations,
     languageStyles: element.languageStyles,
   }));
 }
@@ -586,6 +590,21 @@ function normalizeSavedAssets(value: unknown): RecipeSavedAsset[] {
       };
     })
     .filter((item): item is RecipeSavedAsset => item !== null);
+}
+
+function normalizeCustomTextTranslations(value: unknown, fallback: string | undefined): Partial<Record<RecipeStudioLanguage, string>> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return fallback ? { ru: fallback, en: fallback, he: fallback } : undefined;
+  }
+
+  const record = value as Partial<Record<RecipeStudioLanguage, unknown>>;
+  const translations: Partial<Record<RecipeStudioLanguage, string>> = {};
+  for (const language of ["ru", "en", "he"] as const) {
+    if (typeof record[language] === "string") {
+      translations[language] = record[language];
+    }
+  }
+  return Object.keys(translations).length > 0 ? translations : fallback ? { ru: fallback, en: fallback, he: fallback } : undefined;
 }
 
 function normalizeGroups(value: unknown): RecipeLayerGroup[] {
@@ -778,7 +797,7 @@ function normalizeLayout(value: unknown): RecipeLayout {
             ? incomingKind
             : "image",
         label: element.label ?? (incomingKind === "step" ? "Шаг" : "Изображение"),
-        source: incomingSource === "custom_image" || incomingSource === "image_url" || isRecipeTextSource(incomingSource)
+        source: incomingSource === "custom_image" || incomingSource === "custom_text" || incomingSource === "image_url" || isRecipeTextSource(incomingSource)
           ? incomingSource
           : "custom_image",
         x: 16,
@@ -804,7 +823,7 @@ function normalizeLayout(value: unknown): RecipeLayout {
         ...baseElement,
         ...element,
         kind: incomingKind ?? baseElement.kind,
-        source: incomingSource === "custom_image" || incomingSource === "image_url" || isRecipeTextSource(incomingSource)
+        source: incomingSource === "custom_image" || incomingSource === "custom_text" || incomingSource === "image_url" || isRecipeTextSource(incomingSource)
           ? incomingSource
           : baseElement.source,
         x: Number(element.x ?? baseElement.x),
@@ -823,6 +842,8 @@ function normalizeLayout(value: unknown): RecipeLayout {
         rotation: Number(element.rotation ?? baseElement.rotation),
         groupId: typeof element.groupId === "string" ? element.groupId : undefined,
         stepIndex: Number.isInteger(element.stepIndex) ? element.stepIndex : undefined,
+        customText: typeof element.customText === "string" ? element.customText : undefined,
+        customTextTranslations: normalizeCustomTextTranslations(element.customTextTranslations, typeof element.customText === "string" ? element.customText : undefined),
         flipX: element.flipX === true,
         flipY: element.flipY === true,
         visible: element.visible !== false,
@@ -877,7 +898,7 @@ function recipePayload(recipe: RecipeRecord, layout: RecipeLayout) {
 function recipeTextForLanguage(
   recipe: RecipeRecord,
   language: RecipeStudioLanguage,
-  key: Exclude<RecipeLayoutElement["source"], "image_url" | "custom_image">,
+  key: Exclude<RecipeLayoutElement["source"], "image_url" | "custom_image" | "custom_text">,
 ): string | string[] {
   const translation = language === "ru" ? null : recipe.translations[language];
 
@@ -922,6 +943,10 @@ function valueForElement(
 
   if (element.source === "custom_image") {
     return element.url ?? "";
+  }
+
+  if (element.source === "custom_text") {
+    return element.customTextTranslations?.[language] ?? element.customText ?? "";
   }
 
   if (element.source === "cooking_steps" && element.kind === "step") {
@@ -1003,6 +1028,10 @@ export default function RecipeEditorPage() {
   const [templates, setTemplates] = useState<RecipeLayoutTemplate[]>([]);
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [templatesError, setTemplatesError] = useState<string | null>(null);
+  const [mediaPanelOpen, setMediaPanelOpen] = useState(true);
+  const [cropPanelOpen, setCropPanelOpen] = useState(true);
+  const [r2PanelOpen, setR2PanelOpen] = useState(true);
+  const [freeTextValue, setFreeTextValue] = useState("");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1234,6 +1263,31 @@ export default function RecipeEditorPage() {
     }));
   };
 
+  const updateCustomTextForLanguage = (id: string, text: string) => {
+    applyLayoutChange((current) => ({
+      ...current,
+      elements: current.elements.map((element) => {
+        if (element.id !== id) {
+          return element;
+        }
+        const currentTranslations = normalizeCustomTextTranslations(element.customTextTranslations, element.customText) ?? {};
+        const nextTranslations = {
+          ...currentTranslations,
+          [studioLanguage]: text,
+        };
+        const fallbackText = studioLanguage === "ru" ? text : element.customText ?? nextTranslations.ru ?? text;
+        return {
+          ...element,
+          customText: fallbackText,
+          customTextTranslations: nextTranslations,
+          label: (nextTranslations.ru ?? fallbackText).trim().length > 34
+            ? `${(nextTranslations.ru ?? fallbackText).trim().slice(0, 34)}...`
+            : (nextTranslations.ru ?? fallbackText).trim() || "Свободный текст",
+        };
+      }),
+    }));
+  };
+
   const splitCookingSteps = () => {
     if (!recipe) {
       return;
@@ -1452,6 +1506,55 @@ export default function RecipeEditorPage() {
       elements: [...current.elements, nextElement],
     }));
     setSelectedId(id);
+  };
+
+  const addFreeTextElement = () => {
+    const text = freeTextValue.trim();
+    if (!text) {
+      setError("Введите текст для нового слоя.");
+      return;
+    }
+
+    const id = `text-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+    const nextElement: RecipeLayoutElement = {
+      id,
+      kind: "text",
+      label: text.length > 34 ? `${text.slice(0, 34)}...` : text,
+      source: "custom_text",
+      customText: text,
+      customTextTranslations: {
+        ru: text,
+        en: text,
+        he: text,
+      },
+      x: 18,
+      y: 18,
+      width: 48,
+      height: 8,
+      fontSize: 24,
+      fontFamily: "Nunito",
+      textColor: "#18202d",
+      backgroundColor: "#ffffff",
+      backgroundOpacity: 0.62,
+      backgroundEnabled: true,
+      underlineEnabled: false,
+      boldEnabled: true,
+      arcBend: 0,
+      rotation: 0,
+      flipX: false,
+      flipY: false,
+      align: "center",
+      visible: true,
+    };
+    nextElement.languageStyles = normalizeLanguageStyles(nextElement, undefined);
+
+    applyLayoutChange((current) => ({
+      ...current,
+      elements: [...current.elements, nextElement],
+    }));
+    setFreeTextValue("");
+    setSelectedId(id);
+    setSuccess("Свободный текст добавлен как новый слой.");
   };
 
   const setBrandLogo = (logo: typeof LOGO_OPTIONS[number]) => {
@@ -2179,68 +2282,79 @@ export default function RecipeEditorPage() {
                   Загружаем PNG/JPEG на белом фоне, сервер удаляет белый фон, конвертирует в WebP и сохраняет в R2.
                 </p>
               </div>
+              <button
+                type="button"
+                className="books-button books-button--ghost"
+                onClick={() => setMediaPanelOpen((current) => !current)}
+              >
+                {mediaPanelOpen ? "Свернуть" : "Развернуть"}
+              </button>
             </div>
-            <div className="recipe-media-grid">
-              <label className="recipe-media-card">
-                <span className="recipe-media-card__title">Картинка блюда</span>
-                <small>R2: recipes/recipes-pics/{recipe.slug}.webp</small>
-                {recipe.image_url ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img src={withCacheBuster(recipe.image_url, recipe.updated_at)} alt="" className="recipe-media-card__preview" />
+            {mediaPanelOpen ? (
+              <>
+                <div className="recipe-media-grid">
+                  <label className="recipe-media-card">
+                    <span className="recipe-media-card__title">Картинка блюда</span>
+                    <small>R2: recipes/recipes-pics/{recipe.slug}.webp</small>
+                    {recipe.image_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={withCacheBuster(recipe.image_url, recipe.updated_at)} alt="" className="recipe-media-card__preview" />
+                    ) : null}
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={uploadingMedia !== null}
+                      onChange={(event) => {
+                        void uploadMedia("dish", event.target.files?.[0] ?? null);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+
+                  <label className="recipe-media-card">
+                    <span className="recipe-media-card__title">Набор ассетов</span>
+                    <small>R2: recipes/assets/[set]/source.webp</small>
+                    <input
+                      className="books-input"
+                      value={assetSetName}
+                      onChange={(event) => setAssetSetName(event.target.value)}
+                      placeholder="khachapuri-assets"
+                    />
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={uploadingMedia !== null}
+                      onChange={(event) => {
+                        void uploadMedia("recipe_asset_sheet", event.target.files?.[0] ?? null);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+
+                  <label className="recipe-media-card">
+                    <span className="recipe-media-card__title">Стикеры енотика</span>
+                    <small>R2: stickers/raccoon-stickers/[set]/source.webp</small>
+                    <input
+                      className="books-input"
+                      value={stickerSetName}
+                      onChange={(event) => setStickerSetName(event.target.value)}
+                      placeholder="raccoon-kitchen-01"
+                    />
+                    <input
+                      type="file"
+                      accept="image/png,image/jpeg,image/webp"
+                      disabled={uploadingMedia !== null}
+                      onChange={(event) => {
+                        void uploadMedia("raccoon_sticker_sheet", event.target.files?.[0] ?? null);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+                {uploadingMedia ? (
+                  <div className="books-alert books-alert--success">Обработка медиа...</div>
                 ) : null}
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  disabled={uploadingMedia !== null}
-                  onChange={(event) => {
-                    void uploadMedia("dish", event.target.files?.[0] ?? null);
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
-
-              <label className="recipe-media-card">
-                <span className="recipe-media-card__title">Набор ассетов</span>
-                <small>R2: recipes/assets/[set]/source.webp</small>
-                <input
-                  className="books-input"
-                  value={assetSetName}
-                  onChange={(event) => setAssetSetName(event.target.value)}
-                  placeholder="khachapuri-assets"
-                />
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  disabled={uploadingMedia !== null}
-                  onChange={(event) => {
-                    void uploadMedia("recipe_asset_sheet", event.target.files?.[0] ?? null);
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
-
-              <label className="recipe-media-card">
-                <span className="recipe-media-card__title">Стикеры енотика</span>
-                <small>R2: stickers/raccoon-stickers/[set]/source.webp</small>
-                <input
-                  className="books-input"
-                  value={stickerSetName}
-                  onChange={(event) => setStickerSetName(event.target.value)}
-                  placeholder="raccoon-kitchen-01"
-                />
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp"
-                  disabled={uploadingMedia !== null}
-                  onChange={(event) => {
-                    void uploadMedia("raccoon_sticker_sheet", event.target.files?.[0] ?? null);
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
-            </div>
-            {uploadingMedia ? (
-              <div className="books-alert books-alert--success">Обработка медиа...</div>
+              </>
             ) : null}
           </section>
 
@@ -2267,9 +2381,17 @@ export default function RecipeEditorPage() {
                 >
                   Стикеры
                 </button>
+                <button
+                  type="button"
+                  className="books-button books-button--ghost"
+                  onClick={() => setCropPanelOpen((current) => !current)}
+                >
+                  {cropPanelOpen ? "Свернуть" : "Развернуть"}
+                </button>
               </div>
             </div>
 
+            {cropPanelOpen ? (
             <div className="recipe-crop-shell">
               <div className="recipe-crop-stage-wrap">
                 {activeCropSourceUrl ? (
@@ -2422,6 +2544,7 @@ export default function RecipeEditorPage() {
                 ) : null}
               </aside>
             </div>
+            ) : null}
           </section>
 
           <section className="books-panel recipe-studio-panel">
@@ -2508,6 +2631,24 @@ export default function RecipeEditorPage() {
                   </button>
                 ))}
               </div>
+
+              <form
+                className="recipe-free-text-form"
+                onSubmit={(event) => {
+                  event.preventDefault();
+                  addFreeTextElement();
+                }}
+              >
+                <input
+                  className="books-input"
+                  value={freeTextValue}
+                  onChange={(event) => setFreeTextValue(event.target.value)}
+                  placeholder="Свободный текст"
+                />
+                <button type="submit" className="books-button books-button--secondary">
+                  Добавить текст
+                </button>
+              </form>
 
               <button
                 type="button"
@@ -2602,9 +2743,20 @@ export default function RecipeEditorPage() {
 
             <div className="recipe-media-library">
               <div className="recipe-media-library__head">
-                <strong>Ассеты из R2</strong>
-                <span>{mediaPrefix || "laplapla-public-media/"}</span>
+                <div>
+                  <strong>Ассеты из R2</strong>
+                  <span>{mediaPrefix || "laplapla-public-media/"}</span>
+                </div>
+                <button
+                  type="button"
+                  className="books-button books-button--ghost"
+                  onClick={() => setR2PanelOpen((current) => !current)}
+                >
+                  {r2PanelOpen ? "Свернуть" : "Развернуть"}
+                </button>
               </div>
+              {r2PanelOpen ? (
+              <>
               <div className="recipe-media-library__crumbs">
                 <button
                   type="button"
@@ -2751,6 +2903,8 @@ export default function RecipeEditorPage() {
                   </div>
                 </div>
               </div>
+              </>
+              ) : null}
             </div>
             {Object.keys(recipe.exported_image_urls).length > 0 ? (
               <div className="recipe-export-links">
@@ -3160,6 +3314,16 @@ export default function RecipeEditorPage() {
 
                     {isTextElement(selectedElement) ? (
                       <div className="recipe-text-style-controls">
+                        {selectedElement.source === "custom_text" ? (
+                          <label className="books-field recipe-free-text-edit">
+                            <span className="books-field__label">Текст слоя</span>
+                            <input
+                              className="books-input"
+                              value={selectedElement.customTextTranslations?.[studioLanguage] ?? selectedElement.customText ?? ""}
+                              onChange={(event) => updateCustomTextForLanguage(selectedElement.id, event.target.value)}
+                            />
+                          </label>
+                        ) : null}
                         <label className="recipe-color-input">
                           <span>Цвет текста</span>
                           <input
