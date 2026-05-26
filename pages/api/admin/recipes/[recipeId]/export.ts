@@ -18,6 +18,7 @@ type ExportBody = {
   language?: "ru" | "en" | "he";
   imageBase64?: string;
   contentType?: string;
+  exportId?: string;
 };
 
 const RECIPE_EXPORT_BUCKET = process.env.RECIPE_EXPORT_BUCKET || "recipes";
@@ -37,6 +38,13 @@ function decodeImageBase64(value: string): Buffer {
     throw new Error("Missing image payload.");
   }
   return Buffer.from(payload, "base64");
+}
+
+function exportVersionId(value: unknown) {
+  if (typeof value === "string" && /^[a-z0-9_-]{6,64}$/i.test(value)) {
+    return value;
+  }
+  return new Date().toISOString().replace(/[^0-9]/g, "").slice(0, 17);
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -73,7 +81,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const recipe = await loadRecipe(supabase, recipeId);
     const slug = normalizeStorageSegment(recipe.slug || recipe.id);
     const buffer = decodeImageBase64(body.imageBase64);
-    const path = `recipes/exports/${slug}/${slug}-${language}-pinterest.${extension}`;
+    const versionId = exportVersionId(body.exportId);
+    const path = `recipes/exports/${slug}/${slug}-${language}-pinterest-${versionId}.${extension}`;
     let publicUrl: string;
 
     if (hasR2Config()) {

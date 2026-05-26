@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { toBlob } from "html-to-image";
 import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../../components/AdminLogout";
@@ -44,7 +45,29 @@ type RecipeLayoutElement = {
   visible: boolean;
   url?: string;
   path?: string;
+  groupId?: string;
+  languageStyles?: Partial<Record<RecipeStudioLanguage, Partial<RecipeLanguageStyle>>>;
 };
+
+type RecipeLanguageStyle = Pick<
+  RecipeLayoutElement,
+  | "x"
+  | "y"
+  | "width"
+  | "height"
+  | "fontSize"
+  | "fontFamily"
+  | "textColor"
+  | "backgroundEnabled"
+  | "backgroundColor"
+  | "backgroundOpacity"
+  | "underlineEnabled"
+  | "boldEnabled"
+  | "arcBend"
+  | "rotation"
+  | "align"
+  | "visible"
+>;
 
 type RecipeLayout = {
   canvas: {
@@ -52,7 +75,13 @@ type RecipeLayout = {
     height: number;
   };
   elements: RecipeLayoutElement[];
+  groups?: RecipeLayerGroup[];
   assets?: RecipeSavedAsset[];
+};
+
+type RecipeLayerGroup = {
+  id: string;
+  name: string;
 };
 
 type RecipeSavedAsset = {
@@ -73,12 +102,23 @@ type DragState = {
   startClientY: number;
   startX: number;
   startY: number;
+  groupId?: string;
+  startPositions?: Array<{ id: string; x: number; y: number }>;
 };
 
 type RecipeStudioLanguage = "ru" | "en" | "he";
 type RecipeMediaKind = "dish" | "recipe_asset_sheet" | "raccoon_sticker_sheet";
 type RecipeCropMode = "recipe_asset" | "raccoon_sticker";
-type RecipeFontFamily = "Nunito" | "Varela Round" | "Caveat" | "Amatic SC" | "Arial";
+type RecipeFontFamily =
+  | "Nunito"
+  | "Varela Round"
+  | "Caveat"
+  | "Amatic SC"
+  | "Hachi Maru Pop"
+  | "Pacifico"
+  | "Rampart One"
+  | "Rubik Doodle Shadow"
+  | "Arial";
 
 type MediaLibraryObject = {
   key: string;
@@ -116,6 +156,7 @@ type CropInteraction = {
 
 type LayerDragState = {
   id: string;
+  type: "element" | "group";
 };
 
 type LayoutUpdater = (current: RecipeLayout) => RecipeLayout;
@@ -132,13 +173,23 @@ type TransformState = {
   startAngle: number;
   centerX: number;
   centerY: number;
+  groupId?: string;
+  startGroupElements?: Array<{ id: string; x: number; y: number; rotation: number; centerOffsetX: number; centerOffsetY: number }>;
 };
+
+type LayerPanelRow =
+  | { type: "group"; group: RecipeLayerGroup; elements: RecipeLayoutElement[] }
+  | { type: "element"; element: RecipeLayoutElement };
 
 const RECIPE_FONTS: Array<{ label: string; value: RecipeFontFamily; css: string }> = [
   { label: "Nunito", value: "Nunito", css: "Nunito, Arial, sans-serif" },
   { label: "Varela Round", value: "Varela Round", css: "\"Varela Round\", Arial, sans-serif" },
   { label: "Caveat", value: "Caveat", css: "Caveat, cursive" },
   { label: "Amatic SC", value: "Amatic SC", css: "\"Amatic SC\", cursive" },
+  { label: "Hachi Maru Pop", value: "Hachi Maru Pop", css: "\"Hachi Maru Pop\", cursive" },
+  { label: "Pacifico", value: "Pacifico", css: "Pacifico, cursive" },
+  { label: "Rampart One", value: "Rampart One", css: "\"Rampart One\", cursive" },
+  { label: "Rubik Doodle Shadow", value: "Rubik Doodle Shadow", css: "\"Rubik Doodle Shadow\", cursive" },
   { label: "Arial", value: "Arial", css: "Arial, sans-serif" },
 ];
 
@@ -181,8 +232,6 @@ const KNOWN_MEDIA_FOLDERS_BY_PREFIX: Record<string, string[]> = {
   "recipes/": ["recipes/assets/", "recipes/exports/", "recipes/recipes-pics/"],
   "stickers/": ["stickers/capybara-stickers/", "stickers/raccoon-stickers/"],
 };
-const RECIPE_PREVIEW_CANVAS_WIDTH = 520;
-
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   const data = (await response.json()) as T & { error?: string };
@@ -218,136 +267,20 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-function loadCanvasImage(src: string): Promise<HTMLImageElement | null> {
-  return new Promise((resolve) => {
-    const image = new Image();
-    image.crossOrigin = "anonymous";
-    image.onload = () => resolve(image);
-    image.onerror = () => resolve(null);
-    image.src = src;
-  });
+function arcPathD(bend: number) {
+  const safeBend = Math.max(-100, Math.min(100, bend));
+  const controlY = 50 - safeBend * 0.34;
+  return `M 0 50 Q 50 ${controlY.toFixed(2)} 100 50`;
 }
 
-function roundedRectPath(
-  context: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  radius: number,
-) {
-  const safeRadius = Math.min(radius, width / 2, height / 2);
-  context.beginPath();
-  context.moveTo(x + safeRadius, y);
-  context.lineTo(x + width - safeRadius, y);
-  context.quadraticCurveTo(x + width, y, x + width, y + safeRadius);
-  context.lineTo(x + width, y + height - safeRadius);
-  context.quadraticCurveTo(x + width, y + height, x + width - safeRadius, y + height);
-  context.lineTo(x + safeRadius, y + height);
-  context.quadraticCurveTo(x, y + height, x, y + height - safeRadius);
-  context.lineTo(x, y + safeRadius);
-  context.quadraticCurveTo(x, y, x + safeRadius, y);
-  context.closePath();
-}
-
-function wrapText(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
-  const words = text.split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let current = "";
-
-  for (const word of words) {
-    const candidate = current ? `${current} ${word}` : word;
-    if (context.measureText(candidate).width <= maxWidth || !current) {
-      current = candidate;
-    } else {
-      lines.push(current);
-      current = word;
-    }
+function arcTextAnchor(align: RecipeLayoutElement["align"]) {
+  if (align === "left") {
+    return { anchor: "start", offset: "0%" };
   }
-
-  if (current) {
-    lines.push(current);
+  if (align === "right") {
+    return { anchor: "end", offset: "100%" };
   }
-
-  return lines.length > 0 ? lines : [""];
-}
-
-function drawWrappedText(
-  context: CanvasRenderingContext2D,
-  text: string,
-  x: number,
-  y: number,
-  maxWidth: number,
-  lineHeight: number,
-  underline = false,
-) {
-  const lines = wrapText(context, text, maxWidth);
-  lines.forEach((line, index) => {
-    const lineY = y + index * lineHeight;
-    context.fillText(line, x, lineY);
-    if (underline) {
-      const width = context.measureText(line).width;
-      const align = context.textAlign;
-      const startX = align === "center" ? x - width / 2 : align === "right" || align === "end" ? x - width : x;
-      context.save();
-      context.beginPath();
-      context.lineWidth = Math.max(1, context.lineWidth);
-      context.moveTo(startX, lineY + lineHeight * 0.96);
-      context.lineTo(startX + width, lineY + lineHeight * 0.96);
-      context.strokeStyle = context.fillStyle;
-      context.stroke();
-      context.restore();
-    }
-  });
-}
-
-function drawArcText(
-  context: CanvasRenderingContext2D,
-  text: string,
-  centerX: number,
-  baselineY: number,
-  maxWidth: number,
-  bend: number,
-  underline = false,
-) {
-  const cleanText = text.trim();
-  if (!cleanText) {
-    return;
-  }
-  const measuredWidth = Math.min(maxWidth, context.measureText(cleanText).width);
-  const arcStrength = Math.max(-100, Math.min(100, bend)) / 100;
-  if (Math.abs(arcStrength) < 0.02 || cleanText.length < 2) {
-    context.fillText(cleanText, centerX, baselineY);
-    return;
-  }
-
-  const radius = Math.max(measuredWidth * 0.7, measuredWidth / Math.max(0.12, Math.abs(arcStrength)));
-  const direction = arcStrength > 0 ? -1 : 1;
-  const totalAngle = measuredWidth / radius;
-  let currentAngle = -totalAngle / 2;
-
-  context.save();
-  context.translate(centerX, baselineY + direction * radius);
-  for (const character of cleanText) {
-    const charWidth = context.measureText(character).width;
-    const charAngle = charWidth / radius;
-    const angle = currentAngle + charAngle / 2;
-    context.save();
-    context.rotate(angle);
-    context.translate(0, -direction * radius);
-    context.rotate(direction > 0 ? angle + Math.PI : angle);
-    context.fillText(character, 0, 0);
-    if (underline) {
-      context.beginPath();
-      context.moveTo(-charWidth / 2, 4);
-      context.lineTo(charWidth / 2, 4);
-      context.strokeStyle = context.fillStyle;
-      context.stroke();
-    }
-    context.restore();
-    currentAngle += charAngle;
-  }
-  context.restore();
+  return { anchor: "middle", offset: "50%" };
 }
 
 function publicR2Url(path: string) {
@@ -384,6 +317,19 @@ function proxiedMediaUrl(url: string) {
   }
 }
 
+function proxiedDownloadUrl(url: string, fileName: string, cacheKey?: string | number | null) {
+  const proxyUrl = proxiedMediaUrl(url);
+  const separator = proxyUrl.includes("?") ? "&" : "?";
+  const cachePart = cacheKey ? `&v=${encodeURIComponent(String(cacheKey))}` : "";
+  return `${proxyUrl}${separator}download=1&filename=${encodeURIComponent(fileName)}${cachePart}`;
+}
+
+function nextAnimationFrame() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
+
 function fontCss(fontFamily: RecipeFontFamily | undefined) {
   return RECIPE_FONTS.find((font) => font.value === fontFamily)?.css ?? RECIPE_FONTS[0].css;
 }
@@ -411,6 +357,130 @@ function hexToRgba(hex: string, opacity: number) {
 
 function isTextElement(element: RecipeLayoutElement) {
   return element.kind !== "image" && element.kind !== "asset" && element.kind !== "logo";
+}
+
+const LANGUAGE_STYLE_KEYS = new Set<keyof RecipeLanguageStyle>([
+  "x",
+  "y",
+  "width",
+  "height",
+  "fontSize",
+  "fontFamily",
+  "textColor",
+  "backgroundEnabled",
+  "backgroundColor",
+  "backgroundOpacity",
+  "underlineEnabled",
+  "boldEnabled",
+  "arcBend",
+  "rotation",
+  "align",
+  "visible",
+]);
+
+function languageStyleFromElement(element: RecipeLayoutElement): Partial<RecipeLanguageStyle> {
+  return {
+    x: element.x,
+    y: element.y,
+    width: element.width,
+    height: element.height,
+    fontSize: element.fontSize,
+    fontFamily: element.fontFamily,
+    textColor: element.textColor,
+    backgroundEnabled: element.backgroundEnabled,
+    backgroundColor: element.backgroundColor,
+    backgroundOpacity: element.backgroundOpacity,
+    underlineEnabled: element.underlineEnabled,
+    boldEnabled: element.boldEnabled,
+    arcBend: element.arcBend,
+    rotation: element.rotation,
+    align: element.align,
+    visible: element.visible,
+  };
+}
+
+function normalizeLanguageStyle(value: unknown): Partial<RecipeLanguageStyle> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+
+  const record = value as Partial<RecipeLanguageStyle>;
+  const style: Partial<RecipeLanguageStyle> = {};
+  if (record.x !== undefined) style.x = Number(record.x);
+  if (record.y !== undefined) style.y = Number(record.y);
+  if (record.width !== undefined) style.width = Number(record.width);
+  if (record.height !== undefined) style.height = Number(record.height);
+  if (record.fontSize !== undefined) style.fontSize = Number(record.fontSize);
+  if (record.fontFamily !== undefined) style.fontFamily = fontValue(record.fontFamily);
+  if (record.textColor !== undefined) style.textColor = colorValue(record.textColor);
+  if (record.backgroundColor !== undefined) style.backgroundColor = colorValue(record.backgroundColor, "#ffffff");
+  if (record.backgroundOpacity !== undefined) style.backgroundOpacity = opacityValue(record.backgroundOpacity);
+  if (record.backgroundEnabled !== undefined) style.backgroundEnabled = record.backgroundEnabled === true;
+  if (record.underlineEnabled !== undefined) style.underlineEnabled = record.underlineEnabled === true;
+  if (record.boldEnabled !== undefined) style.boldEnabled = record.boldEnabled === true;
+  if (record.arcBend !== undefined) style.arcBend = Number(record.arcBend);
+  if (record.rotation !== undefined) style.rotation = Number(record.rotation);
+  if (record.align === "left" || record.align === "center" || record.align === "right") style.align = record.align;
+  if (record.visible !== undefined) style.visible = record.visible !== false;
+  return style;
+}
+
+function normalizeLanguageStyles(element: RecipeLayoutElement, value: unknown) {
+  const record = value && typeof value === "object" && !Array.isArray(value)
+    ? value as Partial<Record<RecipeStudioLanguage, unknown>>
+    : {};
+  return {
+    ru: {
+      ...languageStyleFromElement(element),
+      ...normalizeLanguageStyle(record.ru),
+    },
+    en: {
+      ...languageStyleFromElement(element),
+      ...normalizeLanguageStyle(record.en),
+    },
+    he: {
+      ...languageStyleFromElement(element),
+      ...normalizeLanguageStyle(record.he),
+    },
+  };
+}
+
+function resolveElementForLanguage(element: RecipeLayoutElement, language: RecipeStudioLanguage): RecipeLayoutElement {
+  return {
+    ...element,
+    ...(element.languageStyles?.[language] ?? {}),
+  };
+}
+
+function patchElementForLanguage(
+  element: RecipeLayoutElement,
+  patch: Partial<RecipeLayoutElement>,
+  language: RecipeStudioLanguage,
+): RecipeLayoutElement {
+  const languagePatch: Partial<RecipeLanguageStyle> = {};
+  const basePatch: Partial<RecipeLayoutElement> = {};
+  for (const [key, value] of Object.entries(patch) as Array<[keyof RecipeLayoutElement, unknown]>) {
+    if (LANGUAGE_STYLE_KEYS.has(key as keyof RecipeLanguageStyle)) {
+      (languagePatch as Record<string, unknown>)[key] = value;
+    } else {
+      (basePatch as Record<string, unknown>)[key] = value;
+    }
+  }
+
+  const currentStyles = element.languageStyles ?? normalizeLanguageStyles(element, element.languageStyles);
+  const currentLanguageStyle = currentStyles[language] ?? languageStyleFromElement(element);
+  return {
+    ...element,
+    ...basePatch,
+    languageStyles: {
+      ...currentStyles,
+      [language]: {
+        ...currentLanguageStyle,
+        ...languagePatch,
+      },
+    },
+    ...(language === "ru" ? languagePatch : {}),
+  };
 }
 
 function mediaLabelFromKey(key: string) {
@@ -444,6 +514,8 @@ function elementTemplateSnapshot(layout: RecipeLayout) {
     flipY: element.flipY === true,
     align: element.align,
     visible: element.visible,
+    groupId: element.groupId,
+    languageStyles: element.languageStyles,
   }));
 }
 
@@ -491,6 +563,35 @@ function normalizeSavedAssets(value: unknown): RecipeSavedAsset[] {
     .filter((item): item is RecipeSavedAsset => item !== null);
 }
 
+function normalizeGroups(value: unknown): RecipeLayerGroup[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((item): RecipeLayerGroup | null => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const record = item as Partial<RecipeLayerGroup>;
+      if (!record.id) {
+        return null;
+      }
+      return {
+        id: record.id,
+        name: record.name?.trim() || "Группа",
+      };
+    })
+    .filter((item): item is RecipeLayerGroup => item !== null);
+}
+
+function groupName(layout: RecipeLayout, groupId: string | undefined) {
+  if (!groupId) {
+    return "";
+  }
+  return layout.groups?.find((group) => group.id === groupId)?.name ?? "Группа";
+}
+
 function fallbackMediaTree(): MediaTreeNode {
   return {
     prefix: "",
@@ -533,6 +634,32 @@ function selectedOverlayGeometry(element: RecipeLayoutElement) {
   };
 }
 
+function groupBounds(elements: RecipeLayoutElement[]) {
+  if (elements.length === 0) {
+    return null;
+  }
+  const left = Math.min(...elements.map((element) => element.x));
+  const top = Math.min(...elements.map((element) => element.y));
+  const right = Math.max(...elements.map((element) => element.x + element.width));
+  const bottom = Math.max(...elements.map((element) => element.y + (element.height ?? Math.max(6, element.fontSize * 0.22))));
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    centerX: (left + right) / 2,
+    centerY: (top + bottom) / 2,
+  };
+}
+
+function rotatePoint(x: number, y: number, degrees: number) {
+  const radians = (degrees * Math.PI) / 180;
+  return {
+    x: x * Math.cos(radians) - y * Math.sin(radians),
+    y: x * Math.sin(radians) + y * Math.cos(radians),
+  };
+}
+
 function defaultLayout(): RecipeLayout {
   const textBase = {
     textColor: "#18202d",
@@ -544,6 +671,7 @@ function defaultLayout(): RecipeLayout {
   };
   return {
     canvas: { width: 1000, height: 1500 },
+    groups: [],
     assets: [],
     elements: [
       { id: "brand", kind: "logo", label: "Логотип", source: "custom_image", x: 7, y: 4, width: 18, height: 8, fontSize: 16, fontFamily: "Nunito", rotation: 0, align: "center", visible: true, url: LOGO_OPTIONS[0].url, path: LOGO_OPTIONS[0].path },
@@ -584,7 +712,7 @@ function normalizeLayout(value: unknown): RecipeLayout {
         return null;
       }
       if (element.id === "brand") {
-        return {
+        const normalizedBrand: RecipeLayoutElement = {
           ...fallback.elements[0],
           ...element,
           kind: "logo",
@@ -607,10 +735,13 @@ function normalizeLayout(value: unknown): RecipeLayout {
           align: element.align ?? fallback.elements[0].align,
           url: element.url || LOGO_OPTIONS[0].url,
           path: element.path || LOGO_OPTIONS[0].path,
+          groupId: typeof element.groupId === "string" ? element.groupId : undefined,
           flipX: element.flipX === true,
           flipY: element.flipY === true,
           visible: element.visible !== false,
         };
+        normalizedBrand.languageStyles = normalizeLanguageStyles(normalizedBrand, element.languageStyles);
+        return normalizedBrand;
       }
       const baseElement: RecipeLayoutElement = fallbackElement ?? {
         id: element.id,
@@ -655,10 +786,12 @@ function normalizeLayout(value: unknown): RecipeLayout {
         boldEnabled: element.boldEnabled ?? baseElement.boldEnabled ?? true,
         arcBend: Number(element.arcBend ?? baseElement.arcBend ?? 0),
         rotation: Number(element.rotation ?? baseElement.rotation),
+        groupId: typeof element.groupId === "string" ? element.groupId : undefined,
         flipX: element.flipX === true,
         flipY: element.flipY === true,
         visible: element.visible !== false,
       };
+      normalizedElement.languageStyles = normalizeLanguageStyles(normalizedElement, element.languageStyles);
       return normalizedElement;
     })
     .filter((item): item is RecipeLayoutElement => item !== null);
@@ -670,6 +803,7 @@ function normalizeLayout(value: unknown): RecipeLayout {
 
   return {
     canvas: fallback.canvas,
+    groups: normalizeGroups((record as { groups?: unknown }).groups).filter((group) => merged.some((element) => element.groupId === group.id)),
     assets: normalizeSavedAssets((record as { assets?: unknown }).assets),
     elements: merged,
   };
@@ -757,120 +891,6 @@ function valueForElement(
   return recipeTextForLanguage(recipe, language, element.source);
 }
 
-async function renderRecipeToPngBlob(
-  recipe: RecipeRecord,
-  layout: RecipeLayout,
-  language: RecipeStudioLanguage,
-): Promise<Blob> {
-  const canvas = document.createElement("canvas");
-  canvas.width = layout.canvas.width;
-  canvas.height = layout.canvas.height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("Canvas is not available in this browser.");
-  }
-
-  await document.fonts.ready;
-
-  const gradient = context.createLinearGradient(0, 0, canvas.width, canvas.height);
-  gradient.addColorStop(0, recipe.gradient_from || "#fff4cf");
-  gradient.addColorStop(1, recipe.gradient_to || "#b9efe4");
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  context.textBaseline = "top";
-  const exportScale = canvas.width / RECIPE_PREVIEW_CANVAS_WIDTH;
-
-  for (const element of [...layout.elements].reverse().filter((item) => item.visible)) {
-    const x = (element.x / 100) * canvas.width;
-    const y = (element.y / 100) * canvas.height;
-    const width = (element.width / 100) * canvas.width;
-    const height = element.height ? (element.height / 100) * canvas.height : undefined;
-    const value = valueForElement(recipe, element, language);
-    const fontSize = element.fontSize * exportScale;
-    const padding = 8 * exportScale;
-    const fallbackHeight = fontSize * 3;
-
-    context.save();
-    context.translate(x + width / 2, y + (height ?? fallbackHeight) / 2);
-    context.rotate((element.rotation * Math.PI) / 180);
-    context.scale(element.flipX ? -1 : 1, element.flipY ? -1 : 1);
-    context.translate(-width / 2, -(height ?? fallbackHeight) / 2);
-
-    if (element.kind === "image" || element.kind === "asset" || element.kind === "logo") {
-      const imageHeight = height ?? 285;
-      const isDishImage = element.source === "image_url";
-
-      if (typeof value === "string" && value) {
-        const image = await loadCanvasImage(proxiedMediaUrl(value));
-        if (image) {
-          const imageRatio = image.width / image.height;
-          const boxRatio = width / imageHeight;
-          const drawWidth = imageRatio > boxRatio ? width : imageHeight * imageRatio;
-          const drawHeight = imageRatio > boxRatio ? width / imageRatio : imageHeight;
-          if (isDishImage) {
-            context.save();
-            roundedRectPath(context, 0, 0, width, imageHeight, 8 * exportScale);
-            context.clip();
-          }
-          context.drawImage(image, (width - drawWidth) / 2, (imageHeight - drawHeight) / 2, drawWidth, drawHeight);
-          if (isDishImage) {
-            context.restore();
-          }
-        } else {
-          context.fillStyle = "#68778c";
-          context.font = `700 ${34 * exportScale}px ${fontCss(element.fontFamily)}`;
-          context.textAlign = "center";
-          context.fillText(element.label || "image", width / 2, imageHeight / 2 - 18);
-        }
-      }
-
-      context.restore();
-      continue;
-    }
-
-    if (isTextElement(element) && element.backgroundEnabled !== false) {
-      const blockHeight = Math.max(height ?? 0, fontSize * (Array.isArray(value) ? value.length + 1.4 : 3.2));
-      roundedRectPath(context, 0, 0, width, blockHeight, 8 * exportScale);
-      context.fillStyle = hexToRgba(element.backgroundColor ?? "#ffffff", element.backgroundOpacity ?? 0.62);
-      context.fill();
-    }
-
-    context.fillStyle = element.textColor ?? "#18202d";
-    context.font = `${element.boldEnabled !== false ? 900 : 400} ${fontSize}px ${fontCss(element.fontFamily)}`;
-    context.textAlign = element.align;
-    context.direction = language === "he" ? "rtl" : "ltr";
-
-    const textX = element.align === "center" ? width / 2 : element.align === "right" ? width - padding : padding;
-    const textY = element.kind === "title" || element.kind === "country" ? 0 : padding;
-    const lineHeight = fontSize * 1.18;
-    const maxTextWidth = Math.max(20, width - padding * 2);
-
-    if (Array.isArray(value)) {
-      let offsetY = textY;
-      for (const item of value) {
-        drawWrappedText(context, item, textX, offsetY, maxTextWidth, lineHeight, element.underlineEnabled === true);
-        offsetY += wrapText(context, item, maxTextWidth).length * lineHeight + lineHeight * 0.3;
-      }
-    } else if (element.arcBend && Math.abs(element.arcBend) > 1) {
-      drawArcText(context, value, width / 2, textY + lineHeight * 0.9, maxTextWidth, element.arcBend, element.underlineEnabled === true);
-    } else {
-      drawWrappedText(context, value, textX, textY, maxTextWidth, lineHeight, element.underlineEnabled === true);
-    }
-
-    context.restore();
-  }
-
-  return new Promise((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) {
-        resolve(blob);
-      } else {
-        reject(new Error("Failed to export PNG."));
-      }
-    }, "image/png");
-  });
-}
-
 export default function RecipeEditorPage() {
   const router = useRouter();
   const supabase = createClientComponentClient();
@@ -925,6 +945,10 @@ export default function RecipeEditorPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [autosaveState, setAutosaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [layerPanelOpen, setLayerPanelOpen] = useState(false);
+  const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>([]);
+  const [captureMode, setCaptureMode] = useState(false);
+  const [exportLinksRefreshKey, setExportLinksRefreshKey] = useState(0);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1036,15 +1060,43 @@ export default function RecipeEditorPage() {
     };
   }, [layout, recipe]);
 
-  const selectedElement = useMemo(
+  const selectedElementRaw = useMemo(
     () => layout.elements.find((element) => element.id === selectedId) ?? layout.elements[0],
     [layout.elements, selectedId],
+  );
+  const selectedElement = useMemo(
+    () => selectedElementRaw ? resolveElementForLanguage(selectedElementRaw, studioLanguage) : selectedElementRaw,
+    [selectedElementRaw, studioLanguage],
   );
   const mediaFolders = useMemo(
     () => mediaFoldersForPrefix(mediaPrefix, mediaLibrary?.folders ?? []),
     [mediaLibrary?.folders, mediaPrefix],
   );
   const mediaCrumbs = useMemo(() => mediaBreadcrumbs(mediaPrefix), [mediaPrefix]);
+  const selectedGroupId = selectedElementRaw?.groupId;
+  const layerRows = useMemo<LayerPanelRow[]>(() => {
+    const rows: LayerPanelRow[] = [];
+    const renderedGroups = new Set<string>();
+    for (const element of layout.elements) {
+      if (element.groupId) {
+        if (renderedGroups.has(element.groupId)) {
+          continue;
+        }
+        renderedGroups.add(element.groupId);
+        rows.push({
+          type: "group",
+          group: {
+            id: element.groupId,
+            name: groupName(layout, element.groupId),
+          },
+          elements: layout.elements.filter((item) => item.groupId === element.groupId),
+        });
+      } else {
+        rows.push({ type: "element", element });
+      }
+    }
+    return rows;
+  }, [layout]);
 
   const activeCropSetKey =
     cropMode === "recipe_asset"
@@ -1108,7 +1160,54 @@ export default function RecipeEditorPage() {
     applyLayoutChange((current) => ({
       ...current,
       elements: current.elements.map((element) => (
-        element.id === id ? { ...element, ...patch } : element
+        element.id === id ? patchElementForLanguage(element, patch, studioLanguage) : element
+      )),
+    }));
+  };
+
+  const toggleLayerSelection = (id: string, checked: boolean) => {
+    setSelectedLayerIds((current) => (
+      checked ? Array.from(new Set([...current, id])) : current.filter((item) => item !== id)
+    ));
+  };
+
+  const createGroupFromSelectedLayers = () => {
+    const ids = selectedLayerIds.filter((id) => layout.elements.some((element) => element.id === id));
+    if (ids.length < 2) {
+      setError("Для группы нужно выбрать минимум два слоя.");
+      return;
+    }
+
+    const groupId = `group-${Date.now().toString(36)}`;
+    applyLayoutChange((current) => ({
+      ...current,
+      groups: [
+        ...(current.groups ?? []),
+        { id: groupId, name: `Группа ${(current.groups ?? []).length + 1}` },
+      ],
+      elements: current.elements.map((element) => (
+        ids.includes(element.id) ? { ...element, groupId } : element
+      )),
+    }));
+    setSelectedLayerIds([]);
+    setError(null);
+  };
+
+  const renameGroup = (groupId: string, name: string) => {
+    applyLayoutChange((current) => ({
+      ...current,
+      groups: (current.groups ?? []).map((group) => (
+        group.id === groupId ? { ...group, name } : group
+      )),
+    }));
+  };
+
+  const ungroup = (groupId: string) => {
+    applyLayoutChange((current) => ({
+      ...current,
+      groups: (current.groups ?? []).filter((group) => group.id !== groupId),
+      elements: current.elements.map((element) => (
+        element.groupId === groupId ? { ...element, groupId: undefined } : element
       )),
     }));
   };
@@ -1128,6 +1227,27 @@ export default function RecipeEditorPage() {
       const nextElements = [...current.elements];
       const [draggedElement] = nextElements.splice(draggedIndex, 1);
       nextElements.splice(targetIndex, 0, draggedElement);
+      return {
+        ...current,
+        elements: nextElements,
+      };
+    });
+  };
+
+  const moveGroup = (draggedGroupId: string, targetId: string, targetType: LayerDragState["type"]) => {
+    applyLayoutChange((current) => {
+      const draggedElements = current.elements.filter((element) => element.groupId === draggedGroupId);
+      if (draggedElements.length === 0) {
+        return current;
+      }
+
+      const remaining = current.elements.filter((element) => element.groupId !== draggedGroupId);
+      const targetIndex = targetType === "group"
+        ? remaining.findIndex((element) => element.groupId === targetId)
+        : remaining.findIndex((element) => element.id === targetId);
+      const insertIndex = targetIndex < 0 ? remaining.length : targetIndex;
+      const nextElements = [...remaining];
+      nextElements.splice(insertIndex, 0, ...draggedElements);
       return {
         ...current,
         elements: nextElements,
@@ -1325,12 +1445,19 @@ export default function RecipeEditorPage() {
     }
     event.currentTarget.setPointerCapture(event.pointerId);
     pushLayoutHistory(layout);
+    const groupElements = element.groupId
+      ? layout.elements
+          .map((item) => resolveElementForLanguage(item, studioLanguage))
+          .filter((item) => item.groupId === element.groupId)
+      : [];
     dragStateRef.current = {
       id: element.id,
       startClientX: event.clientX,
       startClientY: event.clientY,
       startX: element.x,
       startY: element.y,
+      groupId: element.groupId,
+      startPositions: groupElements.map((item) => ({ id: item.id, x: item.x, y: item.y })),
     };
     setSelectedId(element.id);
   };
@@ -1348,9 +1475,16 @@ export default function RecipeEditorPage() {
     setLayout((current) => ({
       ...current,
       elements: current.elements.map((element) => (
-        element.id === drag.id
-          ? { ...element, x: drag.startX + dx, y: drag.startY + dy }
-          : element
+        drag.groupId && element.groupId === drag.groupId
+          ? (() => {
+              const startPosition = drag.startPositions?.find((item) => item.id === element.id);
+              return startPosition
+                ? patchElementForLanguage(element, { x: startPosition.x + dx, y: startPosition.y + dy }, studioLanguage)
+                : element;
+            })()
+          : element.id === drag.id
+            ? patchElementForLanguage(element, { x: drag.startX + dx, y: drag.startY + dy }, studioLanguage)
+            : element
       )),
     }));
   };
@@ -1371,8 +1505,16 @@ export default function RecipeEditorPage() {
     event.currentTarget.setPointerCapture(event.pointerId);
     pushLayoutHistory(layout);
     const canvasRect = canvasRef.current.getBoundingClientRect();
-    const centerX = canvasRect.left + ((element.x + element.width / 2) / 100) * canvasRect.width;
-    const centerY = canvasRect.top + ((element.y + (element.height ?? 8) / 2) / 100) * canvasRect.height;
+    const groupElements = element.groupId
+      ? layout.elements
+          .map((item) => resolveElementForLanguage(item, studioLanguage))
+          .filter((item) => item.groupId === element.groupId)
+      : [];
+    const bounds = action === "rotate" ? groupBounds(groupElements) : null;
+    const centerPercentX = bounds ? bounds.centerX : element.x + element.width / 2;
+    const centerPercentY = bounds ? bounds.centerY : element.y + (element.height ?? 8) / 2;
+    const centerX = canvasRect.left + (centerPercentX / 100) * canvasRect.width;
+    const centerY = canvasRect.top + (centerPercentY / 100) * canvasRect.height;
     transformStateRef.current = {
       action,
       id: element.id,
@@ -1385,6 +1527,17 @@ export default function RecipeEditorPage() {
       startAngle: Math.atan2(event.clientY - centerY, event.clientX - centerX) * 180 / Math.PI,
       centerX,
       centerY,
+      groupId: action === "rotate" ? element.groupId : undefined,
+      startGroupElements: bounds
+        ? groupElements.map((item) => ({
+            id: item.id,
+            x: item.x,
+            y: item.y,
+            rotation: item.rotation,
+            centerOffsetX: item.x + item.width / 2 - bounds.centerX,
+            centerOffsetY: item.y + (item.height ?? 8) / 2 - bounds.centerY,
+          }))
+        : undefined,
     };
     setSelectedId(element.id);
   };
@@ -1410,12 +1563,11 @@ export default function RecipeEditorPage() {
                 const textScale = isTextElement(element)
                   ? Math.max(0.2, Math.min(5, Math.max(nextWidth / Math.max(1, transform.startWidth), nextHeight / Math.max(1, transform.startHeight ?? 8))))
                   : 1;
-                return {
-                  ...element,
+                return patchElementForLanguage(element, {
                   width: nextWidth,
                   height: nextHeight,
                   fontSize: isTextElement(element) ? Math.max(6, transform.startFontSize * textScale) : element.fontSize,
-                };
+                }, studioLanguage);
               })()
             : element
         )),
@@ -1424,12 +1576,27 @@ export default function RecipeEditorPage() {
     }
 
     const angle = Math.atan2(event.clientY - transform.centerY, event.clientX - transform.centerX) * 180 / Math.PI;
+    const deltaAngle = angle - transform.startAngle;
     setLayout((current) => ({
       ...current,
       elements: current.elements.map((element) => (
-        element.id === transform.id
-          ? { ...element, rotation: transform.startRotation + angle - transform.startAngle }
-          : element
+        transform.groupId && element.groupId === transform.groupId
+          ? (() => {
+              const startGroupElement = transform.startGroupElements?.find((item) => item.id === element.id);
+              if (!startGroupElement) {
+                return element;
+              }
+              const rotatedOffset = rotatePoint(startGroupElement.centerOffsetX, startGroupElement.centerOffsetY, deltaAngle);
+              const resolvedElement = resolveElementForLanguage(element, studioLanguage);
+              return patchElementForLanguage(element, {
+                x: (transform.centerX - rect.left) / rect.width * 100 + rotatedOffset.x - resolvedElement.width / 2,
+                y: (transform.centerY - rect.top) / rect.height * 100 + rotatedOffset.y - (resolvedElement.height ?? 8) / 2,
+                rotation: startGroupElement.rotation + deltaAngle,
+              }, studioLanguage);
+            })()
+          : element.id === transform.id
+            ? patchElementForLanguage(element, { rotation: transform.startRotation + deltaAngle }, studioLanguage)
+            : element
       )),
     }));
   };
@@ -1482,6 +1649,40 @@ export default function RecipeEditorPage() {
     cropInteractionRef.current = null;
   };
 
+  const renderRecipeDomToPngBlob = async (language: RecipeStudioLanguage): Promise<Blob> => {
+    if (!canvasRef.current) {
+      throw new Error("Recipe canvas is not available.");
+    }
+
+    setStudioLanguage(language);
+    setCaptureMode(true);
+    await document.fonts.ready;
+    await nextAnimationFrame();
+
+    const canvasNode = canvasRef.current;
+    const rect = canvasNode.getBoundingClientRect();
+    const scale = layout.canvas.width / rect.width;
+    const blob = await toBlob(canvasNode, {
+      cacheBust: true,
+      includeQueryParams: true,
+      pixelRatio: scale,
+      backgroundColor: recipe?.gradient_from || "#fff4cf",
+      filter: (node) => {
+        if (!(node instanceof HTMLElement)) {
+          return true;
+        }
+        return !node.classList.contains("recipe-element-controls-overlay")
+          && !node.classList.contains("recipe-studio-offscreen-handle");
+      },
+    });
+
+    setCaptureMode(false);
+    if (!blob) {
+      throw new Error("Failed to export DOM PNG.");
+    }
+    return blob;
+  };
+
   const exportPng = async (languages: RecipeStudioLanguage[]) => {
     if (!recipe) {
       return;
@@ -1490,9 +1691,10 @@ export default function RecipeEditorPage() {
     setExporting(true);
     setError(null);
     setSuccess(null);
+    const previousLanguage = studioLanguage;
     try {
       for (const language of languages) {
-        const blob = await renderRecipeToPngBlob(recipe, layout, language);
+        const blob = await renderRecipeDomToPngBlob(language);
         downloadBlob(blob, `${recipe.slug || "recipe"}-${language}-pinterest.png`);
       }
       await saveRecipe(recipe, layout);
@@ -1500,6 +1702,8 @@ export default function RecipeEditorPage() {
     } catch (exportError) {
       setError(exportError instanceof Error ? exportError.message : String(exportError));
     } finally {
+      setStudioLanguage(previousLanguage);
+      setCaptureMode(false);
       setExporting(false);
     }
   };
@@ -1512,12 +1716,14 @@ export default function RecipeEditorPage() {
     setUploadingExport(true);
     setError(null);
     setSuccess(null);
+    const previousLanguage = studioLanguage;
     try {
       let currentRecipe = recipe;
       await saveRecipe(currentRecipe, layout);
 
       for (const language of languages) {
-        const blob = await renderRecipeToPngBlob(currentRecipe, layout, language);
+        const exportId = `${Date.now().toString(36)}-${language}`;
+        const blob = await renderRecipeDomToPngBlob(language);
         const imageBase64 = await blobToDataUrl(blob);
         const response = await fetchJson<{
           publicUrl: string;
@@ -1529,6 +1735,7 @@ export default function RecipeEditorPage() {
             language,
             contentType: "image/png",
             imageBase64,
+            exportId,
           }),
         });
         currentRecipe = response.recipe;
@@ -1536,11 +1743,36 @@ export default function RecipeEditorPage() {
         setJsonValue(recipeToEditableJson(response.recipe));
       }
 
+      setExportLinksRefreshKey(Date.now());
       setSuccess(`PNG загружен в storage: ${languages.map((language) => language.toUpperCase()).join(", ")}.`);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
     } finally {
+      setStudioLanguage(previousLanguage);
+      setCaptureMode(false);
       setUploadingExport(false);
+    }
+  };
+
+  const downloadStoredExport = async (language: RecipeStudioLanguage) => {
+    if (!recipe?.exported_image_urls[language]) {
+      return;
+    }
+
+    setError(null);
+    setSuccess(null);
+    try {
+      const fileName = `${recipe.slug || "recipe"}-${language}-pinterest.png`;
+      const response = await fetch(proxiedDownloadUrl(recipe.exported_image_urls[language], fileName, exportLinksRefreshKey || recipe.updated_at), {
+        credentials: "same-origin",
+      });
+      if (!response.ok) {
+        throw new Error(`Не удалось скачать export (${response.status}).`);
+      }
+      const blob = await response.blob();
+      downloadBlob(blob, fileName);
+    } catch (downloadError) {
+      setError(downloadError instanceof Error ? downloadError.message : String(downloadError));
     }
   };
 
@@ -1730,10 +1962,10 @@ export default function RecipeEditorPage() {
             className="books-button books-button--secondary"
             disabled={!recipe || exporting || uploadingExport}
             onClick={() => {
-              void exportPng([studioLanguage]);
+              void exportPng(["ru", "en", "he"]);
             }}
           >
-            {exporting ? "Экспорт..." : "Скачать PNG"}
+            {exporting ? "Экспорт..." : "Скачать 3 PNG"}
           </button>
           <button
             type="button"
@@ -2276,11 +2508,37 @@ export default function RecipeEditorPage() {
             {Object.keys(recipe.exported_image_urls).length > 0 ? (
               <div className="recipe-export-links">
                 {(["ru", "en", "he"] as const).map((language) => (
-                  recipe.exported_image_urls[language] ? (
-                    <a key={language} href={recipe.exported_image_urls[language]} target="_blank" rel="noreferrer">
-                      {language.toUpperCase()} export
-                    </a>
-                  ) : null
+                  recipe.exported_image_urls[language] ? (() => {
+                    const cacheKey = exportLinksRefreshKey || recipe.updated_at;
+                    return (
+                    <span key={language} className="recipe-export-link-pair">
+                      <button
+                        type="button"
+                        className="recipe-export-download-button"
+                        onClick={() => {
+                          void downloadStoredExport(language);
+                        }}
+                      >
+                        Скачать {language.toUpperCase()}
+                      </button>
+                      <a
+                        href={withCacheBuster(proxiedMediaUrl(recipe.exported_image_urls[language]), cacheKey)}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        open
+                      </a>
+                      <a
+                        href={withCacheBuster(recipe.exported_image_urls[language], cacheKey)}
+                        target="_blank"
+                        rel="noreferrer"
+                        title="Публичный R2 URL"
+                      >
+                        public
+                      </a>
+                    </span>
+                    );
+                  })() : null
                 ))}
               </div>
             ) : null}
@@ -2288,7 +2546,7 @@ export default function RecipeEditorPage() {
               <div className="recipe-studio-canvas-wrap">
                 <div
                   ref={canvasRef}
-                  className="recipe-studio-canvas"
+                  className={captureMode ? "recipe-studio-canvas recipe-studio-canvas--capture" : "recipe-studio-canvas"}
                   style={{
                     background: `linear-gradient(155deg, ${recipe.gradient_from || "#fff4cf"}, ${recipe.gradient_to || "#b9efe4"})`,
                   }}
@@ -2319,7 +2577,7 @@ export default function RecipeEditorPage() {
                   onPointerUp={endElementTransform}
                   onPointerCancel={endElementTransform}
                 >
-                  {[...layout.elements].reverse().filter((element) => element.visible).map((element) => {
+                  {[...layout.elements].reverse().map((rawElement) => resolveElementForLanguage(rawElement, studioLanguage)).filter((element) => element.visible).map((element) => {
                     const value = valueForElement(recipe, element, studioLanguage);
                     const isSelected = selectedId === element.id;
                     const layerIndex = layout.elements.findIndex((candidate) => candidate.id === element.id);
@@ -2338,7 +2596,7 @@ export default function RecipeEditorPage() {
                           fontFamily: fontCss(element.fontFamily),
                           color: element.textColor ?? "#18202d",
                           background: textElement ? (element.backgroundEnabled === false ? "transparent" : hexToRgba(element.backgroundColor ?? "#ffffff", element.backgroundOpacity ?? 0.48)) : undefined,
-                          fontWeight: textElement && element.boldEnabled === false ? 400 : undefined,
+                          fontWeight: textElement ? (element.boldEnabled === false ? 400 : 900) : undefined,
                           textDecoration: textElement && element.underlineEnabled ? "underline" : undefined,
                           textAlign: element.align,
                           transform: `rotate(${element.rotation}deg) scale(${element.flipX ? -1 : 1}, ${element.flipY ? -1 : 1})`,
@@ -2352,26 +2610,38 @@ export default function RecipeEditorPage() {
                         {element.kind === "image" || element.kind === "asset" || element.kind === "logo" ? (
                           typeof value === "string" && value ? (
                             // eslint-disable-next-line @next/next/no-img-element
-                            <img src={value} alt="" />
+                            <img src={proxiedMediaUrl(value)} alt="" />
                           ) : (
                             <span>image</span>
                           )
                         ) : !Array.isArray(value) && element.arcBend && Math.abs(element.arcBend) > 1 ? (
-                          <span
+                          <svg
                             className="recipe-arc-text"
-                            style={{
-                              transform: `translateY(${element.arcBend > 0 ? "8%" : "-8%"}) skewY(${Math.max(-18, Math.min(18, -element.arcBend / 4))}deg)`,
-                              borderRadius: `${Math.abs(element.arcBend)}% / 38%`,
-                            }}
+                            viewBox="0 0 100 100"
+                            preserveAspectRatio="none"
                           >
-                            {value}
-                          </span>
+                            <path id={`arc-${element.id}`} d={arcPathD(element.arcBend)} fill="none" />
+                            <text
+                              textAnchor={arcTextAnchor(element.align).anchor}
+                              dominantBaseline="middle"
+                              style={{
+                                fontFamily: fontCss(element.fontFamily),
+                                fontSize: `${element.fontSize}px`,
+                                fontWeight: element.boldEnabled === false ? 400 : 900,
+                                textDecoration: element.underlineEnabled ? "underline" : "none",
+                              }}
+                            >
+                              <textPath href={`#arc-${element.id}`} startOffset={arcTextAnchor(element.align).offset}>
+                                {value}
+                              </textPath>
+                            </text>
+                          </svg>
                         ) : Array.isArray(value) ? (
-                          <ul>
+                          <div className="recipe-studio-lines">
                             {value.map((item, index) => (
-                              <li key={`${element.id}-${index}`}>{item}</li>
+                              <span key={`${element.id}-${index}`}>{item}</span>
                             ))}
-                          </ul>
+                          </div>
                         ) : (
                           <span>{value}</span>
                         )}
@@ -2400,7 +2670,7 @@ export default function RecipeEditorPage() {
                       />
                     </div>
                   ) : null}
-                  {layout.elements.filter((element) => element.visible).map((element) => {
+                  {layout.elements.map((rawElement) => resolveElementForLanguage(rawElement, studioLanguage)).filter((element) => element.visible).map((element) => {
                     const handle = offscreenHandlePosition(element);
                     if (!handle.isOffscreen) {
                       return null;
@@ -2429,53 +2699,205 @@ export default function RecipeEditorPage() {
               </div>
 
               <aside className="recipe-studio-sidebar">
-                <h2 className="books-panel__title">Элементы</h2>
-                <p className="books-section-help">Верхний слой в списке рисуется поверх остальных.</p>
-                <div className="recipe-studio-elements">
-                  {layout.elements.map((element) => (
-                    <div
-                      key={element.id}
-                      className={selectedId === element.id ? "recipe-studio-list-button recipe-studio-list-button--active" : "recipe-studio-list-button"}
-                      draggable
-                      onDragStart={(event) => {
-                        layerDragStateRef.current = { id: element.id };
-                        event.dataTransfer.effectAllowed = "move";
-                        event.dataTransfer.setData("text/plain", element.id);
-                      }}
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        event.dataTransfer.dropEffect = "move";
-                      }}
-                      onDrop={(event) => {
-                        event.preventDefault();
-                        const draggedId = layerDragStateRef.current?.id || event.dataTransfer.getData("text/plain");
-                        moveLayer(draggedId, element.id);
-                      }}
-                      onDragEnd={() => {
-                        layerDragStateRef.current = null;
-                      }}
-                      onClick={() => setSelectedId(element.id)}
-                    >
-                      <span className="recipe-studio-list-button__label">
-                        <small className="recipe-studio-list-button__handle">move</small>
-                        <span>{element.label}</span>
-                      </span>
-                      <span className="recipe-studio-list-button__meta">
-                        <small>{element.visible ? "visible" : "hidden"}</small>
+                <div className="recipe-layer-panel">
+                  <button
+                    type="button"
+                    className="recipe-layer-panel__toggle"
+                    onClick={() => setLayerPanelOpen((current) => !current)}
+                  >
+                    <span>
+                      <strong>Слои</strong>
+                      <small>{layout.elements.length} элементов</small>
+                    </span>
+                    <b>{layerPanelOpen ? "Свернуть" : "Развернуть"}</b>
+                  </button>
+
+                  {layerPanelOpen ? (
+                    <>
+                      <p className="books-section-help">Верхний слой в списке рисуется поверх остальных. Отметьте несколько слоёв, чтобы создать группу.</p>
+                      <div className="books-actions">
                         <button
                           type="button"
-                          className="recipe-layer-delete-button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            removeElement(element.id);
-                          }}
-                          title="Удалить слой"
+                          className="books-button books-button--secondary"
+                          disabled={selectedLayerIds.length < 2}
+                          onClick={createGroupFromSelectedLayers}
                         >
-                          x
+                          Сгруппировать
                         </button>
-                      </span>
-                    </div>
-                  ))}
+                        <button
+                          type="button"
+                          className="books-button books-button--ghost"
+                          disabled={selectedLayerIds.length === 0}
+                          onClick={() => setSelectedLayerIds([])}
+                        >
+                          Снять выбор
+                        </button>
+                      </div>
+                      <div className="recipe-studio-elements">
+                        {layerRows.map((row) => (
+                          row.type === "group" ? (
+                            <div
+                              key={row.group.id}
+                              className={selectedGroupId === row.group.id ? "recipe-layer-group recipe-layer-group--active" : "recipe-layer-group"}
+                              draggable
+                              onDragStart={(event) => {
+                                layerDragStateRef.current = { id: row.group.id, type: "group" };
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/plain", row.group.id);
+                              }}
+                              onDragOver={(event) => {
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = "move";
+                              }}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                const dragged = layerDragStateRef.current;
+                                if (!dragged) {
+                                  return;
+                                }
+                                if (dragged.type === "group") {
+                                  moveGroup(dragged.id, row.group.id, "group");
+                                } else {
+                                  moveLayer(dragged.id, row.elements[0]?.id ?? "");
+                                }
+                              }}
+                              onDragEnd={() => {
+                                layerDragStateRef.current = null;
+                              }}
+                            >
+                              <div className="recipe-layer-group__head">
+                                <small className="recipe-studio-list-button__handle">move</small>
+                                <input
+                                  className="recipe-layer-group__name"
+                                  value={row.group.name}
+                                  onChange={(event) => renameGroup(row.group.id, event.target.value)}
+                                />
+                                <button
+                                  type="button"
+                                  className="recipe-layer-delete-button"
+                                  onClick={() => ungroup(row.group.id)}
+                                  title="Разгруппировать"
+                                >
+                                  split
+                                </button>
+                              </div>
+                              <div className="recipe-layer-group__items">
+                                {row.elements.map((element) => (
+                                  <button
+                                    type="button"
+                                    key={element.id}
+                                    className={selectedId === element.id ? "recipe-studio-list-button recipe-studio-list-button--active" : "recipe-studio-list-button"}
+                                    draggable
+                                    onDragStart={(event) => {
+                                      layerDragStateRef.current = { id: element.id, type: "element" };
+                                      event.dataTransfer.effectAllowed = "move";
+                                      event.dataTransfer.setData("text/plain", element.id);
+                                    }}
+                                    onDragOver={(event) => {
+                                      event.preventDefault();
+                                      event.dataTransfer.dropEffect = "move";
+                                    }}
+                                    onDrop={(event) => {
+                                      event.preventDefault();
+                                      const dragged = layerDragStateRef.current;
+                                      if (!dragged) {
+                                        return;
+                                      }
+                                      if (dragged.type === "group") {
+                                        moveGroup(dragged.id, element.id, "element");
+                                      } else {
+                                        moveLayer(dragged.id, element.id);
+                                      }
+                                    }}
+                                    onDragEnd={() => {
+                                      layerDragStateRef.current = null;
+                                    }}
+                                    onClick={() => setSelectedId(element.id)}
+                                  >
+                                    <span className="recipe-studio-list-button__label">
+                                      <input
+                                        type="checkbox"
+                                        className="recipe-layer-checkbox"
+                                        checked={selectedLayerIds.includes(element.id)}
+                                        onChange={(event) => {
+                                          event.stopPropagation();
+                                          toggleLayerSelection(element.id, event.target.checked);
+                                        }}
+                                        onClick={(event) => event.stopPropagation()}
+                                      />
+                                      <small className="recipe-studio-list-button__handle">move</small>
+                                      <span className="recipe-layer-title" title={element.label}>{element.label}</span>
+                                    </span>
+                                    <small className="recipe-layer-visibility">{element.visible ? "visible" : "hidden"}</small>
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div
+                              key={row.element.id}
+                              className={selectedId === row.element.id ? "recipe-studio-list-button recipe-studio-list-button--active" : "recipe-studio-list-button"}
+                              draggable
+                              onDragStart={(event) => {
+                                layerDragStateRef.current = { id: row.element.id, type: "element" };
+                                event.dataTransfer.effectAllowed = "move";
+                                event.dataTransfer.setData("text/plain", row.element.id);
+                              }}
+                              onDragOver={(event) => {
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = "move";
+                              }}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                const dragged = layerDragStateRef.current;
+                                if (!dragged) {
+                                  return;
+                                }
+                                if (dragged.type === "group") {
+                                  moveGroup(dragged.id, row.element.id, "element");
+                                } else {
+                                  moveLayer(dragged.id, row.element.id);
+                                }
+                              }}
+                              onDragEnd={() => {
+                                layerDragStateRef.current = null;
+                              }}
+                              onClick={() => setSelectedId(row.element.id)}
+                            >
+                              <span className="recipe-studio-list-button__label">
+                                <input
+                                  type="checkbox"
+                                  className="recipe-layer-checkbox"
+                                  checked={selectedLayerIds.includes(row.element.id)}
+                                  onChange={(event) => {
+                                    event.stopPropagation();
+                                    toggleLayerSelection(row.element.id, event.target.checked);
+                                  }}
+                                  onClick={(event) => event.stopPropagation()}
+                                />
+                                <small className="recipe-studio-list-button__handle">move</small>
+                                <span className="recipe-layer-title" title={row.element.label}>{row.element.label}</span>
+                              </span>
+                              <span className="recipe-studio-list-button__meta">
+                                <small className="recipe-layer-visibility">{row.element.visible ? "visible" : "hidden"}</small>
+                                <button
+                                  type="button"
+                                  className="recipe-layer-delete-button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    removeElement(row.element.id);
+                                  }}
+                                  title="Удалить слой"
+                                >
+                                  x
+                                </button>
+                              </span>
+                            </div>
+                          )
+                        ))}
+                      </div>
+                    </>
+                  ) : null}
                 </div>
 
                 {selectedElement ? (

@@ -34,6 +34,15 @@ function keyFromRequest(req: NextApiRequest) {
   return decodeURIComponent(url.pathname.replace(/^\/+/, "")).split("?")[0];
 }
 
+function safeFileName(value: string) {
+  return value
+    .trim()
+    .replace(/[/\\?%*:|"<>]+/g, "-")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 180);
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
@@ -54,7 +63,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const body = await fetchPublicR2Object(key);
     res.setHeader("Content-Type", contentTypeForKey(key));
-    res.setHeader("Cache-Control", "private, max-age=300");
+    res.setHeader("Cache-Control", "private, no-store");
+    if (req.query.download === "1") {
+      const requestedFileName = typeof req.query.filename === "string" ? safeFileName(req.query.filename) : "";
+      const fallbackFileName = safeFileName(key.split("/").filter(Boolean).pop() ?? "download");
+      res.setHeader("Content-Disposition", `attachment; filename="${requestedFileName || fallbackFileName}"`);
+    }
     return res.status(200).send(body);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load media object.";
