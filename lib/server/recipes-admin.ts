@@ -5,6 +5,7 @@ import {
   recipePayloadSchema,
   recipeRecordSchema,
   type RecipeListItem,
+  type RecipeLayoutTemplate,
   type RecipePayload,
   type RecipeRecord,
   type RecipeStep,
@@ -338,6 +339,64 @@ export async function listRecipes(
     page,
     limit,
   };
+}
+
+export async function listRecipeLayoutTemplates(
+  supabase: SupabaseClient,
+  args: { currentRecipeId?: string; limit?: number },
+): Promise<{ templates: RecipeLayoutTemplate[] }> {
+  const limit = Math.min(60, Math.max(1, args.limit ?? 30));
+  let query = supabase
+    .from("recipes")
+    .select("id,slug,title,country,updated_at,gradient_from,gradient_to,layout_json,exported_image_urls")
+    .order("updated_at", { ascending: false, nullsFirst: false })
+    .limit(limit);
+
+  if (args.currentRecipeId) {
+    query = query.neq("id", args.currentRecipeId);
+  }
+
+  const { data, error } = await query;
+  if (error) {
+    throw new Error(`Failed to load recipe templates: ${error.message}`);
+  }
+
+  const templates = ((data as Array<Record<string, unknown>> | null) ?? [])
+    .map((row): RecipeLayoutTemplate | null => {
+      const layoutJson = row.layout_json;
+      if (!layoutJson || typeof layoutJson !== "object" || Array.isArray(layoutJson)) {
+        return null;
+      }
+      const elements = (layoutJson as { elements?: unknown }).elements;
+      if (!Array.isArray(elements) || elements.length === 0) {
+        return null;
+      }
+      const exportedImageUrls = row.exported_image_urls && typeof row.exported_image_urls === "object" && !Array.isArray(row.exported_image_urls)
+        ? row.exported_image_urls as Record<string, unknown>
+        : {};
+      const previewUrl = typeof exportedImageUrls.ru === "string"
+        ? exportedImageUrls.ru
+        : typeof exportedImageUrls.en === "string"
+          ? exportedImageUrls.en
+          : typeof exportedImageUrls.he === "string"
+            ? exportedImageUrls.he
+            : null;
+
+      return {
+        id: String(row.id ?? ""),
+        slug: String(row.slug ?? ""),
+        title: String(row.title ?? "Recipe template"),
+        country: typeof row.country === "string" ? row.country : null,
+        updated_at: typeof row.updated_at === "string" ? row.updated_at : null,
+        gradient_from: typeof row.gradient_from === "string" ? row.gradient_from : null,
+        gradient_to: typeof row.gradient_to === "string" ? row.gradient_to : null,
+        layout_json: layoutJson as Record<string, unknown>,
+        preview_url: previewUrl,
+      };
+    })
+    .filter((template): template is RecipeLayoutTemplate => template !== null);
+
+  return { templates };
 }
 
 export async function loadRecipe(supabase: SupabaseClient, recipeId: string): Promise<RecipeRecord> {

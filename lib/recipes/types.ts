@@ -112,3 +112,15 @@ export type RecipeListItem = {
   is_active: boolean;
   created_at: string | null;
 };
+
+export type RecipeLayoutTemplate = {
+  id: string;
+  slug: string;
+  title: string;
+  country: string | null;
+  updated_at: string | null;
+  gradient_from: string | null;
+  gradient_to: string | null;
+  layout_json: Record<string, unknown>;
+  preview_url: string | null;
+};

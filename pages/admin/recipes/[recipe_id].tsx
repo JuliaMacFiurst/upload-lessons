@@ -6,11 +6,11 @@ import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../../components/AdminLogout";
 import { AdminTabs } from "../../../components/AdminTabs";
-import type { RecipeRecord } from "../../../lib/recipes/types";
+import type { RecipeLayoutTemplate, RecipeRecord } from "../../../lib/recipes/types";
 
 type RecipeLayoutElement = {
   id: string;
-  kind: "title" | "country" | "image" | "asset" | "logo" | "text" | "list" | "steps";
+  kind: "title" | "country" | "image" | "asset" | "logo" | "text" | "list" | "steps" | "step";
   label: string;
   source:
     | "title"
@@ -46,6 +46,7 @@ type RecipeLayoutElement = {
   url?: string;
   path?: string;
   groupId?: string;
+  stepIndex?: number;
   languageStyles?: Partial<Record<RecipeStudioLanguage, Partial<RecipeLanguageStyle>>>;
 };
 
@@ -352,6 +353,31 @@ function isTextElement(element: RecipeLayoutElement) {
   return element.kind !== "image" && element.kind !== "asset" && element.kind !== "logo";
 }
 
+function isRecipeTextSource(value: unknown): value is Exclude<RecipeLayoutElement["source"], "image_url" | "custom_image"> {
+  return value === "title"
+    || value === "country"
+    || value === "raccoon_caption"
+    || value === "cooking_time"
+    || value === "ingredients"
+    || value === "cooking_steps"
+    || value === "fact"
+    || value === "raccoon_advice"
+    || value === "serving_instructions"
+    || value === "laplapla_interaction_caption";
+}
+
+function isRecipeElementKind(value: unknown): value is RecipeLayoutElement["kind"] {
+  return value === "title"
+    || value === "country"
+    || value === "image"
+    || value === "asset"
+    || value === "logo"
+    || value === "text"
+    || value === "list"
+    || value === "steps"
+    || value === "step";
+}
+
 const LANGUAGE_STYLE_KEYS = new Set<keyof RecipeLanguageStyle>([
   "x",
   "y",
@@ -508,8 +534,14 @@ function elementTemplateSnapshot(layout: RecipeLayout) {
     align: element.align,
     visible: element.visible,
     groupId: element.groupId,
+    stepIndex: element.stepIndex,
     languageStyles: element.languageStyles,
   }));
+}
+
+function layoutTemplateElementCount(template: RecipeLayoutTemplate) {
+  const elements = template.layout_json.elements;
+  return Array.isArray(elements) ? elements.length : 0;
 }
 
 function mediaFoldersForPrefix(prefix: string, folders: string[]) {
@@ -736,11 +768,19 @@ function normalizeLayout(value: unknown): RecipeLayout {
         normalizedBrand.languageStyles = normalizeLanguageStyles(normalizedBrand, element.languageStyles);
         return normalizedBrand;
       }
+      const incomingKind = isRecipeElementKind(element.kind) ? element.kind : undefined;
+      const incomingSource = element.source;
       const baseElement: RecipeLayoutElement = fallbackElement ?? {
         id: element.id,
-        kind: element.kind === "logo" ? "logo" : element.kind === "asset" ? "asset" : "image",
-        label: element.label ?? "Изображение",
-        source: "custom_image",
+        kind: incomingKind === "asset" || incomingKind === "logo" || incomingKind === "image"
+          ? incomingKind
+          : incomingKind === "step" || incomingKind === "steps" || incomingKind === "list" || incomingKind === "title" || incomingKind === "country" || incomingKind === "text"
+            ? incomingKind
+            : "image",
+        label: element.label ?? (incomingKind === "step" ? "Шаг" : "Изображение"),
+        source: incomingSource === "custom_image" || incomingSource === "image_url" || isRecipeTextSource(incomingSource)
+          ? incomingSource
+          : "custom_image",
         x: 16,
         y: 16,
         width: 24,
@@ -763,8 +803,10 @@ function normalizeLayout(value: unknown): RecipeLayout {
       const normalizedElement: RecipeLayoutElement = {
         ...baseElement,
         ...element,
-        kind: element.kind === "asset" || element.kind === "logo" ? element.kind : baseElement.kind,
-        source: element.source === "custom_image" ? "custom_image" : baseElement.source,
+        kind: incomingKind ?? baseElement.kind,
+        source: incomingSource === "custom_image" || incomingSource === "image_url" || isRecipeTextSource(incomingSource)
+          ? incomingSource
+          : baseElement.source,
         x: Number(element.x ?? baseElement.x),
         y: Number(element.y ?? baseElement.y),
         width: Number(element.width ?? baseElement.width),
@@ -780,6 +822,7 @@ function normalizeLayout(value: unknown): RecipeLayout {
         arcBend: Number(element.arcBend ?? baseElement.arcBend ?? 0),
         rotation: Number(element.rotation ?? baseElement.rotation),
         groupId: typeof element.groupId === "string" ? element.groupId : undefined,
+        stepIndex: Number.isInteger(element.stepIndex) ? element.stepIndex : undefined,
         flipX: element.flipX === true,
         flipY: element.flipY === true,
         visible: element.visible !== false,
@@ -881,7 +924,21 @@ function valueForElement(
     return element.url ?? "";
   }
 
+  if (element.source === "cooking_steps" && element.kind === "step") {
+    const steps = recipeTextForLanguage(recipe, language, "cooking_steps");
+    const stepIndex = Math.max(0, element.stepIndex ?? 0);
+    return Array.isArray(steps) ? steps[stepIndex] ?? "" : "";
+  }
+
   return recipeTextForLanguage(recipe, language, element.source);
+}
+
+function cookingStepCount(recipe: RecipeRecord) {
+  return Math.max(
+    recipe.cooking_steps.length,
+    recipe.translations.en?.cooking_steps?.length ?? 0,
+    recipe.translations.he?.cooking_steps?.length ?? 0,
+  );
 }
 
 export default function RecipeEditorPage() {
@@ -942,6 +999,10 @@ export default function RecipeEditorPage() {
   const [selectedLayerIds, setSelectedLayerIds] = useState<string[]>([]);
   const [captureMode, setCaptureMode] = useState(false);
   const [exportLinksRefreshKey, setExportLinksRefreshKey] = useState(0);
+  const [templatePanelOpen, setTemplatePanelOpen] = useState(false);
+  const [templates, setTemplates] = useState<RecipeLayoutTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [templatesError, setTemplatesError] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1011,6 +1072,21 @@ export default function RecipeEditorPage() {
       .catch(() => setMediaTree(fallbackMediaTree()))
       .finally(() => setMediaTreeLoading(false));
   }, [mediaRefreshKey, sessionChecked]);
+
+  useEffect(() => {
+    if (!sessionChecked || !templatePanelOpen || !recipeId) {
+      return;
+    }
+
+    setTemplatesLoading(true);
+    setTemplatesError(null);
+    fetchJson<{ templates: RecipeLayoutTemplate[] }>(
+      `/api/admin/recipes/templates?currentRecipeId=${encodeURIComponent(recipeId)}&limit=40`,
+    )
+      .then((data) => setTemplates(data.templates))
+      .catch((fetchError) => setTemplatesError(fetchError instanceof Error ? fetchError.message : String(fetchError)))
+      .finally(() => setTemplatesLoading(false));
+  }, [recipeId, sessionChecked, templatePanelOpen]);
 
   useEffect(() => {
     if (!recipe || !layoutLoadedRef.current) {
@@ -1156,6 +1232,102 @@ export default function RecipeEditorPage() {
         element.id === id ? patchElementForLanguage(element, patch, studioLanguage) : element
       )),
     }));
+  };
+
+  const splitCookingSteps = () => {
+    if (!recipe) {
+      return;
+    }
+
+    const count = cookingStepCount(recipe);
+    if (count === 0) {
+      setError("В рецепте пока нет шагов приготовления.");
+      return;
+    }
+
+    const sourceElement = selectedElementRaw?.source === "cooking_steps"
+      ? selectedElementRaw
+      : layout.elements.find((element) => element.id === "steps" || element.source === "cooking_steps");
+    const resolvedSource = sourceElement
+      ? resolveElementForLanguage(sourceElement, studioLanguage)
+      : {
+          x: 48,
+          y: 52,
+          width: 44,
+          height: 20,
+          fontSize: 17,
+          fontFamily: "Nunito" as RecipeFontFamily,
+          textColor: "#18202d",
+          backgroundColor: "#ffffff",
+          backgroundOpacity: 0.62,
+          backgroundEnabled: true,
+          underlineEnabled: false,
+          boldEnabled: true,
+          arcBend: 0,
+          rotation: 0,
+          align: "left" as const,
+          visible: true,
+        };
+    const stepHeight = Math.max(4, Math.min(10, (resolvedSource.height ?? 22) / Math.max(1, count)));
+    const createdAt = Date.now().toString(36);
+    const stepElements = Array.from({ length: count }, (_, index): RecipeLayoutElement => {
+      const y = Math.min(96, resolvedSource.y + index * (stepHeight + 0.8));
+      const element: RecipeLayoutElement = {
+        id: `step-${index + 1}-${createdAt}`,
+        kind: "step",
+        label: `Шаг ${index + 1}`,
+        source: "cooking_steps",
+        stepIndex: index,
+        x: resolvedSource.x,
+        y,
+        width: resolvedSource.width,
+        height: stepHeight,
+        fontSize: resolvedSource.fontSize,
+        fontFamily: resolvedSource.fontFamily,
+        textColor: resolvedSource.textColor,
+        backgroundColor: resolvedSource.backgroundColor,
+        backgroundOpacity: resolvedSource.backgroundOpacity,
+        backgroundEnabled: resolvedSource.backgroundEnabled,
+        underlineEnabled: resolvedSource.underlineEnabled,
+        boldEnabled: resolvedSource.boldEnabled,
+        arcBend: 0,
+        rotation: resolvedSource.rotation,
+        align: resolvedSource.align,
+        visible: true,
+      };
+      element.languageStyles = normalizeLanguageStyles(element, sourceElement?.languageStyles);
+      element.languageStyles = {
+        ru: { ...element.languageStyles.ru, y },
+        en: { ...element.languageStyles.en, y },
+        he: { ...element.languageStyles.he, y },
+      };
+      return element;
+    });
+
+    applyLayoutChange((current) => ({
+      ...current,
+      elements: [
+        ...current.elements
+          .filter((element) => element.kind !== "step" || element.source !== "cooking_steps")
+          .map((element) => (
+            element.source === "cooking_steps" && element.kind === "steps"
+              ? {
+                  ...element,
+                  visible: false,
+                  languageStyles: {
+                    ...(element.languageStyles ?? normalizeLanguageStyles(element, element.languageStyles)),
+                    ru: { ...(element.languageStyles?.ru ?? languageStyleFromElement(element)), visible: false },
+                    en: { ...(element.languageStyles?.en ?? languageStyleFromElement(element)), visible: false },
+                    he: { ...(element.languageStyles?.he ?? languageStyleFromElement(element)), visible: false },
+                  },
+                }
+              : element
+          )),
+        ...stepElements,
+      ],
+    }));
+    setSelectedId(stepElements[0]?.id ?? selectedId);
+    setSuccess(`Шаги разделены на отдельные блоки: ${count}.`);
   };
 
   const toggleLayerSelection = (id: string, checked: boolean) => {
@@ -1393,6 +1565,25 @@ export default function RecipeEditorPage() {
     };
     console.log("Recipe Studio template", snapshot);
     setSuccess("Шаблон выведен в console.log.");
+  };
+
+  const applyLayoutTemplate = (template: RecipeLayoutTemplate) => {
+    if (!recipe) {
+      return;
+    }
+
+    const nextLayout = normalizeLayout(template.layout_json);
+    pushLayoutHistory(layout);
+    setLayout(nextLayout);
+    setRecipe((current) => current ? {
+      ...current,
+      gradient_from: template.gradient_from ?? current.gradient_from,
+      gradient_to: template.gradient_to ?? current.gradient_to,
+    } : current);
+    setSelectedId(nextLayout.elements[0]?.id ?? "title");
+    setSelectedLayerIds([]);
+    setTemplatePanelOpen(false);
+    setSuccess(`Шаблон применен: ${template.title}. Тексты остались из текущего рецепта.`);
   };
 
   const saveRecipe = async (nextRecipe: RecipeRecord, nextLayout: RecipeLayout) => {
@@ -2345,7 +2536,69 @@ export default function RecipeEditorPage() {
               >
                 Console template
               </button>
+              <button
+                type="button"
+                className="books-button books-button--secondary"
+                onClick={() => setTemplatePanelOpen(true)}
+              >
+                Шаблоны
+              </button>
             </div>
+
+            {templatePanelOpen ? (
+              <div className="recipe-template-modal" role="dialog" aria-modal="true" aria-label="Шаблоны рецепта">
+                <div className="recipe-template-modal__panel">
+                  <div className="recipe-template-modal__head">
+                    <div>
+                      <strong>Шаблоны layout</strong>
+                      <p>Выберите сохраненный layout из другого рецепта. Тексты подставятся из текущего рецепта.</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="books-button books-button--ghost"
+                      onClick={() => setTemplatePanelOpen(false)}
+                    >
+                      Закрыть
+                    </button>
+                  </div>
+
+                  {templatesLoading ? (
+                    <div className="recipe-template-state">Загрузка шаблонов...</div>
+                  ) : templatesError ? (
+                    <div className="books-alert books-alert--error">{templatesError}</div>
+                  ) : templates.length === 0 ? (
+                    <div className="recipe-template-state">Пока нет сохраненных layout-шаблонов.</div>
+                  ) : (
+                    <div className="recipe-template-grid">
+                      {templates.map((template) => (
+                        <button
+                          key={template.id}
+                          type="button"
+                          className="recipe-template-card"
+                          onClick={() => applyLayoutTemplate(template)}
+                        >
+                          <span
+                            className="recipe-template-card__preview"
+                            style={{
+                              background: `linear-gradient(155deg, ${template.gradient_from || "#fff4cf"}, ${template.gradient_to || "#b9efe4"})`,
+                            }}
+                          >
+                            {template.preview_url ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={proxiedMediaUrl(template.preview_url)} alt="" />
+                            ) : (
+                              <span>{layoutTemplateElementCount(template)} layers</span>
+                            )}
+                          </span>
+                          <span className="recipe-template-card__title">{template.title}</span>
+                          <small>{template.country || template.slug}</small>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
 
             <div className="recipe-media-library">
               <div className="recipe-media-library__head">
@@ -2966,6 +3219,18 @@ export default function RecipeEditorPage() {
                             onChange={(event) => updateElement(selectedElement.id, { arcBend: Number(event.target.value) })}
                           />
                         </label>
+                      </div>
+                    ) : null}
+
+                    {selectedElement.source === "cooking_steps" ? (
+                      <div className="books-actions">
+                        <button
+                          type="button"
+                          className="books-button books-button--secondary"
+                          onClick={splitCookingSteps}
+                        >
+                          Разделить шаги на блоки
+                        </button>
                       </div>
                     ) : null}
 
