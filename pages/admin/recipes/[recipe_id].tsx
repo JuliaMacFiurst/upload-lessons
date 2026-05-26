@@ -317,13 +317,6 @@ function proxiedMediaUrl(url: string) {
   }
 }
 
-function proxiedDownloadUrl(url: string, fileName: string, cacheKey?: string | number | null) {
-  const proxyUrl = proxiedMediaUrl(url);
-  const separator = proxyUrl.includes("?") ? "&" : "?";
-  const cachePart = cacheKey ? `&v=${encodeURIComponent(String(cacheKey))}` : "";
-  return `${proxyUrl}${separator}download=1&filename=${encodeURIComponent(fileName)}${cachePart}`;
-}
-
 function nextAnimationFrame() {
   return new Promise<void>((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -1754,25 +1747,26 @@ export default function RecipeEditorPage() {
     }
   };
 
-  const downloadStoredExport = async (language: RecipeStudioLanguage) => {
-    if (!recipe?.exported_image_urls[language]) {
+  const downloadCurrentExport = async (language: RecipeStudioLanguage) => {
+    if (!recipe) {
       return;
     }
 
+    setExporting(true);
     setError(null);
     setSuccess(null);
+    const previousLanguage = studioLanguage;
     try {
+      const blob = await renderRecipeDomToPngBlob(language);
       const fileName = `${recipe.slug || "recipe"}-${language}-pinterest.png`;
-      const response = await fetch(proxiedDownloadUrl(recipe.exported_image_urls[language], fileName, exportLinksRefreshKey || recipe.updated_at), {
-        credentials: "same-origin",
-      });
-      if (!response.ok) {
-        throw new Error(`Не удалось скачать export (${response.status}).`);
-      }
-      const blob = await response.blob();
       downloadBlob(blob, fileName);
-    } catch (downloadError) {
-      setError(downloadError instanceof Error ? downloadError.message : String(downloadError));
+      setSuccess(`PNG экспортирован: ${language.toUpperCase()}.`);
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : String(exportError));
+    } finally {
+      setStudioLanguage(previousLanguage);
+      setCaptureMode(false);
+      setExporting(false);
     }
   };
 
@@ -1972,10 +1966,10 @@ export default function RecipeEditorPage() {
             className="books-button books-button--success"
             disabled={!recipe || exporting || uploadingExport}
             onClick={() => {
-              void uploadPng([studioLanguage]);
+              void uploadPng(["ru", "en", "he"]);
             }}
           >
-            {uploadingExport ? "Загрузка..." : "Загрузить PNG"}
+            {uploadingExport ? "Загрузка..." : "Загрузить 3 PNG"}
           </button>
         </div>
       </header>
@@ -2516,7 +2510,7 @@ export default function RecipeEditorPage() {
                         type="button"
                         className="recipe-export-download-button"
                         onClick={() => {
-                          void downloadStoredExport(language);
+                          void downloadCurrentExport(language);
                         }}
                       >
                         Скачать {language.toUpperCase()}
