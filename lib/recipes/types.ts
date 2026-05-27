@@ -67,6 +67,7 @@ export const recipePayloadSchema = z.object({
   description: optionalTextSchema,
   image_url: optionalUrlSchema,
   country: optionalTextSchema,
+  country_target_id: optionalTextSchema,
   ingredients: stringArraySchema,
   fact: optionalTextSchema,
   raccoon_caption: optionalTextSchema,

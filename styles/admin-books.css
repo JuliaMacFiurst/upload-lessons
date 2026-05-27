@@ -341,7 +341,8 @@
 
 .recipe-gradient-panel,
 .recipe-logo-panel,
-.recipe-free-text-form {
+.recipe-free-text-form,
+.recipe-position-sync {
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
@@ -355,6 +356,17 @@
 .recipe-free-text-form .books-input {
   min-width: 220px;
   flex: 1 1 220px;
+}
+
+.recipe-position-sync {
+  padding: 8px;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #f8fbfe;
+}
+
+.recipe-position-sync .books-field {
+  min-width: 150px;
 }
 
 .recipe-gradient-presets {
@@ -832,6 +844,72 @@
 
 .recipe-media-panel {
   gap: 18px;
+}
+
+.recipe-country-target-panel {
+  gap: 14px;
+}
+
+.recipe-country-target-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+}
+
+.recipe-country-target-current {
+  display: grid;
+  gap: 4px;
+  min-width: 190px;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  padding: 9px 12px;
+  background: #f8fbfe;
+  color: #68778c;
+  font-size: 0.86rem;
+}
+
+.recipe-country-target-current strong {
+  color: #223044;
+  font-size: 0.98rem;
+}
+
+.recipe-country-target-results {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.recipe-country-target-button {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  padding: 9px 11px;
+  background: #ffffff;
+  color: #223044;
+  text-align: left;
+  cursor: pointer;
+}
+
+.recipe-country-target-button:hover,
+.recipe-country-target-button--active {
+  border-color: #0f4c81;
+  box-shadow: 0 0 0 3px rgba(15, 76, 129, 0.12);
+}
+
+.recipe-country-target-button strong,
+.recipe-country-target-button span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recipe-country-target-button span {
+  color: #68778c;
+  font-size: 0.86rem;
 }
 
 .recipe-media-grid {

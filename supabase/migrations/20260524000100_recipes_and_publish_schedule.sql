@@ -16,6 +16,7 @@ create table if not exists public.recipes (
   description text null,
   image_url text null,
   country text null,
+  country_target_id text null,
   ingredients jsonb not null default '[]'::jsonb,
   fact text null,
   raccoon_caption text null,
@@ -76,6 +77,10 @@ create index if not exists recipes_publish_date_idx
 
 create index if not exists recipes_slug_idx
   on public.recipes (slug);
+
+create index if not exists recipes_country_target_id_idx
+  on public.recipes (country_target_id)
+  where country_target_id is not null;
 
 create index if not exists publication_schedule_slot_publish_idx
   on public.publication_schedule_items (slot_key, status, publish_at);

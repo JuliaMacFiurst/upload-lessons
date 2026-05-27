@@ -144,6 +144,13 @@ type MediaTreeNode = {
   children: MediaTreeNode[];
 };
 
+type CountryTarget = {
+  target_id: string;
+  title_ru: string | null;
+  title_en: string | null;
+  title_he: string | null;
+};
+
 type CropRect = {
   x: number;
   y: number;
@@ -966,6 +973,11 @@ function cookingStepCount(recipe: RecipeRecord) {
   );
 }
 
+function countryTargetLabel(target: CountryTarget) {
+  const title = target.title_ru || target.title_en || target.title_he;
+  return title ? `${title} (${target.target_id})` : target.target_id;
+}
+
 export default function RecipeEditorPage() {
   const router = useRouter();
   const supabase = createClientComponentClient();
@@ -1032,6 +1044,11 @@ export default function RecipeEditorPage() {
   const [cropPanelOpen, setCropPanelOpen] = useState(true);
   const [r2PanelOpen, setR2PanelOpen] = useState(true);
   const [freeTextValue, setFreeTextValue] = useState("");
+  const [countryTargetQuery, setCountryTargetQuery] = useState("");
+  const [countryTargets, setCountryTargets] = useState<CountryTarget[]>([]);
+  const [countryTargetsLoading, setCountryTargetsLoading] = useState(false);
+  const [countryTargetsError, setCountryTargetsError] = useState<string | null>(null);
+  const [positionSourceLanguage, setPositionSourceLanguage] = useState<RecipeStudioLanguage>("ru");
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1116,6 +1133,25 @@ export default function RecipeEditorPage() {
       .catch((fetchError) => setTemplatesError(fetchError instanceof Error ? fetchError.message : String(fetchError)))
       .finally(() => setTemplatesLoading(false));
   }, [recipeId, sessionChecked, templatePanelOpen]);
+
+  useEffect(() => {
+    if (!sessionChecked) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setCountryTargetsLoading(true);
+      setCountryTargetsError(null);
+      fetchJson<{ targets: CountryTarget[] }>(
+        `/api/admin/recipes/country-targets?q=${encodeURIComponent(countryTargetQuery)}&limit=30`,
+      )
+        .then((data) => setCountryTargets(data.targets))
+        .catch((fetchError) => setCountryTargetsError(fetchError instanceof Error ? fetchError.message : String(fetchError)))
+        .finally(() => setCountryTargetsLoading(false));
+    }, 250);
+
+    return () => clearTimeout(timer);
+  }, [countryTargetQuery, sessionChecked]);
 
   useEffect(() => {
     if (!recipe || !layoutLoadedRef.current) {
@@ -1286,6 +1322,51 @@ export default function RecipeEditorPage() {
         };
       }),
     }));
+  };
+
+  const syncElementPositionsFromLanguage = () => {
+    const targetLanguages = (["ru", "en", "he"] as const).filter((language) => language !== positionSourceLanguage);
+    const copiedStyleKeys: Array<keyof RecipeLanguageStyle> = [
+      "x",
+      "y",
+      "width",
+      "height",
+      "fontSize",
+      "fontFamily",
+      "textColor",
+      "backgroundEnabled",
+      "backgroundColor",
+      "backgroundOpacity",
+      "underlineEnabled",
+      "boldEnabled",
+      "arcBend",
+      "rotation",
+      "align",
+    ];
+    applyLayoutChange((current) => ({
+      ...current,
+      elements: current.elements.map((element) => {
+        const styles = element.languageStyles ?? normalizeLanguageStyles(element, element.languageStyles);
+        const sourceStyle = styles[positionSourceLanguage] ?? languageStyleFromElement(element);
+        const copiedStyle = Object.fromEntries(
+          copiedStyleKeys.map((key) => [key, sourceStyle[key]]),
+        ) as Partial<RecipeLanguageStyle>;
+        return {
+          ...element,
+          languageStyles: {
+            ...styles,
+            ...Object.fromEntries(targetLanguages.map((language) => [
+              language,
+              {
+                ...(styles[language] ?? languageStyleFromElement(element)),
+                ...copiedStyle,
+              },
+            ])),
+          },
+        };
+      }),
+    }));
+    setSuccess(`Layout скопирован из ${positionSourceLanguage.toUpperCase()} в ${targetLanguages.map((language) => language.toUpperCase()).join(" и ")}.`);
   };
 
   const splitCookingSteps = () => {
@@ -1555,6 +1636,13 @@ export default function RecipeEditorPage() {
     setFreeTextValue("");
     setSelectedId(id);
     setSuccess("Свободный текст добавлен как новый слой.");
+  };
+
+  const selectCountryTarget = (targetId: string | null) => {
+    setRecipe((current) => current ? {
+      ...current,
+      country_target_id: targetId,
+    } : current);
   };
 
   const setBrandLogo = (logo: typeof LOGO_OPTIONS[number]) => {
@@ -2274,6 +2362,60 @@ export default function RecipeEditorPage() {
 
       {recipe ? (
         <>
+          <section className="books-panel recipe-country-target-panel">
+            <div className="books-section-head">
+              <div>
+                <h2 className="books-panel__title">Страна на карте</h2>
+                <p className="books-section-help">
+                  Привязка рецепта к `map_targets.target_id` только для `map_type = country`.
+                </p>
+              </div>
+              {recipe.country_target_id ? (
+                <button
+                  type="button"
+                  className="books-button books-button--ghost"
+                  onClick={() => selectCountryTarget(null)}
+                >
+                  Очистить
+                </button>
+              ) : null}
+            </div>
+            <div className="recipe-country-target-picker">
+              <label className="books-field">
+                <span className="books-field__label">Поиск country target</span>
+                <input
+                  className="books-input"
+                  value={countryTargetQuery}
+                  onChange={(event) => setCountryTargetQuery(event.target.value)}
+                  placeholder="indonesia, Индонезия, target_id..."
+                />
+              </label>
+              <div className="recipe-country-target-current">
+                <span>Выбрано:</span>
+                <strong>{recipe.country_target_id || "не выбрано"}</strong>
+              </div>
+            </div>
+            {countryTargetsLoading ? <div className="books-section-help">Загрузка стран...</div> : null}
+            {countryTargetsError ? <div className="books-alert books-alert--error">{countryTargetsError}</div> : null}
+            <div className="recipe-country-target-results">
+              {countryTargets.map((target) => (
+                <button
+                  key={target.target_id}
+                  type="button"
+                  className={recipe.country_target_id === target.target_id ? "recipe-country-target-button recipe-country-target-button--active" : "recipe-country-target-button"}
+                  title={countryTargetLabel(target)}
+                  onClick={() => selectCountryTarget(target.target_id)}
+                >
+                  <strong>{target.target_id}</strong>
+                  <span>{target.title_ru || target.title_en || target.title_he || "Без названия"}</span>
+                </button>
+              ))}
+              {!countryTargetsLoading && countryTargets.length === 0 ? (
+                <div className="books-section-help">Страны не найдены.</div>
+              ) : null}
+            </div>
+          </section>
+
           <section className="books-panel recipe-media-panel">
             <div className="books-section-head">
               <div>
@@ -2649,6 +2791,28 @@ export default function RecipeEditorPage() {
                   Добавить текст
                 </button>
               </form>
+
+              <div className="recipe-position-sync">
+                <label className="books-field">
+                  <span className="books-field__label">Позиции из языка</span>
+                  <select
+                    className="books-input"
+                    value={positionSourceLanguage}
+                    onChange={(event) => setPositionSourceLanguage(event.target.value as RecipeStudioLanguage)}
+                  >
+                    <option value="ru">RU</option>
+                    <option value="en">EN</option>
+                    <option value="he">HE</option>
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  className="books-button books-button--secondary"
+                  onClick={syncElementPositionsFromLanguage}
+                >
+                  Скопировать layout
+                </button>
+              </div>
 
               <button
                 type="button"
