@@ -258,6 +258,262 @@
   letter-spacing: 0;
 }
 
+.bedtime-slide-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 14px;
+}
+
+.bedtime-mini-slide {
+  position: relative;
+  aspect-ratio: 4 / 5;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff8ed;
+  color: #1f2937;
+}
+
+.bedtime-mini-slide img,
+.bedtime-mini-slide__empty {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #7c8798;
+  background: #f3efe8;
+}
+
+.bedtime-mini-slide__text {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 26px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(255, 251, 244, 0.88);
+  font-family: "Amatic SC", cursive;
+  font-weight: 700;
+  font-size: 1.4rem;
+  line-height: 1.05;
+}
+
+.bedtime-mini-slide > span {
+  position: absolute;
+  right: 10px;
+  top: 8px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.8);
+  font-weight: 800;
+  font-size: 0.74rem;
+}
+
+.bedtime-editor-grid {
+  display: grid;
+  grid-template-columns: minmax(190px, 260px) minmax(280px, 420px) minmax(280px, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.bedtime-slide-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 720px;
+  overflow: auto;
+}
+
+.bedtime-slide-button {
+  display: grid;
+  grid-template-columns: 34px 1fr;
+  gap: 4px 10px;
+  align-items: start;
+  text-align: left;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #fbfdff;
+  padding: 10px;
+  cursor: pointer;
+}
+
+.bedtime-slide-button--active {
+  border-color: #111827;
+  background: #f1f5f9;
+}
+
+.bedtime-slide-button span {
+  grid-row: span 2;
+  font-weight: 900;
+  color: #111827;
+}
+
+.bedtime-slide-button strong {
+  font-size: 0.9rem;
+}
+
+.bedtime-slide-button small {
+  color: #657387;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.bedtime-preview-column {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.bedtime-canvas {
+  position: relative;
+  width: min(100%, 360px);
+  aspect-ratio: 4 / 5;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid #cfd8e3;
+  background: #fff8ed;
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.12);
+  color: #1c2430;
+}
+
+.bedtime-canvas__image,
+.bedtime-canvas__empty {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bedtime-canvas__empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background:
+    linear-gradient(145deg, rgba(255, 255, 255, 0.65), rgba(240, 230, 214, 0.75)),
+    #f7efe2;
+  color: #7c8798;
+  font-weight: 800;
+}
+
+.bedtime-canvas__text {
+  position: absolute;
+  left: 7%;
+  right: 7%;
+  bottom: 8%;
+  min-height: 20%;
+  padding: 16px 18px;
+  border-radius: 8px;
+  background: rgba(255, 251, 244, 0.9);
+  font-family: "Amatic SC", cursive;
+  font-weight: 700;
+  font-size: 3rem;
+  line-height: 0.98;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.bedtime-canvas__brand,
+.bedtime-canvas__number {
+  position: absolute;
+  top: 4%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  font-weight: 900;
+  font-size: 0.82rem;
+}
+
+.bedtime-canvas__brand {
+  left: 5%;
+}
+
+.bedtime-canvas__number {
+  right: 5%;
+}
+
+.bedtime-canvas__assets {
+  position: absolute;
+  left: 6%;
+  top: 12%;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.bedtime-canvas__assets img {
+  width: 42px;
+  height: 42px;
+  object-fit: contain;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.bedtime-slide-tools {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.bedtime-asset-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.bedtime-asset-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  padding: 10px;
+  background: #fbfdff;
+}
+
+.bedtime-asset-card img {
+  width: 100%;
+  aspect-ratio: 1;
+  object-fit: contain;
+  border-radius: 8px;
+  background: #fff8ed;
+}
+
+.bedtime-asset-card small {
+  color: #657387;
+}
+
+.bedtime-export-bank {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  width: 360px;
+  pointer-events: none;
+  opacity: 0.01;
+}
+
+.bedtime-export-bank .bedtime-canvas {
+  width: 360px;
+  margin-bottom: 20px;
+}
+
+@media (max-width: 1100px) {
+  .bedtime-editor-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .bedtime-slide-list {
+    max-height: none;
+  }
+}
+
 .recipe-preview__image {
   width: 100%;
   height: 128px;
