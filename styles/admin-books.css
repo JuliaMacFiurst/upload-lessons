@@ -682,6 +682,7 @@
 .bedtime-export-bank .bedtime-canvas {
   width: 360px;
   margin-bottom: 20px;
+  box-shadow: none;
 }
 
 @media (max-width: 1100px) {

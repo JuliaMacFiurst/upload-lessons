@@ -398,12 +398,9 @@ export async function saveBedtimeStoryExportUrl(
   language: BedtimeStoryLanguage,
   slideNumber: number,
   publicUrl: string,
-  layerName?: string,
 ): Promise<BedtimeStoryRecord> {
   const story = await loadBedtimeStory(supabase, storyId);
-  const key = layerName
-    ? `${language}-${String(slideNumber).padStart(2, "0")}-layer-${layerName}`
-    : `${language}-${String(slideNumber).padStart(2, "0")}`;
+  const key = `${language}-${String(slideNumber).padStart(2, "0")}`;
   const exportedImageUrls = {
     ...story.exported_image_urls,
     [key]: publicUrl,

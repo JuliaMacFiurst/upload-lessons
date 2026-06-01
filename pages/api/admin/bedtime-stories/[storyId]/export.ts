@@ -1,3 +1,4 @@
+import sharp from "sharp";
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminSession } from "../../../../../lib/server/admin-session";
 import {
@@ -19,7 +20,6 @@ type ExportBody = {
   slideNumber?: number;
   imageBase64?: string;
   contentType?: string;
-  layerName?: string;
 };
 
 const FALLBACK_BUCKET = process.env.BEDTIME_STORY_STORAGE_BUCKET || "recipes";
@@ -39,6 +39,16 @@ function decodeImageBase64(value: string): Buffer {
     throw new Error("Missing image payload.");
   }
   return Buffer.from(payload, "base64");
+}
+
+async function normalizeExportImage(input: Buffer, contentType: "image/png" | "image/webp") {
+  if (contentType === "image/webp") {
+    return sharp(input, { limitInputPixels: 80_000_000 })
+      .rotate()
+      .webp({ quality: 92, alphaQuality: 95 })
+      .toBuffer();
+  }
+  return input;
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -74,17 +84,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Missing imageBase64." });
     }
 
-    const contentType = body.contentType === "image/webp" ? "image/webp" : "image/png";
-    const extension = contentType === "image/webp" ? "webp" : "png";
+    const contentType = body.contentType === "image/png" ? "image/png" : "image/webp";
+    const extension = contentType === "image/png" ? "png" : "webp";
     const story = await loadBedtimeStory(supabase, storyId);
     const slug = normalizeStorageSegment(story.slug || story.id);
-    const buffer = decodeImageBase64(body.imageBase64);
-    const layerName = typeof body.layerName === "string" && /^[a-z0-9_-]{1,40}$/i.test(body.layerName)
-      ? normalizeStorageSegment(body.layerName)
-      : "";
-    const path = layerName
-      ? `bedtime_story/${slug}/layered/${language}/slide-${String(slideNumber).padStart(2, "0")}/${layerName}.${extension}`
-      : `bedtime_story/${slug}/export/${language}/slide-${String(slideNumber).padStart(2, "0")}.${extension}`;
+    const input = decodeImageBase64(body.imageBase64);
+    const buffer = await normalizeExportImage(input, contentType);
+    const path = `bedtime_story/${slug}/export/${language}/slide-${String(slideNumber).padStart(2, "0")}.${extension}`;
     let publicUrl: string;
 
     if (hasR2Config()) {
@@ -103,8 +109,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       publicUrl = data.publicUrl;
     }
 
-    const updatedStory = await saveBedtimeStoryExportUrl(supabase, storyId, language, slideNumber, publicUrl, layerName || undefined);
-    return res.status(200).json({ ok: true, language, slideNumber, layerName: layerName || null, path, publicUrl, story: updatedStory });
+    const updatedStory = await saveBedtimeStoryExportUrl(supabase, storyId, language, slideNumber, publicUrl);
+    return res.status(200).json({ ok: true, language, slideNumber, path, publicUrl, story: updatedStory });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to upload bedtime story export.";
     return res.status(500).json({ error: message });

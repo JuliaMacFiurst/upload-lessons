@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent } from "react";
 import { toBlob } from "html-to-image";
+import JSZip from "jszip";
 import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../../components/AdminLogout";
@@ -163,8 +164,8 @@ const DEFAULT_STAMP_LAYOUT: BedtimeStampLayout = {
 
 const DEFAULT_NUMBER_LAYOUT: BedtimeNumberLayout = {
   kind: "bedtime_number_layout",
-  x: 84.8344,
-  y: 2.79861,
+  x: 42.6838,
+  y: 90.5521,
   width: 10,
   height: 8,
   fontSize: 24,
@@ -708,7 +709,6 @@ export default function BedtimeStoryEditorPage() {
   const supabase = createClientComponentClient();
   const slideRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const editorSlideRefs = useRef<Record<number, HTMLDivElement | null>>({});
-  const layerRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const textInteractionRef = useRef<TextInteraction | null>(null);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSavedStorySignatureRef = useRef("");
@@ -902,7 +902,7 @@ export default function BedtimeStoryEditorPage() {
     slide: BedtimeStorySlide,
     target: BedtimeEditableKind = "text",
   ) => {
-    const canvas = editorSlideRefs.current[slide.slide_number] ?? slideRefs.current[slide.slide_number];
+    const canvas = editorSlideRefs.current[slide.slide_number];
     if (!canvas) {
       return;
     }
@@ -939,7 +939,7 @@ export default function BedtimeStoryEditorPage() {
     if (!interaction) {
       return;
     }
-    const canvas = editorSlideRefs.current[interaction.slideNumber] ?? slideRefs.current[interaction.slideNumber];
+    const canvas = editorSlideRefs.current[interaction.slideNumber];
     if (!canvas) {
       return;
     }
@@ -1209,7 +1209,31 @@ export default function BedtimeStoryEditorPage() {
     }
   };
 
-  const renderSlideBlob = async (slideNumber: number): Promise<Blob> => {
+  const exportStoryForDreams = async () => {
+    if (!story) {
+      return;
+    }
+    setExporting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await saveStory(story, { silent: true, updateState: false });
+      const response = await fetch(`/api/admin/bedtime-stories/${story.id}/dreams-export?language=${language}`);
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({})) as { error?: string };
+        throw new Error(data.error || "Failed to export Story for Dreams.");
+      }
+      const blob = await response.blob();
+      downloadBlob(blob, `${story.slug || story.id}-dreams-psd-${language}.zip`);
+      setSuccess("Dreams PSD ZIP exported.");
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : String(exportError));
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const renderSlideBlob = async (slideNumber: number, contentType: "image/png" | "image/webp" = "image/png"): Promise<Blob> => {
     const node = slideRefs.current[slideNumber];
     if (!node) {
       throw new Error(`Slide ${slideNumber} is not available.`);
@@ -1224,42 +1248,22 @@ export default function BedtimeStoryEditorPage() {
       includeQueryParams: true,
       pixelRatio: scale,
       backgroundColor: "#fff8ed",
-    });
-    if (!blob) {
-      throw new Error("Failed to export slide PNG.");
-    }
-    return blob;
-  };
-
-  const renderLayerBlob = async (slideNumber: number, layerName: "background" | "text" | "logo" | "number" | "stamp" | "marker"): Promise<Blob> => {
-    const node = layerRefs.current[`${slideNumber}:${layerName}`];
-    if (!node) {
-      throw new Error(`Layer ${layerName} for slide ${slideNumber} is not available.`);
-    }
-
-    await document.fonts.ready;
-    await nextAnimationFrame();
-    const rect = node.getBoundingClientRect();
-    const scale = 1080 / rect.width;
-    const blob = await toBlob(node, {
-      cacheBust: true,
-      includeQueryParams: true,
-      pixelRatio: scale,
-      backgroundColor: layerName === "background" ? "#fff8ed" : "transparent",
+      type: contentType,
+      quality: contentType === "image/webp" ? 0.92 : 1,
       filter: (domNode) => {
         if (!(domNode instanceof HTMLElement)) {
           return true;
         }
-        return !domNode.classList.contains("bedtime-text-frame");
+        return !domNode.classList.contains("bedtime-text-frame") && !domNode.classList.contains("bedtime-layer-remove");
       },
     });
     if (!blob) {
-      throw new Error(`Failed to export ${layerName} layer PNG.`);
+      throw new Error(`Failed to export slide ${contentType}.`);
     }
     return blob;
   };
 
-  const downloadSlides = async (slideNumbers: number[]) => {
+  const downloadCurrentLanguagePngs = async () => {
     if (!story) {
       return;
     }
@@ -1267,13 +1271,19 @@ export default function BedtimeStoryEditorPage() {
     setError(null);
     setSuccess(null);
     try {
-      for (const slideNumber of slideNumbers) {
-        setActiveSlide(slideNumber);
-        await nextAnimationFrame();
-        const blob = await renderSlideBlob(slideNumber);
-        downloadBlob(blob, `${story.slug}-${language}-slide-${String(slideNumber).padStart(2, "0")}.png`);
+      await saveStory(story, { silent: true, updateState: false });
+      const zip = new JSZip();
+      const folder = zip.folder(`${story.slug || story.id}-${language}-png-slides`);
+      if (!folder) {
+        throw new Error("Failed to create PNG export folder.");
       }
-      setSuccess(`Downloaded ${slideNumbers.length} PNG slide(s).`);
+      for (const slide of story.slides) {
+        const blob = await renderSlideBlob(slide.slide_number, "image/png");
+        folder.file(`slide-${String(slide.slide_number).padStart(2, "0")}.png`, blob);
+      }
+      const archive = await zip.generateAsync({ type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 } });
+      downloadBlob(archive, `${story.slug || story.id}-${language}-png-slides.zip`);
+      setSuccess("Downloaded PNG slides ZIP.");
     } catch (downloadError) {
       setError(downloadError instanceof Error ? downloadError.message : String(downloadError));
     } finally {
@@ -1281,7 +1291,7 @@ export default function BedtimeStoryEditorPage() {
     }
   };
 
-  const uploadExports = async (slideNumbers: number[]) => {
+  const uploadCurrentLanguageWebps = async () => {
     if (!story) {
       return;
     }
@@ -1290,83 +1300,26 @@ export default function BedtimeStoryEditorPage() {
     setSuccess(null);
     try {
       let currentStory = story;
-      await saveStory(currentStory);
-      for (const slideNumber of slideNumbers) {
-        setActiveSlide(slideNumber);
-        await nextAnimationFrame();
-        const blob = await renderSlideBlob(slideNumber);
+      await saveStory(currentStory, { silent: true, updateState: false });
+      for (const slide of story.slides) {
+        const blob = await renderSlideBlob(slide.slide_number, "image/png");
         const imageBase64 = await blobToDataUrl(blob);
         const data = await fetchJson<{ story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${currentStory.id}/export`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             language,
-            slideNumber,
-            contentType: "image/png",
+            slideNumber: slide.slide_number,
+            contentType: "image/webp",
             imageBase64,
           }),
         });
         currentStory = data.story;
         setStory(data.story);
       }
-      setSuccess(`Uploaded ${slideNumbers.length} exported PNG slide(s) to R2.`);
-    } catch (exportError) {
-      setError(exportError instanceof Error ? exportError.message : String(exportError));
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const downloadCurrentLayers = async () => {
-    if (!story || !selectedSlide) {
-      return;
-    }
-    setExporting(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      for (const layerName of ["background", "text", "logo", "number", "stamp", "marker"] as const) {
-        const blob = await renderLayerBlob(selectedSlide.slide_number, layerName);
-        downloadBlob(blob, `${story.slug}-layered-${language}-slide-${String(selectedSlide.slide_number).padStart(2, "0")}-${layerName}.png`);
-      }
-      setSuccess("Downloaded current slide layers.");
-    } catch (downloadError) {
-      setError(downloadError instanceof Error ? downloadError.message : String(downloadError));
-    } finally {
-      setExporting(false);
-    }
-  };
-
-  const uploadCurrentLayers = async () => {
-    if (!story || !selectedSlide) {
-      return;
-    }
-    setExporting(true);
-    setError(null);
-    setSuccess(null);
-    try {
-      let currentStory = story;
-      await saveStory(currentStory);
-      for (const layerName of ["background", "text", "logo", "number", "stamp", "marker"] as const) {
-        const blob = await renderLayerBlob(selectedSlide.slide_number, layerName);
-        const imageBase64 = await blobToDataUrl(blob);
-        const data = await fetchJson<{ story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${currentStory.id}/export`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            language,
-            slideNumber: selectedSlide.slide_number,
-            contentType: "image/png",
-            imageBase64,
-            layerName,
-          }),
-        });
-        currentStory = data.story;
-        setStory(data.story);
-      }
-      setSuccess("Uploaded current slide layers to R2.");
-    } catch (exportError) {
-      setError(exportError instanceof Error ? exportError.message : String(exportError));
+      setSuccess(`Uploaded ${story.slides.length} WebP slide(s) to R2.`);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
     } finally {
       setExporting(false);
     }
@@ -1564,63 +1517,33 @@ export default function BedtimeStoryEditorPage() {
               </button>
               <button
                 type="button"
+                className="books-button books-button--success"
+                disabled={exporting}
+                onClick={() => {
+                  void exportStoryForDreams();
+                }}
+              >
+                {exporting ? "Exporting Dreams ZIP..." : "Export Story for Dreams"}
+              </button>
+              <button
+                type="button"
                 className="books-button books-button--secondary"
                 disabled={exporting}
                 onClick={() => {
-                  void downloadSlides([activeSlide]);
+                  void downloadCurrentLanguagePngs();
                 }}
               >
                 Download current PNG
               </button>
               <button
                 type="button"
-                className="books-button books-button--secondary"
-                disabled={exporting}
-                onClick={() => {
-                  void downloadSlides(story.slides.map((slide) => slide.slide_number));
-                }}
-              >
-                Download all PNG
-              </button>
-              <button
-                type="button"
                 className="books-button books-button--success"
                 disabled={exporting}
                 onClick={() => {
-                  void uploadExports([activeSlide]);
+                  void uploadCurrentLanguageWebps();
                 }}
               >
-                Upload current export
-              </button>
-              <button
-                type="button"
-                className="books-button books-button--success"
-                disabled={exporting}
-                onClick={() => {
-                  void uploadExports(story.slides.map((slide) => slide.slide_number));
-                }}
-              >
-                Upload all exports
-              </button>
-              <button
-                type="button"
-                className="books-button books-button--secondary"
-                disabled={exporting || !selectedSlide}
-                onClick={() => {
-                  void downloadCurrentLayers();
-                }}
-              >
-                Download current layers
-              </button>
-              <button
-                type="button"
-                className="books-button books-button--success"
-                disabled={exporting || !selectedSlide}
-                onClick={() => {
-                  void uploadCurrentLayers();
-                }}
-              >
-                Upload current layers
+                Upload current WebP
               </button>
             </div>
           </section>
@@ -1629,7 +1552,7 @@ export default function BedtimeStoryEditorPage() {
             <div className="books-section-head">
               <div>
                 <h2 className="books-panel__title">Slide editor</h2>
-                <p className="books-section-help">Upload a background image per slide. The preview and PNG export share this same 4:5 layout.</p>
+                <p className="books-section-help">Upload a background image per slide. The Dreams export packages the full story as layered PSD files in a ZIP archive.</p>
               </div>
             </div>
             <div className="bedtime-editor-grid">
@@ -2001,70 +1924,15 @@ export default function BedtimeStoryEditorPage() {
 
           <div className="bedtime-export-bank" aria-hidden="true">
             {story.slides.map((slide) => (
-              <div key={slide.slide_number}>
-                <SlideCanvas
-                  slide={slide}
-                  language={language}
-                  stamps={story.stamp_assets}
-                  captureRef={(node) => {
-                    slideRefs.current[slide.slide_number] = node;
-                  }}
-                />
-                <SlideCanvas
-                  slide={slide}
-                  language={language}
-                  stamps={story.stamp_assets}
-                  layerMode="background"
-                  captureRef={(node) => {
-                    layerRefs.current[`${slide.slide_number}:background`] = node;
-                  }}
-                />
-                <SlideCanvas
-                  slide={slide}
-                  language={language}
-                  stamps={story.stamp_assets}
-                  layerMode="text"
-                  captureRef={(node) => {
-                    layerRefs.current[`${slide.slide_number}:text`] = node;
-                  }}
-                />
-                <SlideCanvas
-                  slide={slide}
-                  language={language}
-                  stamps={story.stamp_assets}
-                  layerMode="logo"
-                  captureRef={(node) => {
-                    layerRefs.current[`${slide.slide_number}:logo`] = node;
-                  }}
-                />
-                <SlideCanvas
-                  slide={slide}
-                  language={language}
-                  stamps={story.stamp_assets}
-                  layerMode="number"
-                  captureRef={(node) => {
-                    layerRefs.current[`${slide.slide_number}:number`] = node;
-                  }}
-                />
-                <SlideCanvas
-                  slide={slide}
-                  language={language}
-                  stamps={story.stamp_assets}
-                  layerMode="stamp"
-                  captureRef={(node) => {
-                    layerRefs.current[`${slide.slide_number}:stamp`] = node;
-                  }}
-                />
-                <SlideCanvas
-                  slide={slide}
-                  language={language}
-                  stamps={story.stamp_assets}
-                  layerMode="marker"
-                  captureRef={(node) => {
-                    layerRefs.current[`${slide.slide_number}:marker`] = node;
-                  }}
-                />
-              </div>
+              <SlideCanvas
+                key={slide.slide_number}
+                slide={slide}
+                language={language}
+                stamps={story.stamp_assets}
+                captureRef={(node) => {
+                  slideRefs.current[slide.slide_number] = node;
+                }}
+              />
             ))}
           </div>
         </>
