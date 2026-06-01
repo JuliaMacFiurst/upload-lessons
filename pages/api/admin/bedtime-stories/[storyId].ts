@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminSession } from "../../../../lib/server/admin-session";
 import {
+  deleteBedtimeStory,
   handleBedtimeStoryValidationError,
   loadBedtimeStory,
   updateBedtimeStory,
@@ -36,8 +37,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
+  if (req.method === "DELETE") {
+    try {
+      await deleteBedtimeStory(supabase, storyId);
+      return res.status(200).json({ ok: true });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to delete bedtime story.";
+      return res.status(500).json({ error: message });
+    }
+  }
+
   if (req.method !== "POST") {
-    res.setHeader("Allow", "GET, POST");
+    res.setHeader("Allow", "GET, POST, DELETE");
     return res.status(405).json({ error: "Method not allowed" });
   }
 

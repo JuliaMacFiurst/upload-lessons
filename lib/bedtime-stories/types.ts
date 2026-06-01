@@ -71,7 +71,10 @@ export const bedtimeStoryPayloadSchema = z.object({
   title: localizedTextSchema,
   emotional_theme: optionalLocalizedTextSchema.default({ en: "", ru: "", he: "" }),
   full_json: z.record(z.string(), z.unknown()).default({}),
-  slides: z.array(bedtimeStorySlideSchema).length(10, "Bedtime story must contain exactly 10 slides."),
+  slides: z
+    .array(bedtimeStorySlideSchema)
+    .min(1, "Bedtime story must contain at least 1 slide.")
+    .max(10, "Instagram carousel supports up to 10 slides."),
   images: z.record(z.string(), z.string()).default({}),
   cover_image_url: nullableUrlSchema,
   instagram_caption: optionalLocalizedTextSchema.default({ en: "", ru: "", he: "" }),

@@ -124,7 +124,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: "language must be en, ru, or he." });
       }
       if (!Number.isInteger(slideNumber) || slideNumber < 1 || slideNumber > 10) {
-        return res.status(400).json({ error: "slideNumber must be 1-10." });
+        return res.status(400).json({ error: "slideNumber must be 1-10 for Instagram carousel export." });
       }
 
       const path = `bedtime_story/${slug}/${language}/slide-${String(slideNumber).padStart(2, "0")}.webp`;

@@ -269,6 +269,17 @@ export async function updateBedtimeStory(
   return loadBedtimeStory(supabase, storyId);
 }
 
+export async function deleteBedtimeStory(supabase: SupabaseClient, storyId: string): Promise<void> {
+  const { error } = await supabase
+    .from("bedtime_stories")
+    .delete()
+    .eq("id", storyId);
+
+  if (error) {
+    throw new Error(`Failed to delete bedtime story: ${error.message}`);
+  }
+}
+
 export async function saveBedtimeStorySlideImage(
   supabase: SupabaseClient,
   storyId: string,

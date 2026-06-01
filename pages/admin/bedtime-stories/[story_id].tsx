@@ -158,6 +158,7 @@ export default function BedtimeStoryEditorPage() {
   const [activeSlide, setActiveSlide] = useState(1);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [uploading, setUploading] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -258,6 +259,28 @@ export default function BedtimeStoryEditorPage() {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
     } finally {
       setUploading(null);
+    }
+  };
+
+  const deleteStory = async () => {
+    if (!story) {
+      return;
+    }
+    const confirmed = window.confirm(`Delete bedtime story "${story.title.en || story.slug}" from the database? This cannot be undone.`);
+    if (!confirmed) {
+      return;
+    }
+
+    setDeleting(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await fetchJson<{ ok: true }>(`/api/admin/bedtime-stories/${story.id}`, { method: "DELETE" });
+      await router.push("/admin/bedtime-stories");
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -376,12 +399,22 @@ export default function BedtimeStoryEditorPage() {
           <button
             type="button"
             className="books-button books-button--primary"
-            disabled={!story || saving || exporting}
+            disabled={!story || saving || exporting || deleting}
             onClick={() => {
               void saveStory();
             }}
           >
             {saving ? "Saving..." : "Save story"}
+          </button>
+          <button
+            type="button"
+            className="books-button books-button--danger"
+            disabled={!story || deleting || saving || exporting}
+            onClick={() => {
+              void deleteStory();
+            }}
+          >
+            {deleting ? "Deleting..." : "Delete story"}
           </button>
         </div>
       </header>

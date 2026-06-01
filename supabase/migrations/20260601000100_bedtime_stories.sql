@@ -31,7 +31,7 @@ create table if not exists public.bedtime_stories (
   check (jsonb_typeof(emotional_theme) = 'object'),
   check (jsonb_typeof(full_json) = 'object'),
   check (jsonb_typeof(slides) = 'array'),
-  check (jsonb_array_length(slides) = 10),
+  check (jsonb_array_length(slides) between 1 and 10),
   check (jsonb_typeof(images) = 'object'),
   check (jsonb_typeof(instagram_caption) = 'object'),
   check (jsonb_typeof(stamp_assets) = 'array'),

@@ -81,13 +81,186 @@ const bedtimeStoryJsonTemplate = `{
   ]
 }`;
 
-const bedtimeStoryProductionPrompt = `LapLapLa Emotional Bedtime Carousel Stories
+const bedtimeStoryProductionPrompt = `# LapLapLa Emotional Bedtime Story Prompt
 
-Create one Instagram bedtime carousel story as valid JSON only.
-Format: 10 slides, emotional illustrated story, primary language English with Russian and Hebrew versions.
-Style: remembered dream, emotional travel memory, strange peaceful moment from another world, physical detail plus emotional resonance, unexplained gentle behavior, atmosphere over plot, comfort plus ache, emotional geography, recurring motifs, watercolor storybook illustrations, ending without full resolution.
-Canvas intent: 1080 x 1350 Instagram carousel, Amatic text overlay, clean readable text area.
-Required JSON fields: title, emotional_theme, collection_tags, visual_tags, instagram_caption, hashtags, slides. Each slide requires slide_number, text.en, text.ru, text.he, illustration_prompt, stamp_prompt, marker_prompt, image_url, layers.`;
+Create a short bedtime carousel story for Instagram.
+
+The story should feel like:
+- a remembered dream
+- an emotional travel memory
+- a peaceful strange moment from another world
+- a quiet emotional refuge before sleep
+
+The story must combine:
+
+1. Physical detail  
+(real places, weather, sounds, textures, geography, objects)
+
+2. Emotional resonance  
+(a feeling reflected through the environment)
+
+3. Unexplained strange behavior of the world  
+(the world behaves emotionally, poetically, or mysteriously without explanation)
+
+The mysteries should NEVER be fully explained.
+
+The atmosphere is more important than plot.
+
+---
+
+# Emotional Tone
+
+The story should feel:
+- emotionally comforting
+- quiet
+- cinematic
+- dreamy
+- intimate
+- slightly melancholic
+- peaceful
+- emotionally immersive
+- warm but lonely
+
+The story should NOT feel:
+- childish
+- loud
+- comedic
+- motivational
+- hyperactive
+- horror-focused
+- overexplained
+- fake-deep
+- AI-generated
+
+---
+
+# Audience
+
+The audience:
+- emotionally tired adults
+- teenagers who love atmospheric worlds
+- people who save comforting nighttime content
+- lovers of cozy fantasy
+- lovers of illustrated books
+- lovers of emotional travel aesthetics
+- people who enjoy quiet emotional internet spaces
+
+---
+
+# Writing Style
+
+The prose should feel like:
+- emotional travel literature
+- fragments from a dream journal
+- poetic geography
+- magical realism written softly
+- emotional memories attached to places
+
+Writing style rules:
+- simple English
+- short emotionally visual sentences
+- minimal exposition
+- no long dialogue
+- no moral lessons
+- no direct explanation of emotions
+
+The writing should leave emotional space for the reader.
+
+---
+
+# Emotional Structure
+
+The pacing should feel like:
+
+1. emotional interruption
+2. immersion into atmosphere
+3. strange emotional detail
+4. quiet emotional realization
+5. lingering emotional ending
+
+The story should breathe slowly.
+
+---
+
+# Story Themes
+
+Possible themes:
+- homesickness
+- wandering
+- memory
+- emotional distance
+- quiet wonder
+- peaceful loneliness
+- strange comfort
+- longing
+- forgotten places
+- nighttime travel
+- oceans
+- trains
+- forests
+- islands
+- observatories
+- volcanoes
+- sleeping cities
+- distant lights
+- rain
+- stars
+
+---
+
+# Important Rules
+
+Avoid:
+- generic fantasy writing
+- generic poetic quotes
+- abstract emotional language without physical grounding
+- excessive plot
+- dramatic twists
+- action-heavy storytelling
+
+Always anchor emotions inside physical sensory reality.
+
+GOOD:
+“The train windows trembled softly during the storm.”
+
+BAD:
+“Sadness floated through the night.”
+
+GOOD:
+“The ocean sounded warmer near homesick travelers.”
+
+BAD:
+“The ocean understood sadness.”
+
+---
+
+# Ending Style
+
+The ending should feel:
+- emotionally open
+- dreamlike
+- quietly unresolved
+- lingering
+- reflective
+
+The final emotion should feel like:
+waking slowly from a beautiful strange dream.
+
+---
+
+# Output Format
+
+Return:
+- title
+- emotional theme
+- 6–8 short slides
+
+Each slide should contain:
+- one short emotional sentence
+- one clear emotional image or feeling
+
+The result should feel:
+saveable, emotionally immersive, and quietly unforgettable.`;
 
 function languageAvailability(story: BedtimeStoryListItem) {
   return (["en", "ru", "he"] as BedtimeStoryLanguage[])
@@ -97,7 +270,7 @@ function languageAvailability(story: BedtimeStoryListItem) {
 }
 
 function imageStatus(story: BedtimeStoryListItem) {
-  const total = story.slides.length || 10;
+  const total = story.slides.length;
   const ready = story.slides.filter((slide) => Boolean(slide.image_url)).length;
   return `${ready}/${total}`;
 }
@@ -116,6 +289,7 @@ export default function BedtimeStoriesAdminPage() {
   const [previewLanguage, setPreviewLanguage] = useState<BedtimeStoryLanguage>("en");
   const [loading, setLoading] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -189,6 +363,29 @@ export default function BedtimeStoriesAdminPage() {
       setPreviewLanguage("en");
     } catch (fetchError) {
       setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    }
+  };
+
+  const deleteStory = async (story: BedtimeStoryListItem) => {
+    const confirmed = window.confirm(`Delete bedtime story "${story.title.en || story.slug}" from the database? This cannot be undone.`);
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingId(story.id);
+    setError(null);
+    setSuccess(null);
+    try {
+      await fetchJson<{ ok: true }>(`/api/admin/bedtime-stories/${story.id}`, { method: "DELETE" });
+      if (selectedStory?.id === story.id) {
+        setSelectedStory(null);
+      }
+      setSuccess(`Deleted story: ${story.title.en || story.slug}`);
+      await loadStories();
+    } catch (fetchError) {
+      setError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -335,11 +532,22 @@ export default function BedtimeStoriesAdminPage() {
                       <button
                         type="button"
                         className="books-button books-button--ghost"
+                        disabled={deletingId === story.id}
                         onClick={() => {
                           void openPreview(story.id);
                         }}
                       >
                         Preview
+                      </button>
+                      <button
+                        type="button"
+                        className="books-button books-button--danger"
+                        disabled={deletingId === story.id}
+                        onClick={() => {
+                          void deleteStory(story);
+                        }}
+                      >
+                        {deletingId === story.id ? "Deleting..." : "Delete"}
                       </button>
                     </td>
                   </tr>
