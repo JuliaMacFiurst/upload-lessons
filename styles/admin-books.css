@@ -315,7 +315,9 @@
   display: grid;
   grid-template-columns: minmax(190px, 260px) minmax(280px, 420px) minmax(280px, 1fr);
   gap: 20px;
-  align-items: start;
+  align-items: stretch;
+  max-height: calc(100vh - 180px);
+  min-height: 620px;
 }
 
 .bedtime-slide-list {
@@ -366,7 +368,11 @@
 .bedtime-preview-column {
   display: flex;
   justify-content: center;
+  align-items: flex-start;
   min-width: 0;
+  position: sticky;
+  top: 16px;
+  align-self: start;
 }
 
 .bedtime-canvas {
@@ -401,23 +407,64 @@
   font-weight: 800;
 }
 
-.bedtime-canvas__text {
+.bedtime-canvas--text,
+.bedtime-canvas--logo,
+.bedtime-canvas--number {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.bedtime-canvas__text-layer {
   position: absolute;
-  left: 7%;
-  right: 7%;
-  bottom: 8%;
-  min-height: 20%;
-  padding: 16px 18px;
+  padding: 0;
   border-radius: 8px;
-  background: rgba(255, 251, 244, 0.9);
-  font-family: "Amatic SC", cursive;
   font-weight: 700;
-  font-size: 3rem;
   line-height: 0.98;
   display: flex;
   align-items: center;
   justify-content: center;
-  text-align: center;
+  box-sizing: border-box;
+  transform-origin: center center;
+  touch-action: none;
+  cursor: move;
+  overflow: visible;
+}
+
+.bedtime-canvas__text-layer > span:first-child {
+  display: block;
+  width: 100%;
+  max-height: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.bedtime-canvas__text-layer--selected {
+  outline: 2px solid rgba(17, 24, 39, 0.85);
+  outline-offset: 4px;
+}
+
+.bedtime-text-frame {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  border: 2px solid #111827;
+  background: #ffffff;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
+  z-index: 3;
+}
+
+.bedtime-text-frame--resize {
+  right: -12px;
+  bottom: -12px;
+  cursor: nwse-resize;
+}
+
+.bedtime-text-frame--rotate {
+  right: -12px;
+  top: -12px;
+  border-radius: 999px;
+  cursor: grab;
 }
 
 .bedtime-canvas__brand,
@@ -460,12 +507,117 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+  max-height: calc(100vh - 180px);
+  overflow-y: auto;
+  padding-right: 6px;
+  min-width: 0;
+}
+
+.bedtime-editor-panel {
+  border: 1px solid #d8e0ea;
+  border-radius: 8px;
+  background: #fbfdff;
+}
+
+.bedtime-editor-panel > summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  font-weight: 800;
+  color: #1f2937;
+}
+
+.bedtime-editor-panel__body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 0 14px 14px;
+}
+
+.bedtime-text-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.bedtime-color-input {
+  min-height: 44px;
+  padding: 6px;
+}
+
+.bedtime-canvas__logo-layer,
+.bedtime-canvas__stamp-layer,
+.bedtime-canvas__marker-layer {
+  position: absolute;
+  transform-origin: center center;
+  touch-action: none;
+  cursor: move;
+  box-sizing: border-box;
+}
+
+.bedtime-canvas__logo-layer img,
+.bedtime-canvas__stamp-layer img,
+.bedtime-canvas__marker-layer img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+
+.bedtime-layer-remove {
+  position: absolute;
+  left: -14px;
+  top: -14px;
+  z-index: 4;
+  width: 24px;
+  height: 24px;
+  border: 2px solid #111827;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #111827;
+  cursor: pointer;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 18px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.18);
+}
+
+.bedtime-canvas__number-layer {
+  position: absolute;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-weight: 900;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  transform-origin: center center;
+  touch-action: none;
+  cursor: move;
+}
+
+.bedtime-canvas__number-layer > span:first-child {
+  display: block;
+  width: 100%;
+}
+
+.bedtime-canvas__editable-layer--selected {
+  outline: 2px solid rgba(17, 24, 39, 0.85);
+  outline-offset: 4px;
 }
 
 .bedtime-asset-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
   gap: 12px;
+}
+
+.bedtime-asset-grid--compact {
+  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
 }
 
 .bedtime-asset-card {
@@ -478,16 +630,44 @@
   background: #fbfdff;
 }
 
+.bedtime-asset-card--button {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bedtime-asset-card--button:hover {
+  border-color: #111827;
+}
+
+.bedtime-asset-card--active {
+  border-color: #111827;
+  box-shadow: 0 0 0 2px rgba(17, 24, 39, 0.12);
+}
+
 .bedtime-asset-card img {
   width: 100%;
   aspect-ratio: 1;
   object-fit: contain;
   border-radius: 8px;
-  background: #fff8ed;
+  background-color: #fff;
+  background-image:
+    linear-gradient(45deg, #e5e7eb 25%, transparent 25%),
+    linear-gradient(-45deg, #e5e7eb 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, #e5e7eb 75%),
+    linear-gradient(-45deg, transparent 75%, #e5e7eb 75%);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
 }
 
 .bedtime-asset-card small {
   color: #657387;
+}
+
+.bedtime-stamp-library {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
 .bedtime-export-bank {
@@ -507,10 +687,20 @@
 @media (max-width: 1100px) {
   .bedtime-editor-grid {
     grid-template-columns: 1fr;
+    max-height: none;
   }
 
   .bedtime-slide-list {
     max-height: none;
+  }
+
+  .bedtime-preview-column {
+    position: static;
+  }
+
+  .bedtime-slide-tools {
+    max-height: none;
+    overflow: visible;
   }
 }
 

@@ -13,6 +13,17 @@ import {
 
 const LANGUAGES: BedtimeStoryLanguage[] = ["en", "ru", "he"];
 
+export type BedtimeStampAssetRecord = {
+  id: string;
+  name: string;
+  path: string;
+  url: string;
+  prompt: string | null;
+  tags: string[];
+  created_at: string | null;
+  updated_at: string | null;
+};
+
 function getString(record: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = record[key];
@@ -66,7 +77,7 @@ function normalizeSlide(value: unknown, index: number): BedtimeStorySlide {
     slide_number: slideNumber,
     text: localizedText(record.text, true) as BedtimeStorySlide["text"],
     illustration_prompt: getString(record, ["illustration_prompt", "illustrationPrompt"]) ?? "",
-    stamp_prompt: getString(record, ["stamp_prompt", "stampPrompt"]) ?? "",
+    stamp_prompt: index === 0 ? getString(record, ["stamp_prompt", "stampPrompt"]) ?? "" : "",
     marker_prompt: getString(record, ["marker_prompt", "markerPrompt"]) ?? "",
     image_url: getString(record, ["image_url", "imageUrl"]) ?? "",
     layers,
@@ -86,6 +97,13 @@ function normalizePublishDate(value: string | null | undefined): string | null {
 
 function rowToRecord(row: unknown): BedtimeStoryRecord {
   return bedtimeStoryRecordSchema.parse(row);
+}
+
+function sanitizeSlides(slides: BedtimeStorySlide[]): BedtimeStorySlide[] {
+  return slides.map((slide, index) => ({
+    ...slide,
+    stamp_prompt: index === 0 ? slide.stamp_prompt : "",
+  }));
 }
 
 export function parseBedtimeStoryJson(value: string): BedtimeStoryPayload {
@@ -166,13 +184,14 @@ async function ensureUniqueSlug(supabase: SupabaseClient, slug: string, excludeI
 
 function dbPayload(payload: BedtimeStoryPayload) {
   const publishDate = normalizePublishDate(payload.publish_date);
+  const slides = sanitizeSlides(payload.slides);
   return {
     slug: payload.slug,
     status: payload.status,
     title: payload.title,
     emotional_theme: payload.emotional_theme,
-    full_json: payload.full_json,
-    slides: payload.slides,
+    full_json: { ...payload.full_json, slides },
+    slides,
     images: payload.images,
     cover_image_url: payload.cover_image_url,
     instagram_caption: payload.instagram_caption,
@@ -327,15 +346,64 @@ export async function addBedtimeStoryAsset(
   return loadBedtimeStory(supabase, storyId);
 }
 
+export async function listBedtimeStampAssets(
+  supabase: SupabaseClient,
+  limit = 80,
+): Promise<{ stamps: BedtimeStampAssetRecord[] }> {
+  const { data, error } = await supabase
+    .from("bedtime_stamp_assets")
+    .select("id,name,path,url,prompt,tags,created_at,updated_at")
+    .order("created_at", { ascending: false })
+    .limit(Math.max(1, Math.min(limit, 200)));
+
+  if (error) {
+    throw new Error(`Failed to load bedtime stamp assets: ${error.message}`);
+  }
+
+  return { stamps: (data as BedtimeStampAssetRecord[] | null) ?? [] };
+}
+
+export async function createBedtimeStampAsset(
+  supabase: SupabaseClient,
+  asset: {
+    name: string;
+    path: string;
+    url: string;
+    prompt?: string | null;
+    tags?: string[];
+  },
+): Promise<BedtimeStampAssetRecord> {
+  const { data, error } = await supabase
+    .from("bedtime_stamp_assets")
+    .upsert({
+      name: asset.name,
+      path: asset.path,
+      url: asset.url,
+      prompt: asset.prompt ?? null,
+      tags: asset.tags ?? [],
+    }, { onConflict: "path" })
+    .select("id,name,path,url,prompt,tags,created_at,updated_at")
+    .single();
+
+  if (error || !data) {
+    throw new Error(error?.message ?? "Failed to save bedtime stamp asset.");
+  }
+
+  return data as BedtimeStampAssetRecord;
+}
+
 export async function saveBedtimeStoryExportUrl(
   supabase: SupabaseClient,
   storyId: string,
   language: BedtimeStoryLanguage,
   slideNumber: number,
   publicUrl: string,
+  layerName?: string,
 ): Promise<BedtimeStoryRecord> {
   const story = await loadBedtimeStory(supabase, storyId);
-  const key = `${language}-${String(slideNumber).padStart(2, "0")}`;
+  const key = layerName
+    ? `${language}-${String(slideNumber).padStart(2, "0")}-layer-${layerName}`
+    : `${language}-${String(slideNumber).padStart(2, "0")}`;
   const exportedImageUrls = {
     ...story.exported_image_urls,
     [key]: publicUrl,

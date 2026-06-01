@@ -259,6 +259,10 @@ Each slide should contain:
 - one short emotional sentence
 - one clear emotional image or feeling
 
+Also return one stamp_prompt for the first slide only.
+The stamp_prompt should describe a small stamp that looks like a natural ink impression on watercolor paper: slightly aged, softly blurred, not digital-clean, and containing one recognizable detail from the specific story. If the story is about countries or travel, the stamp may include the word "countries" plus one concrete visual clue from the story.
+Do not add stamp prompts to slides after the first slide.
+
 The result should feel:
 saveable, emotionally immersive, and quietly unforgettable.`;
 
