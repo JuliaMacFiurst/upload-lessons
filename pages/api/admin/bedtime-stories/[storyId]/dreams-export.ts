@@ -17,6 +17,8 @@ const EXPORT_WIDTH = 1080;
 const EXPORT_HEIGHT = 1920;
 const SLIDE_WIDTH = 1080;
 const SLIDE_HEIGHT = 1350;
+const EDITOR_CANVAS_WIDTH = 360;
+const TEXT_EXPORT_SCALE = SLIDE_WIDTH / EDITOR_CANVAS_WIDTH;
 const SLIDE_TOP = Math.round((EXPORT_HEIGHT - SLIDE_HEIGHT) / 2);
 const PAPER_COLOR = "#fff8ed";
 const LAPLAPLA_LOGO_URL = "https://media.laplapla.com/stickers/laplapla-logo-aquarelle.png";
@@ -44,6 +46,15 @@ type AssetLayout = BoxLayout & {
   path: string;
   url: string;
   hidden?: boolean;
+};
+
+type RenderedLayer = {
+  layer: Layer;
+  composite?: {
+    input: Buffer;
+    left: number;
+    top: number;
+  };
 };
 
 const DEFAULT_TEXT_LAYOUT: TextLayout = {
@@ -221,27 +232,45 @@ function layoutPixels(layout: BoxLayout) {
   };
 }
 
-function emptyCanvas() {
-  return sharp({
-    create: {
-      width: EXPORT_WIDTH,
-      height: EXPORT_HEIGHT,
-      channels: 4,
-      background: { r: 0, g: 0, b: 0, alpha: 0 },
-    },
-  });
-}
-
 async function sharpToPixelData(image: sharp.Sharp): Promise<PixelData> {
   const { data, info } = await image.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   return {
     width: info.width,
     height: info.height,
-    data,
+    data: new Uint8ClampedArray(data),
   };
 }
 
-async function layerFromImage(name: string, buffer: Buffer, layout: BoxLayout, fit: "contain" | "cover" = "contain"): Promise<Layer> {
+async function clippedCompositeInput(item: { input: Buffer; left: number; top: number }) {
+  const metadata = await sharp(item.input).metadata();
+  const width = metadata.width ?? 0;
+  const height = metadata.height ?? 0;
+  const visibleLeft = Math.max(0, item.left);
+  const visibleTop = Math.max(0, item.top);
+  const sourceLeft = Math.max(0, -item.left);
+  const sourceTop = Math.max(0, -item.top);
+  const visibleWidth = Math.min(width - sourceLeft, EXPORT_WIDTH - visibleLeft);
+  const visibleHeight = Math.min(height - sourceTop, EXPORT_HEIGHT - visibleTop);
+
+  if (visibleWidth <= 0 || visibleHeight <= 0) {
+    return null;
+  }
+
+  const input = sourceLeft === 0 && sourceTop === 0 && visibleWidth === width && visibleHeight === height
+    ? item.input
+    : await sharp(item.input)
+        .extract({ left: sourceLeft, top: sourceTop, width: visibleWidth, height: visibleHeight })
+        .png()
+        .toBuffer();
+
+  return {
+    input,
+    left: visibleLeft,
+    top: visibleTop,
+  };
+}
+
+async function layerFromImage(name: string, buffer: Buffer, layout: BoxLayout, fit: "contain" | "cover" = "contain"): Promise<RenderedLayer> {
   const box = layoutPixels(layout);
   let image = sharp(buffer, { limitInputPixels: 80_000_000 })
     .rotate()
@@ -256,29 +285,18 @@ async function layerFromImage(name: string, buffer: Buffer, layout: BoxLayout, f
   const metadata = await sharp(rotated).metadata();
   const left = box.left - Math.round(((metadata.width ?? box.width) - box.width) / 2);
   const top = box.top - Math.round(((metadata.height ?? box.height) - box.height) / 2);
-  const imageData = await sharpToPixelData(emptyCanvas().composite([{ input: rotated, left, top }]));
-  return { name, imageData };
+  const imageData = await sharpToPixelData(sharp(rotated));
+  return { layer: { name, left, top, imageData }, composite: { input: rotated, left, top } };
 }
 
-async function layerFromFullImage(name: string, buffer: Buffer, background?: string): Promise<Layer> {
-  const image = emptyCanvas();
-  const base = background
-    ? sharp({
-        create: {
-          width: EXPORT_WIDTH,
-          height: EXPORT_HEIGHT,
-          channels: 4,
-          background,
-        },
-      })
-    : image;
+async function layerFromFullImage(name: string, buffer: Buffer): Promise<RenderedLayer> {
   const fitted = await sharp(buffer, { limitInputPixels: 80_000_000 })
     .rotate()
     .resize(SLIDE_WIDTH, SLIDE_HEIGHT, { fit: "cover" })
     .png()
     .toBuffer();
-  const imageData = await sharpToPixelData(base.composite([{ input: fitted, left: 0, top: SLIDE_TOP }]));
-  return { name, imageData };
+  const imageData = await sharpToPixelData(sharp(fitted));
+  return { layer: { name, left: 0, top: SLIDE_TOP, imageData }, composite: { input: fitted, left: 0, top: SLIDE_TOP } };
 }
 
 function escapeXml(value: string) {
@@ -289,8 +307,9 @@ function escapeXml(value: string) {
     .replace(/"/g, "&quot;");
 }
 
-function splitTextLines(text: string, layout: TextLayout) {
-  const maxChars = Math.max(8, Math.floor((layout.width * 10.8) / Math.max(8, layout.fontSize * 0.55)));
+function splitTextLines(text: string, boxWidth: number, fontSize: number) {
+  const averageGlyphWidth = fontSize * 0.42;
+  const maxChars = Math.max(4, Math.floor(boxWidth / Math.max(8, averageGlyphWidth)));
   const lines: string[] = [];
   for (const paragraph of text.split(/\r?\n/)) {
     let current = "";
@@ -307,24 +326,29 @@ function splitTextLines(text: string, layout: TextLayout) {
       lines.push(current);
     }
   }
-  return lines.slice(0, 18);
+  return lines;
 }
 
-async function layerFromText(name: string, text: string, layout: TextLayout, language: BedtimeStoryLanguage): Promise<Layer> {
+async function layerFromText(name: string, text: string, layout: TextLayout, language: BedtimeStoryLanguage): Promise<RenderedLayer> {
   const box = layoutPixels(layout);
+  const exportFontSize = Math.max(1, Math.round(layout.fontSize * TEXT_EXPORT_SCALE));
+  const descenderPadding = Math.ceil(exportFontSize * 0.22);
+  const lineHeight = Math.round(exportFontSize * 0.98);
+  const lines = splitTextLines(text, box.width, exportFontSize);
+  const textHeight = Math.max(box.height, lineHeight * Math.max(1, lines.length) + descenderPadding * 2);
+  const layerHeight = Math.min(EXPORT_HEIGHT, textHeight);
+  const extraHeight = layerHeight - box.height;
   const anchor = layout.align === "left" ? "start" : layout.align === "right" ? "end" : "middle";
   const x = layout.align === "left" ? 0 : layout.align === "right" ? box.width : box.width / 2;
-  const lines = splitTextLines(text, layout);
-  const lineHeight = Math.round(layout.fontSize * 1.18);
-  const startY = Math.max(layout.fontSize, Math.round((box.height - lineHeight * lines.length) / 2) + layout.fontSize);
+  const startY = Math.max(exportFontSize + descenderPadding, Math.round((layerHeight - lineHeight * lines.length) / 2) + exportFontSize);
   const background = layout.backgroundEnabled
-    ? `<rect x="0" y="0" width="${box.width}" height="${box.height}" rx="0" fill="${escapeXml(layout.backgroundColor)}" opacity="${Math.max(0, Math.min(1, layout.backgroundOpacity))}" />`
+    ? `<rect x="0" y="${Math.round(extraHeight / 2)}" width="${box.width}" height="${box.height}" rx="0" fill="${escapeXml(layout.backgroundColor)}" opacity="${Math.max(0, Math.min(1, layout.backgroundOpacity))}" />`
     : "";
   const textSpans = lines.map((line, index) => (
-    `<text x="${x}" y="${startY + index * lineHeight}" font-family="${escapeXml(layout.fontFamily)}, Arial, sans-serif" font-size="${layout.fontSize}" font-weight="700" fill="${escapeXml(layout.textColor)}" text-anchor="${anchor}">${escapeXml(line)}</text>`
+    `<text x="${x}" y="${startY + index * lineHeight}" font-family="${escapeXml(layout.fontFamily)}, Arial, sans-serif" font-size="${exportFontSize}" font-weight="700" fill="${escapeXml(layout.textColor)}" text-anchor="${anchor}">${escapeXml(line)}</text>`
   )).join("");
   const svg = Buffer.from(`
-    <svg xmlns="http://www.w3.org/2000/svg" width="${box.width}" height="${box.height}" viewBox="0 0 ${box.width} ${box.height}" direction="${language === "he" ? "rtl" : "ltr"}">
+    <svg xmlns="http://www.w3.org/2000/svg" width="${box.width}" height="${layerHeight}" viewBox="0 0 ${box.width} ${layerHeight}" direction="${language === "he" ? "rtl" : "ltr"}">
       ${background}
       ${textSpans}
     </svg>
@@ -337,9 +361,12 @@ async function layerFromText(name: string, text: string, layout: TextLayout, lan
   const rendered = await image.toBuffer();
   const metadata = await sharp(rendered).metadata();
   const left = box.left - Math.round(((metadata.width ?? box.width) - box.width) / 2);
-  const top = box.top - Math.round(((metadata.height ?? box.height) - box.height) / 2);
-  const imageData = await sharpToPixelData(emptyCanvas().composite([{ input: rendered, left, top }]));
-  return { name, imageData };
+  const top = box.top - Math.round(((metadata.height ?? layerHeight) - box.height) / 2);
+  const imageData = await sharpToPixelData(sharp(rendered));
+  return {
+    layer: { name, left, top, imageData },
+    composite: { input: rendered, left, top },
+  };
 }
 
 async function fetchAssetBuffer(url: string) {
@@ -368,42 +395,69 @@ function layerGroup(name: string, children: Layer[]): Layer | null {
 }
 
 async function buildSlidePsd(story: BedtimeStoryRecord, slide: BedtimeStorySlide, language: BedtimeStoryLanguage): Promise<Buffer> {
+  const compositeInputs: Array<{ input: Buffer; left: number; top: number }> = [];
+  const paperImage = sharp({
+    create: {
+      width: EXPORT_WIDTH,
+      height: EXPORT_HEIGHT,
+      channels: 4,
+      background: PAPER_COLOR,
+    },
+  });
   const backgroundLayers: Layer[] = [
     {
       name: "Paper Background",
-      imageData: await sharpToPixelData(sharp({
-        create: {
-          width: EXPORT_WIDTH,
-          height: EXPORT_HEIGHT,
-          channels: 4,
-          background: PAPER_COLOR,
-        },
-      })),
+      left: 0,
+      top: 0,
+      imageData: await sharpToPixelData(paperImage.clone()),
     },
   ];
 
   if (slide.image_url) {
-    backgroundLayers.push(await layerFromFullImage("Watercolor Illustration", await fetchAssetBuffer(slide.image_url)));
+    const illustration = await layerFromFullImage("Watercolor Illustration", await fetchAssetBuffer(slide.image_url));
+    backgroundLayers.push(illustration.layer);
+    if (illustration.composite) {
+      compositeInputs.push(illustration.composite);
+    }
   }
 
   const overlayLayers: Layer[] = [];
   const logoBuffer = await fetchAssetBuffer(LAPLAPLA_LOGO_URL);
-  overlayLayers.push(await layerFromImage("LapLapLa Logo", logoBuffer, readBoxLayout(slide, language, "bedtime_logo_layout", DEFAULT_LOGO_LAYOUT)));
+  const logoLayer = await layerFromImage("LapLapLa Logo", logoBuffer, readBoxLayout(slide, language, "bedtime_logo_layout", DEFAULT_LOGO_LAYOUT));
+  overlayLayers.push(logoLayer.layer);
+  if (logoLayer.composite) {
+    compositeInputs.push(logoLayer.composite);
+  }
 
   const stampLayout = readAssetLayout(slide, language, "bedtime_stamp_layout", DEFAULT_STAMP_LAYOUT, slide.slide_number === 1 ? story.stamp_assets[0] : undefined);
   if (stampLayout.url && !stampLayout.hidden) {
-    overlayLayers.push(await layerFromImage(`Stamp - ${stampLayout.name || "Story stamp"}`, await fetchAssetBuffer(stampLayout.url), stampLayout));
+    const stampLayer = await layerFromImage(`Stamp - ${stampLayout.name || "Story stamp"}`, await fetchAssetBuffer(stampLayout.url), stampLayout);
+    overlayLayers.push(stampLayer.layer);
+    if (stampLayer.composite) {
+      compositeInputs.push(stampLayer.composite);
+    }
   }
 
   const markerLayout = readAssetLayout(slide, language, "bedtime_marker_layout", DEFAULT_MARKER_LAYOUT);
   if (markerLayout.url && !markerLayout.hidden) {
-    overlayLayers.push(await layerFromImage(`Marker - ${markerLayout.name || "Marker"}`, await fetchAssetBuffer(markerLayout.url), markerLayout));
+    const markerLayer = await layerFromImage(`Marker - ${markerLayout.name || "Marker"}`, await fetchAssetBuffer(markerLayout.url), markerLayout);
+    overlayLayers.push(markerLayer.layer);
+    if (markerLayer.composite) {
+      compositeInputs.push(markerLayer.composite);
+    }
   }
 
+  const storyTextLayer = await layerFromText("Story Text", slide.text[language], readTextLayout(slide, language), language);
+  const slideNumberLayer = await layerFromText("Slide Number", String(slide.slide_number).padStart(2, "0"), readNumberLayout(slide, language), language);
   const textLayers: Layer[] = [
-    await layerFromText("Story Text", slide.text[language], readTextLayout(slide, language), language),
-    await layerFromText("Slide Number", String(slide.slide_number).padStart(2, "0"), readNumberLayout(slide, language), language),
+    storyTextLayer.layer,
+    slideNumberLayer.layer,
   ];
+  for (const textLayer of [storyTextLayer, slideNumberLayer]) {
+    if (textLayer.composite) {
+      compositeInputs.push(textLayer.composite);
+    }
+  }
 
   const groups = [
     layerGroup("BACKGROUND", backgroundLayers),
@@ -419,6 +473,8 @@ async function buildSlidePsd(story: BedtimeStoryRecord, slide: BedtimeStorySlide
   const psd: Psd = {
     width: EXPORT_WIDTH,
     height: EXPORT_HEIGHT,
+    channels: 4,
+    imageData: await sharpToPixelData(paperImage.clone().composite((await Promise.all(compositeInputs.map(clippedCompositeInput))).filter(Boolean) as sharp.OverlayOptions[])),
     children: groups,
   };
   return writePsdBuffer(psd, { invalidateTextLayers: true });
