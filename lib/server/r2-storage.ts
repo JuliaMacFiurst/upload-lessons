@@ -189,6 +189,14 @@ export function hasR2Config() {
   return getR2Config() !== null;
 }
 
+export function publicR2ObjectUrl(path: string) {
+  const config = getR2Config();
+  if (!config) {
+    throw new Error("Missing R2 configuration.");
+  }
+  return `${config.publicUrl}/${encodePath(path.replace(/^\/+/, ""))}`;
+}
+
 export async function uploadPublicR2Object(input: R2UploadInput): Promise<string> {
   const objectKey = input.key.replace(/^\/+/, "");
   const { config, response } = await signedR2Request({
@@ -286,4 +294,23 @@ export async function listPublicR2Objects(input: {
     objects,
     nextContinuationToken: firstXmlValue(text, "NextContinuationToken"),
   };
+}
+
+export async function listAllPublicR2ObjectKeys(prefix: string): Promise<Set<string>> {
+  const keys = new Set<string>();
+  let continuationToken: string | undefined;
+
+  do {
+    const result = await listPublicR2Objects({
+      prefix,
+      continuationToken,
+      maxKeys: 500,
+    });
+    for (const object of result.objects) {
+      keys.add(object.key);
+    }
+    continuationToken = result.nextContinuationToken ?? undefined;
+  } while (continuationToken);
+
+  return keys;
 }

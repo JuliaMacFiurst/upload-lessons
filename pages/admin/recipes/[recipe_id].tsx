@@ -113,6 +113,7 @@ type DragState = {
 type RecipeStudioLanguage = "ru" | "en" | "he";
 type RecipeMediaKind = "dish" | "recipe_asset_sheet" | "raccoon_sticker_sheet";
 type RecipeCropMode = "recipe_asset" | "raccoon_sticker";
+type CropSelectionMode = "rect" | "lasso";
 type RecipeFontFamily =
   | "Nunito"
   | "Varela Round"
@@ -156,6 +157,11 @@ type CropRect = {
   y: number;
   width: number;
   height: number;
+};
+
+type CropPoint = {
+  x: number;
+  y: number;
 };
 
 type CropInteraction = {
@@ -1006,15 +1012,20 @@ export default function RecipeEditorPage() {
   const [exporting, setExporting] = useState(false);
   const [uploadingExport, setUploadingExport] = useState(false);
   const [uploadingMedia, setUploadingMedia] = useState<RecipeMediaKind | null>(null);
+  const [renamingStickerFolder, setRenamingStickerFolder] = useState(false);
   const [assetSetName, setAssetSetName] = useState("");
   const [stickerSetName, setStickerSetName] = useState("");
   const [cropMode, setCropMode] = useState<RecipeCropMode>("recipe_asset");
+  const [cropSelectionMode, setCropSelectionMode] = useState<CropSelectionMode>("rect");
   const [cropRect, setCropRect] = useState<CropRect>({ x: 12, y: 12, width: 28, height: 28 });
   const [cropNaturalSize, setCropNaturalSize] = useState({ width: 0, height: 0 });
+  const [cropLassoPoints, setCropLassoPoints] = useState<CropPoint[]>([]);
+  const [cropLassoDrawing, setCropLassoDrawing] = useState(false);
   const [assetCropIndex, setAssetCropIndex] = useState(1);
   const [stickerCropIndex, setStickerCropIndex] = useState(1);
   const [cropAssetName, setCropAssetName] = useState("");
   const [cropAssetTag, setCropAssetTag] = useState("asset");
+  const [cropSearchTags, setCropSearchTags] = useState("");
   const [savingCrop, setSavingCrop] = useState(false);
   const [savedCropUrls, setSavedCropUrls] = useState<Array<{ label: string; url: string }>>([]);
   const [mediaPrefix, setMediaPrefix] = useState("");
@@ -1984,6 +1995,7 @@ export default function RecipeEditorPage() {
     event: React.PointerEvent<HTMLElement>,
     action: CropInteraction["action"],
   ) => {
+    event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     cropInteractionRef.current = {
       action,
@@ -2022,6 +2034,97 @@ export default function RecipeEditorPage() {
 
   const endCropInteraction = () => {
     cropInteractionRef.current = null;
+  };
+
+  const cropPointerToNaturalPoint = (event: React.PointerEvent<HTMLElement>): CropPoint | null => {
+    const stageImage = cropStageRef.current?.querySelector("img");
+    const imageRect = stageImage?.getBoundingClientRect();
+    if (!cropNaturalSize.width || !cropNaturalSize.height || !imageRect) {
+      return null;
+    }
+
+    return {
+      x: Math.max(0, Math.min(cropNaturalSize.width, Math.round(((event.clientX - imageRect.left) / imageRect.width) * cropNaturalSize.width))),
+      y: Math.max(0, Math.min(cropNaturalSize.height, Math.round(((event.clientY - imageRect.top) / imageRect.height) * cropNaturalSize.height))),
+    };
+  };
+
+  const cropLassoContinuationThreshold = () => {
+    const stageImage = cropStageRef.current?.querySelector("img");
+    const imageRect = stageImage?.getBoundingClientRect();
+    if (!cropNaturalSize.width || !imageRect?.width) {
+      return 24;
+    }
+    return Math.max(12, (24 / imageRect.width) * cropNaturalSize.width);
+  };
+
+  const startCropLasso = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (cropSelectionMode !== "lasso") {
+      return;
+    }
+    event.preventDefault();
+    const point = cropPointerToNaturalPoint(event);
+    if (!point) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setCropLassoDrawing(true);
+    setCropLassoPoints((current) => {
+      if (current.length < 2) {
+        return [point];
+      }
+
+      const threshold = cropLassoContinuationThreshold();
+      const first = current[0];
+      const last = current.at(-1);
+      if (last && Math.hypot(last.x - point.x, last.y - point.y) <= threshold) {
+        return current;
+      }
+      if (first && Math.hypot(first.x - point.x, first.y - point.y) <= threshold) {
+        return [...current].reverse();
+      }
+      return [point];
+    });
+  };
+
+  const moveCropLasso = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (cropSelectionMode !== "lasso" || !cropLassoDrawing) {
+      return;
+    }
+    event.preventDefault();
+    const point = cropPointerToNaturalPoint(event);
+    if (!point) {
+      return;
+    }
+    setCropLassoPoints((current) => {
+      const previous = current.at(-1);
+      if (previous && Math.hypot(previous.x - point.x, previous.y - point.y) < 8) {
+        return current;
+      }
+      return [...current, point].slice(-600);
+    });
+  };
+
+  const endCropLasso = () => {
+    setCropLassoDrawing(false);
+  };
+
+  const cropLassoBounds = () => {
+    if (cropLassoPoints.length < 3) {
+      return null;
+    }
+    const xs = cropLassoPoints.map((point) => point.x);
+    const ys = cropLassoPoints.map((point) => point.y);
+    const left = Math.max(0, Math.min(...xs));
+    const top = Math.max(0, Math.min(...ys));
+    const right = Math.min(cropNaturalSize.width, Math.max(...xs));
+    const bottom = Math.min(cropNaturalSize.height, Math.max(...ys));
+    return {
+      x: Math.round(left),
+      y: Math.round(top),
+      width: Math.max(1, Math.round(right - left)),
+      height: Math.max(1, Math.round(bottom - top)),
+    };
   };
 
   const renderRecipeDomToPngBlob = async (language: RecipeStudioLanguage): Promise<Blob> => {
@@ -2195,6 +2298,49 @@ export default function RecipeEditorPage() {
     }
   };
 
+  const renameRecipeStickerFolder = async () => {
+    if (!recipe) {
+      return;
+    }
+    const oldSetKey = recipe.sticker_set_key?.trim() ?? "";
+    const newSetKey = stickerSetName.trim();
+    if (!oldSetKey || !newSetKey || oldSetKey === newSetKey) {
+      return;
+    }
+
+    setRenamingStickerFolder(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await fetchJson<{ newSetKey: string; moved: number }>("/api/admin/media/sticker-folder/rename", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          oldSetKey,
+          newSetKey,
+          basePrefix: "stickers/raccoon-stickers",
+        }),
+      });
+      const nextRecipe = {
+        ...recipe,
+        sticker_set_key: response.newSetKey,
+      };
+      const savedRecipe = await fetchJson<{ recipe: RecipeRecord }>(`/api/admin/recipes/${recipe.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipe: recipePayload(nextRecipe, layout) }),
+      });
+      setRecipe(savedRecipe.recipe);
+      setJsonValue(recipeToEditableJson(savedRecipe.recipe));
+      setStickerSetName(savedRecipe.recipe.sticker_set_key ?? "");
+      setSuccess(`Папка стикеров переименована: ${response.newSetKey}. Перенесено файлов: ${response.moved}.`);
+    } catch (renameError) {
+      setError(renameError instanceof Error ? renameError.message : String(renameError));
+    } finally {
+      setRenamingStickerFolder(false);
+    }
+  };
+
   const saveCropDetail = async () => {
     if (!recipe) {
       return;
@@ -2207,8 +2353,13 @@ export default function RecipeEditorPage() {
     const stageImage = cropStageRef.current?.querySelector("img");
     const imageRect = stageImage?.getBoundingClientRect();
     const boxRect = cropBoxRef.current?.getBoundingClientRect();
-    if (!cropNaturalSize.width || !cropNaturalSize.height || !imageRect || !boxRect) {
+    const lassoCrop = cropSelectionMode === "lasso" ? cropLassoBounds() : null;
+    if (!cropNaturalSize.width || !cropNaturalSize.height || !imageRect || (!lassoCrop && !boxRect)) {
       setError("Source image еще не загрузился.");
+      return;
+    }
+    if (cropSelectionMode === "lasso" && !lassoCrop) {
+      setError("Нарисуйте замкнутый контур лассо вокруг детали.");
       return;
     }
 
@@ -2216,11 +2367,11 @@ export default function RecipeEditorPage() {
     setError(null);
     setSuccess(null);
     try {
-      const crop = {
-        x: Math.round(((boxRect.left - imageRect.left) / imageRect.width) * cropNaturalSize.width),
-        y: Math.round(((boxRect.top - imageRect.top) / imageRect.height) * cropNaturalSize.height),
-        width: Math.round((boxRect.width / imageRect.width) * cropNaturalSize.width),
-        height: Math.round((boxRect.height / imageRect.height) * cropNaturalSize.height),
+      const crop = lassoCrop ?? {
+        x: Math.round((((boxRect as DOMRect).left - imageRect.left) / imageRect.width) * cropNaturalSize.width),
+        y: Math.round((((boxRect as DOMRect).top - imageRect.top) / imageRect.height) * cropNaturalSize.height),
+        width: Math.round(((boxRect as DOMRect).width / imageRect.width) * cropNaturalSize.width),
+        height: Math.round(((boxRect as DOMRect).height / imageRect.height) * cropNaturalSize.height),
       };
       const response = await fetchJson<{
         publicUrl: string;
@@ -2235,7 +2386,9 @@ export default function RecipeEditorPage() {
           index: activeCropIndex,
           assetName: cropAssetName,
           assetTag: cropAssetTag,
+          searchTags: cropSearchTags,
           crop,
+          mask: cropSelectionMode === "lasso" ? { points: cropLassoPoints } : undefined,
         }),
       });
 
@@ -2482,6 +2635,19 @@ export default function RecipeEditorPage() {
                       onChange={(event) => setStickerSetName(event.target.value)}
                       placeholder="raccoon-kitchen-01"
                     />
+                    {recipe.sticker_set_key && stickerSetName.trim() && stickerSetName.trim() !== recipe.sticker_set_key ? (
+                      <button
+                        type="button"
+                        className="books-button books-button--secondary"
+                        disabled={renamingStickerFolder}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          void renameRecipeStickerFolder();
+                        }}
+                      >
+                        {renamingStickerFolder ? "Переименование..." : "Переименовать папку"}
+                      </button>
+                    ) : null}
                     <input
                       type="file"
                       accept="image/png,image/jpeg,image/webp"
@@ -2525,6 +2691,20 @@ export default function RecipeEditorPage() {
                 </button>
                 <button
                   type="button"
+                  className={cropSelectionMode === "rect" ? "books-button books-button--primary" : "books-button books-button--ghost"}
+                  onClick={() => setCropSelectionMode("rect")}
+                >
+                  Прямоугольник
+                </button>
+                <button
+                  type="button"
+                  className={cropSelectionMode === "lasso" ? "books-button books-button--primary" : "books-button books-button--ghost"}
+                  onClick={() => setCropSelectionMode("lasso")}
+                >
+                  Лассо
+                </button>
+                <button
+                  type="button"
                   className="books-button books-button--ghost"
                   onClick={() => setCropPanelOpen((current) => !current)}
                 >
@@ -2540,14 +2720,27 @@ export default function RecipeEditorPage() {
                   <div
                     ref={cropStageRef}
                     className="recipe-crop-stage"
-                    onPointerMove={moveCropInteraction}
-                    onPointerUp={endCropInteraction}
-                    onPointerCancel={endCropInteraction}
+                    onPointerMove={(event) => {
+                      moveCropInteraction(event);
+                      moveCropLasso(event);
+                    }}
+                    onPointerUp={() => {
+                      endCropInteraction();
+                      endCropLasso();
+                    }}
+                    onPointerCancel={() => {
+                      endCropInteraction();
+                      endCropLasso();
+                    }}
+                    onPointerDown={startCropLasso}
+                    onPointerLeave={endCropLasso}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={activeCropSourceUrl}
                       alt=""
+                      draggable={false}
+                      onDragStart={(event) => event.preventDefault()}
                       onLoad={(event) => {
                         setCropNaturalSize({
                           width: event.currentTarget.naturalWidth,
@@ -2555,28 +2748,66 @@ export default function RecipeEditorPage() {
                         });
                       }}
                     />
-                    <div
-                      ref={cropBoxRef}
-                      className="recipe-crop-box"
-                      style={{
-                        left: `${cropRect.x}%`,
-                        top: `${cropRect.y}%`,
-                        width: `${cropRect.width}%`,
-                        height: `${cropRect.height}%`,
-                      }}
-                      onPointerDown={(event) => startCropInteraction(event, "move")}
-                    >
-                      <span className="recipe-crop-box__label">
-                        {Math.round((cropRect.width / 100) * cropNaturalSize.width)} x {Math.round((cropRect.height / 100) * cropNaturalSize.height)}
-                      </span>
-                      <span
-                        className="recipe-crop-box__handle"
-                        onPointerDown={(event) => {
-                          event.stopPropagation();
-                          startCropInteraction(event, "resize");
+                    {cropSelectionMode === "rect" ? (
+                      <div
+                        ref={cropBoxRef}
+                        className="recipe-crop-box"
+                        style={{
+                          left: `${cropRect.x}%`,
+                          top: `${cropRect.y}%`,
+                          width: `${cropRect.width}%`,
+                          height: `${cropRect.height}%`,
                         }}
-                      />
-                    </div>
+                        onPointerDown={(event) => startCropInteraction(event, "move")}
+                      >
+                        <span className="recipe-crop-box__label">
+                          {Math.round((cropRect.width / 100) * cropNaturalSize.width)} x {Math.round((cropRect.height / 100) * cropNaturalSize.height)}
+                        </span>
+                        <span
+                          className="recipe-crop-box__handle"
+                          onPointerDown={(event) => {
+                            event.stopPropagation();
+                            startCropInteraction(event, "resize");
+                          }}
+                        />
+                      </div>
+                    ) : (
+                      <svg
+                        className="recipe-crop-lasso"
+                        viewBox={`0 0 ${cropNaturalSize.width || 1} ${cropNaturalSize.height || 1}`}
+                        preserveAspectRatio="none"
+                        aria-hidden="true"
+                      >
+                        {cropLassoPoints.length > 1 ? (
+                          <polyline
+                            points={cropLassoPoints.map((point) => `${point.x},${point.y}`).join(" ")}
+                            className="recipe-crop-lasso__line"
+                          />
+                        ) : null}
+                        {cropLassoPoints.length > 2 && !cropLassoDrawing ? (
+                          <polygon
+                            points={cropLassoPoints.map((point) => `${point.x},${point.y}`).join(" ")}
+                            className="recipe-crop-lasso__fill"
+                          />
+                        ) : null}
+                        {cropLassoPoints.length > 0 ? (
+                          <>
+                            <circle
+                              cx={cropLassoPoints[0].x}
+                              cy={cropLassoPoints[0].y}
+                              r={5}
+                              className="recipe-crop-lasso__endpoint"
+                            />
+                            <circle
+                              cx={cropLassoPoints.at(-1)?.x}
+                              cy={cropLassoPoints.at(-1)?.y}
+                              r={5}
+                              className="recipe-crop-lasso__endpoint recipe-crop-lasso__endpoint--end"
+                            />
+                          </>
+                        ) : null}
+                      </svg>
+                    )}
                   </div>
                 ) : (
                   <div className="recipe-crop-empty">
@@ -2588,6 +2819,37 @@ export default function RecipeEditorPage() {
               </div>
 
               <aside className="recipe-crop-controls">
+                <label className="books-field">
+                  <span className="books-field__label">Режим выделения</span>
+                  <div className="books-actions">
+                    <button
+                      type="button"
+                      className={cropSelectionMode === "rect" ? "books-button books-button--primary" : "books-button books-button--ghost"}
+                      onClick={() => setCropSelectionMode("rect")}
+                    >
+                      Прямоугольник
+                    </button>
+                    <button
+                      type="button"
+                      className={cropSelectionMode === "lasso" ? "books-button books-button--primary" : "books-button books-button--ghost"}
+                      onClick={() => setCropSelectionMode("lasso")}
+                    >
+                      Лассо
+                    </button>
+                  </div>
+                  {cropSelectionMode === "lasso" ? (
+                    <span className="books-field__help">Проведите по картинке вокруг детали. Отпустите указатель, чтобы замкнуть контур.</span>
+                  ) : null}
+                </label>
+                {cropSelectionMode === "lasso" ? (
+                  <button
+                    type="button"
+                    className="books-button books-button--secondary"
+                    onClick={() => setCropLassoPoints([])}
+                  >
+                    Очистить лассо
+                  </button>
+                ) : null}
                 <label className="books-field">
                   <span className="books-field__label">Набор</span>
                   <input
@@ -2647,6 +2909,19 @@ export default function RecipeEditorPage() {
                     />
                   </label>
                 </div>
+                {cropMode === "raccoon_sticker" ? (
+                  <label className="books-field">
+                    <span className="books-field__label">Поисковые теги</span>
+                    <textarea
+                      className="books-input"
+                      value={cropSearchTags}
+                      onChange={(event) => setCropSearchTags(event.target.value)}
+                      placeholder="еда, кухня, грузия, сыр"
+                      rows={3}
+                    />
+                    <span className="books-field__help">Через запятую, точку с запятой или с новой строки. Сохраняются в sticker_assets.</span>
+                  </label>
+                ) : null}
                 <div className="books-grid books-grid--2">
                   <label className="books-field">
                     <span className="books-field__label">X %</span>

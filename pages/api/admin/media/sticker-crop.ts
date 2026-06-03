@@ -1,18 +1,18 @@
 import sharp from "sharp";
 import type { NextApiRequest, NextApiResponse } from "next";
-import { requireAdminSession } from "../../../../../lib/server/admin-session";
-import { fetchPublicR2Object, uploadPublicR2Object } from "../../../../../lib/server/r2-storage";
+import { requireAdminSession } from "../../../../lib/server/admin-session";
+import { fetchPublicR2Object, uploadPublicR2Object } from "../../../../lib/server/r2-storage";
 import {
   normalizeStickerTags,
   normalizeStorageSegment,
   stickerTitleFromPath,
   upsertStickerAsset,
-} from "../../../../../lib/server/sticker-assets";
+} from "../../../../lib/server/sticker-assets";
 import {
   buildFreeformAlphaMask,
   normalizeFreeformMaskPoints,
   type FreeformMaskInput,
-} from "../../../../../lib/server/media/freeform-crop";
+} from "../../../../lib/server/media/freeform-crop";
 
 export const config = {
   api: {
@@ -22,10 +22,7 @@ export const config = {
   },
 };
 
-type CropKind = "recipe_asset" | "raccoon_sticker";
-
-type CropBody = {
-  kind?: CropKind;
+type StickerCropBody = {
   setKey?: string;
   index?: number;
   assetName?: string;
@@ -40,25 +37,7 @@ type CropBody = {
   mask?: FreeformMaskInput;
 };
 
-const ALLOWED_TAGS = new Set([
-  "asset",
-  "decor",
-  "food",
-  "frame",
-  "label",
-  "line",
-  "logo",
-  "ribbon",
-  "star",
-  "sticker",
-]);
-
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  const recipeId = typeof req.query.recipeId === "string" ? req.query.recipeId : "";
-  if (!recipeId) {
-    return res.status(400).json({ error: "Missing `recipeId`." });
-  }
-
   if (req.method !== "POST") {
     res.setHeader("Allow", "POST");
     return res.status(405).json({ error: "Method not allowed" });
@@ -73,22 +52,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const body = (req.body ?? {}) as CropBody;
-    const kind = body.kind;
-    if (kind !== "recipe_asset" && kind !== "raccoon_sticker") {
-      return res.status(400).json({ error: "Unsupported crop kind." });
-    }
-
+    const body = (req.body ?? {}) as StickerCropBody;
     const setKey = normalizeStorageSegment(body.setKey ?? "");
     if (!setKey) {
       return res.status(400).json({ error: "Missing setKey." });
     }
 
     const index = Number.isInteger(body.index) && Number(body.index) > 0 ? Number(body.index) : 1;
-    const assetTag = normalizeStorageSegment(body.assetTag ?? "");
-    if (assetTag && !ALLOWED_TAGS.has(assetTag)) {
-      return res.status(400).json({ error: "Unsupported asset tag." });
-    }
+    const assetTag = normalizeStorageSegment(body.assetTag ?? "sticker") || "sticker";
     const assetName = normalizeStorageSegment(body.assetName ?? "");
     const crop = body.crop ?? {};
     const left = Math.max(0, Math.round(Number(crop.x ?? 0)));
@@ -96,10 +67,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const width = Math.max(1, Math.round(Number(crop.width ?? 0)));
     const height = Math.max(1, Math.round(Number(crop.height ?? 0)));
 
-    const basePath =
-      kind === "recipe_asset"
-        ? `recipes/assets/${setKey}`
-        : `stickers/raccoon-stickers/${setKey}`;
+    const basePath = `stickers/${setKey}`;
     const sourcePath = `${basePath}/source.webp`;
     const outputName = assetName
       ? [assetTag, assetName, String(index)].filter(Boolean).join("-")
@@ -144,29 +112,27 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body: cropped,
       contentType: "image/webp",
     });
-    const stickerAsset = kind === "raccoon_sticker"
-      ? await upsertStickerAsset(supabase, {
-          title: body.assetName?.trim() || stickerTitleFromPath(outputPath),
-          tags: normalizeStickerTags(body.searchTags),
-          storagePath: outputPath,
-          publicUrl,
-          setKey,
-          sourcePath,
-          sourceKind: kind,
-          crop: {
-            x: safeLeft,
-            y: safeTop,
-            width: safeWidth,
-            height: safeHeight,
-          },
-          width: safeWidth,
-          height: safeHeight,
-        })
-      : null;
+
+    const stickerAsset = await upsertStickerAsset(supabase, {
+      title: body.assetName?.trim() || stickerTitleFromPath(outputPath),
+      tags: normalizeStickerTags(body.searchTags),
+      storagePath: outputPath,
+      publicUrl,
+      setKey,
+      sourcePath,
+      sourceKind: "raccoon_sticker",
+      crop: {
+        x: safeLeft,
+        y: safeTop,
+        width: safeWidth,
+        height: safeHeight,
+      },
+      width: safeWidth,
+      height: safeHeight,
+    });
 
     return res.status(200).json({
       ok: true,
-      kind,
       setKey,
       index,
       sourcePath,
@@ -175,7 +141,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       stickerAsset,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to crop media.";
+    const message = error instanceof Error ? error.message : "Failed to crop sticker.";
     return res.status(500).json({ error: message });
   }
 }
