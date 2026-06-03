@@ -55,7 +55,15 @@ export function extensionForPath(path: string) {
   return path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? "";
 }
 
+export function isStickerSourcePath(path: string | null | undefined) {
+  return /(^|\/)source\.webp$/i.test(path ?? "");
+}
+
 export async function upsertStickerAsset(supabase: SupabaseClient, input: StickerAssetInput) {
+  if (isStickerSourcePath(input.storagePath)) {
+    throw new Error("Source sheet files must not be saved as sticker assets.");
+  }
+
   const title = input.title.trim() || stickerTitleFromPath(input.storagePath);
   const slug = normalizeStorageSegment(title) || normalizeStorageSegment(stickerTitleFromPath(input.storagePath));
   const tags = normalizeStickerTags(input.tags);
@@ -107,7 +115,7 @@ export async function syncStickerAssetsWithR2(supabase: SupabaseClient) {
 
     const rows = (data ?? []) as Array<{ id: string; storage_path: string | null }>;
     for (const row of rows) {
-      if (row.id && row.storage_path && !existingKeys.has(row.storage_path)) {
+      if (row.id && row.storage_path && (isStickerSourcePath(row.storage_path) || !existingKeys.has(row.storage_path))) {
         staleIds.push(row.id);
       }
     }

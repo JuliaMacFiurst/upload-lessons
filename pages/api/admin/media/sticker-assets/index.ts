@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { requireAdminSession } from "../../../../../lib/server/admin-session";
+import { isStickerSourcePath } from "../../../../../lib/server/sticker-assets";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   let supabase;
@@ -33,7 +34,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       throw new Error(`Failed to load sticker assets: ${error.message}`);
     }
 
-    return res.status(200).json({ stickers: data ?? [] });
+    return res.status(200).json({
+      stickers: ((data ?? []) as Array<{ storage_path?: string | null }>).filter((item) => !isStickerSourcePath(item.storage_path)),
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load sticker assets.";
     return res.status(500).json({ error: message });

@@ -414,11 +414,11 @@ export default function AdminMediaPage() {
     setError(null);
     setSuccess(null);
     try {
-      const response = await fetchJson<{ deleted: number; scannedR2Objects: number }>("/api/admin/media/sync-sticker-assets", {
+      const response = await fetchJson<{ deleted: number; inserted: number; scannedR2Objects: number }>("/api/admin/media/sync-sticker-assets", {
         method: "POST",
       });
       await loadStickerAssets();
-      setSuccess(`Синхронизация завершена: удалено записей ${response.deleted}, объектов R2 проверено ${response.scannedR2Objects}.`);
+      setSuccess(`Синхронизация завершена: добавлено ${response.inserted}, удалено ${response.deleted}, объектов R2 проверено ${response.scannedR2Objects}.`);
     } catch (syncError) {
       setError(syncError instanceof Error ? syncError.message : String(syncError));
     } finally {
