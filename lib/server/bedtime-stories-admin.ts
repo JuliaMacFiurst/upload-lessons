@@ -10,6 +10,7 @@ import {
   type BedtimeStoryRecord,
   type BedtimeStorySlide,
 } from "../bedtime-stories/types";
+import { withBedtimeStoryIllustrationTechnicalSuffix } from "../bedtime-stories/illustration-prompt";
 
 const LANGUAGES: BedtimeStoryLanguage[] = ["en", "ru", "he"];
 
@@ -96,12 +97,20 @@ function normalizePublishDate(value: string | null | undefined): string | null {
 }
 
 function rowToRecord(row: unknown): BedtimeStoryRecord {
-  return bedtimeStoryRecordSchema.parse(row);
+  const story = bedtimeStoryRecordSchema.parse(row);
+  const slides = sanitizeSlides(story.slides);
+
+  return {
+    ...story,
+    full_json: { ...story.full_json, slides },
+    slides,
+  };
 }
 
 function sanitizeSlides(slides: BedtimeStorySlide[]): BedtimeStorySlide[] {
   return slides.map((slide, index) => ({
     ...slide,
+    illustration_prompt: withBedtimeStoryIllustrationTechnicalSuffix(slide.illustration_prompt),
     stamp_prompt: index === 0 ? slide.stamp_prompt : "",
   }));
 }

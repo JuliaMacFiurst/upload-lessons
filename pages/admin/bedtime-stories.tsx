@@ -72,7 +72,7 @@ const bedtimeStoryJsonTemplate = `{
         "ru": "Я нашла лунный поезд там, где дорога стала серебряной.",
         "he": "מצאתי את רכבת הירח במקום שבו הדרך הפכה כסופה."
       },
-      "illustration_prompt": "watercolor moon train at a quiet silver road, storybook, soft night",
+      "illustration_prompt": "watercolor moon train at a quiet silver road, storybook, soft night, asymmetrical composition, illustration occupies only the left side, large untouched blank watercolor paper space on the right side for text, vertical 4:5 aspect ratio",
       "stamp_prompt": "tiny moon ticket stamp",
       "marker_prompt": "silver rail marker",
       "image_url": "",
@@ -258,6 +258,7 @@ Return:
 Each slide should contain:
 - one short emotional sentence
 - one clear emotional image or feeling
+- one illustration_prompt ending exactly with: "asymmetrical composition, illustration occupies only the left side, large untouched blank watercolor paper space on the right side for text, vertical 4:5 aspect ratio"
 
 Also return one stamp_prompt for the first slide only.
 The stamp_prompt should describe a small stamp that looks like a natural ink impression on watercolor paper: slightly aged, softly blurred, not digital-clean, and containing one recognizable detail from the specific story. If the story is about countries or travel, the stamp may include the word "countries" plus one concrete visual clue from the story.
