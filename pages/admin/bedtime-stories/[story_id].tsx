@@ -178,7 +178,7 @@ const DEFAULT_NUMBER_LAYOUT: BedtimeNumberLayout = {
   rotation: 0,
 };
 
-const LAPLAPLA_LOGO_URL = "https://media.laplapla.com/stickers/laplapla-logo-aquarelle.png";
+const LAPLAPLA_LOGO_URL = "https://media.laplapla.com/stickers/laplapla-logo-aquarelle.webp";
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);

@@ -21,7 +21,7 @@ const EDITOR_CANVAS_WIDTH = 360;
 const TEXT_EXPORT_SCALE = SLIDE_WIDTH / EDITOR_CANVAS_WIDTH;
 const SLIDE_TOP = Math.round((EXPORT_HEIGHT - SLIDE_HEIGHT) / 2);
 const PAPER_COLOR = "#fff8ed";
-const LAPLAPLA_LOGO_URL = "https://media.laplapla.com/stickers/laplapla-logo-aquarelle.png";
+const LAPLAPLA_LOGO_URL = "https://media.laplapla.com/stickers/laplapla-logo-aquarelle.webp";
 
 type BoxLayout = {
   x: number;
