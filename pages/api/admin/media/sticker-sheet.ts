@@ -19,6 +19,11 @@ type StickerSheetBody = {
   removeWhite?: boolean;
 };
 
+function fallbackStickerSetKey(fileName: string | undefined) {
+  const normalizedFileName = normalizeStorageSegment(fileName?.replace(/\.[^/.]+$/, "") || "");
+  return normalizedFileName || `stickers-${Date.now()}`;
+}
+
 function decodeImageBase64(value: string): Buffer {
   const payload = value.includes(",") ? value.split(",").pop() ?? "" : value;
   if (!payload.trim()) {
@@ -110,8 +115,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Missing imageBase64." });
     }
 
-    const fallbackSetName = normalizeStorageSegment(body.fileName?.replace(/\.[^/.]+$/, "") || `stickers-${Date.now()}`);
-    const setKey = normalizeStorageSegment(body.setName || fallbackSetName) || fallbackSetName;
+    const fallbackSetName = fallbackStickerSetKey(body.fileName);
+    const setKey = normalizeStorageSegment(body.setName || "") || fallbackSetName;
     const webp = await imageToWebp(decodeImageBase64(body.imageBase64), body.removeWhite !== false);
     const path = `stickers/${setKey}/source.webp`;
     const publicUrl = await uploadPublicR2Object({

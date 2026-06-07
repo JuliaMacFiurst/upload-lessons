@@ -30,6 +30,24 @@ function mergeFolders(prefix: string, folders: string[]) {
   return Array.from(new Set([...requiredFolders, ...folders])).sort((left, right) => left.localeCompare(right));
 }
 
+async function listAllFolderPrefixes(prefix: string) {
+  const folders: string[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const result = await listPublicR2Objects({
+      prefix,
+      delimiter: "/",
+      continuationToken,
+      maxKeys: 500,
+    });
+    folders.push(...result.folders);
+    continuationToken = result.nextContinuationToken ?? undefined;
+  } while (continuationToken);
+
+  return folders;
+}
+
 async function buildTree(prefix: string, depth: number, visited: Set<string>): Promise<MediaTreeNode> {
   if (visited.has(prefix)) {
     return { prefix, label: folderLabel(prefix), children: [] };
@@ -40,12 +58,7 @@ async function buildTree(prefix: string, depth: number, visited: Set<string>): P
     return { prefix, label: folderLabel(prefix), children: [] };
   }
 
-  const result = await listPublicR2Objects({
-    prefix,
-    delimiter: "/",
-    maxKeys: 200,
-  });
-  const folders = mergeFolders(prefix, result.folders);
+  const folders = mergeFolders(prefix, await listAllFolderPrefixes(prefix));
   const children = await Promise.all(
     folders.map((folder) => buildTree(folder, depth - 1, visited)),
   );

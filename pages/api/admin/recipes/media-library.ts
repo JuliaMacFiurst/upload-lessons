@@ -26,6 +26,24 @@ function mergeFolders(prefix: string, folders: string[]) {
   return Array.from(new Set([...requiredFolders, ...folders])).sort((left, right) => left.localeCompare(right));
 }
 
+async function listAllFolderPrefixes(prefix: string) {
+  const folders: string[] = [];
+  let continuationToken: string | undefined;
+
+  do {
+    const result = await listPublicR2Objects({
+      prefix,
+      delimiter: "/",
+      continuationToken,
+      maxKeys: 500,
+    });
+    folders.push(...result.folders);
+    continuationToken = result.nextContinuationToken ?? undefined;
+  } while (continuationToken);
+
+  return folders;
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
     res.setHeader("Allow", "GET");
@@ -42,16 +60,19 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const prefix = typeof req.query.prefix === "string" ? req.query.prefix.replace(/^\/+/, "") : "";
     const continuationToken = typeof req.query.cursor === "string" ? req.query.cursor : undefined;
-    const result = await listPublicR2Objects({
+    const [result, allFolders] = await Promise.all([
+      listPublicR2Objects({
       prefix,
       delimiter: "/",
       continuationToken,
       maxKeys: 200,
-    });
+      }),
+      listAllFolderPrefixes(prefix),
+    ]);
 
     return res.status(200).json({
       ...result,
-      folders: mergeFolders(prefix, result.folders),
+      folders: mergeFolders(prefix, allFolders),
       objects: result.objects.filter((object) => isImageKey(object.key)),
     });
   } catch (error) {

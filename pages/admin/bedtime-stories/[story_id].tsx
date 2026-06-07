@@ -1052,6 +1052,10 @@ export default function BedtimeStoryEditorPage() {
     if (!story || !file) {
       return;
     }
+    if (kind === "slide" && !slideNumber) {
+      setError("Select a slide before uploading an image.");
+      return;
+    }
     if (!file.type.startsWith("image/")) {
       setError("Only image files can be uploaded.");
       return;
@@ -1061,8 +1065,19 @@ export default function BedtimeStoryEditorPage() {
     setError(null);
     setSuccess(null);
     try {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      const savedData = await fetchJson<{ story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${story.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ story: storyToPayload(story) }),
+      });
+      lastSavedStorySignatureRef.current = storyAutosaveSignature(savedData.story);
+
       const imageBase64 = await blobToDataUrl(file);
-      const data = await fetchJson<{ publicUrl: string; story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${story.id}/media`, {
+      const data = await fetchJson<{ publicUrl: string; story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${savedData.story.id}/media`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1095,6 +1110,7 @@ export default function BedtimeStoryEditorPage() {
         setSelectedEditable("stamp");
         setStory(nextStory);
       } else {
+        lastSavedStorySignatureRef.current = storyAutosaveSignature(data.story);
         setStory(data.story);
       }
       setSuccess(`Uploaded: ${data.publicUrl}`);

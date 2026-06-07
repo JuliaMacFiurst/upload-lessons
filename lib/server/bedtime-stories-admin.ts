@@ -11,8 +11,12 @@ import {
   type BedtimeStorySlide,
 } from "../bedtime-stories/types";
 import { withBedtimeStoryIllustrationTechnicalSuffix } from "../bedtime-stories/illustration-prompt";
+import { listAllPublicR2ObjectKeys, publicR2ObjectUrl } from "./r2-storage";
 
 const LANGUAGES: BedtimeStoryLanguage[] = ["en", "ru", "he"];
+const BEDTIME_STAMP_PREFIX = "bedtime_story/stamps/";
+const STAMP_IMAGE_EXTENSIONS = new Set(["apng", "avif", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
+const DEFAULT_STAMP_PROMPT = "Natural ink stamp impression on watercolor paper, slightly aged, softly blurred, transparent background, containing one recognizable detail from a specific story.";
 
 export type BedtimeStampAssetRecord = {
   id: string;
@@ -49,6 +53,15 @@ function getStringArray(record: Record<string, unknown>, keys: string[]): string
     }
   }
   return [];
+}
+
+function extensionForPath(path: string) {
+  return path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? "";
+}
+
+function assetNameFromPath(path: string) {
+  const fileName = path.split("/").filter(Boolean).pop() ?? path;
+  return fileName.replace(/\.[a-z0-9]+$/i, "");
 }
 
 function localizedText(value: unknown, required: boolean) {
@@ -399,6 +412,35 @@ export async function createBedtimeStampAsset(
   }
 
   return data as BedtimeStampAssetRecord;
+}
+
+export async function syncBedtimeStampAssetsFromR2(
+  supabase: SupabaseClient,
+): Promise<{ synced: number; scanned: number }> {
+  const keys = Array.from(await listAllPublicR2ObjectKeys(BEDTIME_STAMP_PREFIX))
+    .filter((key) => !key.endsWith("/"))
+    .filter((key) => !key.endsWith(".keep"))
+    .filter((key) => STAMP_IMAGE_EXTENSIONS.has(extensionForPath(key)));
+
+  let synced = 0;
+  for (const key of keys) {
+    const { error } = await supabase
+      .from("bedtime_stamp_assets")
+      .upsert({
+        name: assetNameFromPath(key),
+        path: key,
+        url: publicR2ObjectUrl(key),
+        prompt: DEFAULT_STAMP_PROMPT,
+        tags: ["bedtime-story", "watercolor-stamp"],
+      }, { onConflict: "path", ignoreDuplicates: true });
+
+    if (error) {
+      throw new Error(`Failed to sync bedtime stamp asset: ${error.message}`);
+    }
+    synced += 1;
+  }
+
+  return { synced, scanned: keys.length };
 }
 
 export async function saveBedtimeStoryExportUrl(
