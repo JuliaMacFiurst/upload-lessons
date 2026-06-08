@@ -1234,14 +1234,16 @@ export default function RecipeEditorPage() {
             id: element.groupId,
             name: groupName(layout, element.groupId),
           },
-          elements: layout.elements.filter((item) => item.groupId === element.groupId),
+          elements: layout.elements
+            .filter((item) => item.groupId === element.groupId)
+            .map((item) => resolveElementForLanguage(item, studioLanguage)),
         });
       } else {
-        rows.push({ type: "element", element });
+        rows.push({ type: "element", element: resolveElementForLanguage(element, studioLanguage) });
       }
     }
     return rows;
-  }, [layout]);
+  }, [layout, studioLanguage]);
 
   const activeCropSetKey =
     cropMode === "recipe_asset"
