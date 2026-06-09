@@ -15,6 +15,7 @@ export function AdminTabs() {
     { href: "/admin/parrot-music-styles", label: "Музыка" },
     { href: "/admin/upload-video", label: "Видео" },
     { href: "/admin/translations", label: "Переводы" },
+    { href: "/admin/analytics", label: "Analytics" },
     { href: "/admin/cat-questions", label: "Вопросы" },
     { href: "/admin/books", label: "Книги" },
     { href: "/admin/story-builder", label: "Истории" },
@@ -36,7 +37,8 @@ export function AdminTabs() {
             (tab.href === "/admin/cat-questions" && router.pathname.startsWith("/admin/cat-questions")) ||
             (tab.href === "/admin/books" && router.pathname.startsWith("/admin/books")) ||
             (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder")) ||
-            (tab.href === "/admin/story-submissions" && router.pathname.startsWith("/admin/story-submissions"));
+            (tab.href === "/admin/story-submissions" && router.pathname.startsWith("/admin/story-submissions")) ||
+            (tab.href === "/admin/analytics" && router.pathname.startsWith("/admin/analytics"));
 
           return (
             <Link key={tab.href} href={tab.href} legacyBehavior>
