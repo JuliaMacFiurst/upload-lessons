@@ -59,9 +59,21 @@ export const parrotMusicStyleTranslationSlideSchema = z.object({
   text: z.string().trim().min(1, "Translated slide text is required."),
 });
 
+export const parrotMusicStyleTranslationVariantSchema = z.object({
+  variant_key: z.string().trim().min(1, "Translated variant key is required."),
+  title: z.string().trim().min(1, "Translated variant title is required."),
+});
+
+export const parrotMusicStyleTranslationPresetSchema = z.object({
+  preset_key: z.string().trim().min(1, "Translated preset key is required."),
+  title: z.string().trim().min(1, "Translated preset title is required."),
+  variants: z.array(parrotMusicStyleTranslationVariantSchema).optional().default([]),
+});
+
 export const parrotMusicStyleTranslationSchema = z.object({
   title: z.string().trim().min(1).optional(),
   description: z.string().trim().min(1).optional(),
+  presets: z.array(parrotMusicStyleTranslationPresetSchema).optional().default([]),
   slides: z.array(parrotMusicStyleTranslationSlideSchema).optional().default([]),
 });
 

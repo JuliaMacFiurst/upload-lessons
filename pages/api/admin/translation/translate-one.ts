@@ -277,7 +277,8 @@ async function translateWithGemini(payload: unknown, lang: string): Promise<unkn
     `Translate the following JSON to ${lang}.`,
     "Important rules:",
     "Do NOT change JSON keys.",
-    "Translate ALL non-empty string values.",
+    "Translate human-readable title, description, text, label, name, and short_text string values.",
+    "Do NOT translate identifier values under keys such as id, slug, preset_key, variant_key, key, mode_slug, language, or content_type.",
     "Never replace text with empty strings.",
     "Preserve the number of steps exactly.",
     "Preserve all newline characters such as \\n and \\n\\n exactly as they appear.",
@@ -444,6 +445,7 @@ function validateParrotMusicStylePayload(payload: unknown): void {
   const record = payload as {
     title?: unknown;
     description?: unknown;
+    presets?: unknown;
     slides?: unknown;
   };
 
@@ -455,6 +457,31 @@ function validateParrotMusicStylePayload(payload: unknown): void {
   }
   if (!Array.isArray(record.slides)) {
     throw new Error("Invalid translation payload");
+  }
+  if (record.presets !== undefined && !Array.isArray(record.presets)) {
+    throw new Error("Invalid translation payload");
+  }
+
+  for (const preset of Array.isArray(record.presets) ? record.presets : []) {
+    if (!preset || typeof preset !== "object") {
+      throw new Error("Invalid translation payload");
+    }
+    const typedPreset = preset as { preset_key?: unknown; title?: unknown; variants?: unknown };
+    if (typeof typedPreset.preset_key !== "string" || typeof typedPreset.title !== "string") {
+      throw new Error("Invalid translation payload");
+    }
+    if (typedPreset.variants !== undefined && !Array.isArray(typedPreset.variants)) {
+      throw new Error("Invalid translation payload");
+    }
+    for (const variant of Array.isArray(typedPreset.variants) ? typedPreset.variants : []) {
+      if (!variant || typeof variant !== "object") {
+        throw new Error("Invalid translation payload");
+      }
+      const typedVariant = variant as { variant_key?: unknown; title?: unknown };
+      if (typeof typedVariant.variant_key !== "string" || typeof typedVariant.title !== "string") {
+        throw new Error("Invalid translation payload");
+      }
+    }
   }
 
   for (const slide of record.slides) {
@@ -483,6 +510,32 @@ function validateParrotMusicStylePayloadAgainstSource(sourcePayload: unknown, tr
 
   if (translatedSlides.length !== sourceSlides.length) {
     throw new Error(`Slide count mismatch: expected ${sourceSlides.length}, got ${translatedSlides.length}.`);
+  }
+
+  const sourcePresets = Array.isArray((sourcePayload as { presets?: unknown } | null | undefined)?.presets)
+    ? ((sourcePayload as { presets: Array<{ preset_key?: unknown; variants?: unknown }> }).presets)
+    : [];
+  const translatedPresets = Array.isArray((translatedPayload as { presets?: unknown } | null | undefined)?.presets)
+    ? ((translatedPayload as { presets: Array<{ preset_key?: unknown; variants?: unknown }> }).presets)
+    : [];
+
+  if (sourcePresets.length !== translatedPresets.length) {
+    throw new Error(`Preset count mismatch: expected ${sourcePresets.length}, got ${translatedPresets.length}.`);
+  }
+
+  for (const sourcePreset of sourcePresets) {
+    const presetKey = typeof sourcePreset.preset_key === "string" ? sourcePreset.preset_key : "";
+    const translatedPreset = translatedPresets.find((preset) => preset.preset_key === presetKey);
+    if (!translatedPreset) {
+      throw new Error(`Missing translated preset "${presetKey}".`);
+    }
+    const sourceVariants = Array.isArray(sourcePreset.variants) ? sourcePreset.variants : [];
+    const translatedVariants = Array.isArray(translatedPreset.variants) ? translatedPreset.variants : [];
+    if (sourceVariants.length !== translatedVariants.length) {
+      throw new Error(
+        `Variant count mismatch for preset "${presetKey}": expected ${sourceVariants.length}, got ${translatedVariants.length}.`,
+      );
+    }
   }
 }
 

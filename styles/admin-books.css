@@ -213,6 +213,78 @@
   line-height: 1.5;
 }
 
+.parrot-presets-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.parrot-preset-card {
+  min-height: 560px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+
+.parrot-preset-card--1 {
+  background: #f6fbff;
+  border-color: #a9cfe8;
+}
+
+.parrot-preset-card--2 {
+  background: #f8fbf3;
+  border-color: #bed89d;
+}
+
+.parrot-preset-card--3 {
+  background: #fff8f1;
+  border-color: #e7c09a;
+}
+
+.parrot-preset-card--4 {
+  background: #f9f6ff;
+  border-color: #c8b8e8;
+}
+
+.parrot-variant-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.parrot-variant-tab {
+  width: 36px;
+  height: 36px;
+  border: 1px solid #b8c4d3;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #263244;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.parrot-variant-tab--active {
+  background: #263244;
+  color: #ffffff;
+  border-color: #263244;
+}
+
+.parrot-variant-panel {
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.parrot-add-variant-button {
+  margin-top: auto;
+  justify-content: center;
+}
+
+@media (max-width: 900px) {
+  .parrot-presets-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .recipe-preview-wrap {
   display: flex;
   justify-content: center;

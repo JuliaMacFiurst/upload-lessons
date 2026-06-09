@@ -131,6 +131,21 @@ type ParrotMusicStyleSlideRow = {
   text: string | null;
 };
 
+type ParrotMusicStylePresetRow = {
+  id: string;
+  style_id: string;
+  preset_key: string | null;
+  title: string | null;
+  sort_order: number | null;
+};
+
+type ParrotMusicStyleVariantRow = {
+  preset_id: string;
+  variant_key: string | null;
+  title: string | null;
+  sort_order: number | null;
+};
+
 const STORY_STEP_KEYS = [
   "narration",
   "intro",
@@ -295,11 +310,27 @@ function normalizeArtworkSource(row: ArtworkRow): unknown {
 
 function normalizeParrotMusicStyleSource(
   row: ParrotMusicStyleRow,
+  presets: ParrotMusicStylePresetRow[],
+  variantsByPresetId: Map<string, ParrotMusicStyleVariantRow[]>,
   slides: ParrotMusicStyleSlideRow[],
 ): unknown {
   return {
     title: row.title ?? "",
     description: row.description ?? "",
+    presets: presets
+      .filter((preset) => typeof preset.preset_key === "string" && preset.preset_key.trim().length > 0)
+      .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
+      .map((preset) => ({
+        preset_key: preset.preset_key ?? "",
+        title: preset.title ?? "",
+        variants: (variantsByPresetId.get(preset.id) ?? [])
+          .filter((variant) => typeof variant.variant_key === "string" && variant.variant_key.trim().length > 0)
+          .sort((left, right) => (left.sort_order ?? 0) - (right.sort_order ?? 0))
+          .map((variant) => ({
+            variant_key: variant.variant_key ?? "",
+            title: variant.title ?? "",
+          })),
+      })),
     slides: slides
       .filter((slide) => typeof slide.text === "string" && slide.text.trim().length > 0)
       .sort((left, right) => (left.slide_order ?? 0) - (right.slide_order ?? 0))
@@ -593,8 +624,16 @@ export async function analyzeStories(supabase: SupabaseClient): Promise<LoadedTr
 }
 
 export async function analyzeParrotMusicStyles(supabase: SupabaseClient): Promise<LoadedTranslationItem[]> {
-  const [stylesRes, slidesRes] = await Promise.all([
+  const [stylesRes, presetsRes, variantsRes, slidesRes] = await Promise.all([
     supabase.from("parrot_music_styles").select("id,title,description"),
+    supabase
+      .from("parrot_music_style_presets")
+      .select("id,style_id,preset_key,title,sort_order")
+      .order("sort_order", { ascending: true, nullsFirst: false }),
+    supabase
+      .from("parrot_music_style_variants")
+      .select("preset_id,variant_key,title,sort_order")
+      .order("sort_order", { ascending: true, nullsFirst: false }),
     supabase
       .from("parrot_music_style_slides")
       .select("style_id,slide_order,text")
@@ -604,9 +643,29 @@ export async function analyzeParrotMusicStyles(supabase: SupabaseClient): Promis
   if (stylesRes.error) {
     throw new Error(`Failed to load parrot music styles: ${stylesRes.error.message}`);
   }
+  if (presetsRes.error) {
+    throw new Error(`Failed to load parrot music style presets: ${presetsRes.error.message}`);
+  }
+  if (variantsRes.error) {
+    throw new Error(`Failed to load parrot music style variants: ${variantsRes.error.message}`);
+  }
   if (slidesRes.error) {
     throw new Error(`Failed to load parrot music style slides: ${slidesRes.error.message}`);
   }
+
+  const presetsByStyleId = new Map<string, ParrotMusicStylePresetRow[]>();
+  (((presetsRes.data as ParrotMusicStylePresetRow[] | null) ?? [])).forEach((row) => {
+    const bucket = presetsByStyleId.get(row.style_id) ?? [];
+    bucket.push(row);
+    presetsByStyleId.set(row.style_id, bucket);
+  });
+
+  const variantsByPresetId = new Map<string, ParrotMusicStyleVariantRow[]>();
+  (((variantsRes.data as ParrotMusicStyleVariantRow[] | null) ?? [])).forEach((row) => {
+    const bucket = variantsByPresetId.get(row.preset_id) ?? [];
+    bucket.push(row);
+    variantsByPresetId.set(row.preset_id, bucket);
+  });
 
   const slidesByStyleId = new Map<string, ParrotMusicStyleSlideRow[]>();
   (((slidesRes.data as ParrotMusicStyleSlideRow[] | null) ?? [])).forEach((row) => {
@@ -619,7 +678,12 @@ export async function analyzeParrotMusicStyles(supabase: SupabaseClient): Promis
     createLoadedTranslationItem(
       "parrot_music_style",
       row.id,
-      normalizeParrotMusicStyleSource(row, slidesByStyleId.get(row.id) ?? []),
+      normalizeParrotMusicStyleSource(
+        row,
+        presetsByStyleId.get(row.id) ?? [],
+        variantsByPresetId,
+        slidesByStyleId.get(row.id) ?? [],
+      ),
     ),
   );
 }

@@ -17,6 +17,11 @@ import {
   type ParrotMusicStyleTranslations,
   type ParrotMusicStyleVariantInput,
 } from "../parrot-music-styles/types";
+import {
+  getParrotAudioUrl,
+  normalizeParrotAudioUrl,
+  normalizeParrotStyleMediaUrl,
+} from "../parrot-music-styles/media-urls";
 
 type StyleRow = {
   id: string;
@@ -70,6 +75,14 @@ type TranslationRow = {
 type TranslationShape = {
   title?: unknown;
   description?: unknown;
+  presets?: Array<{
+    preset_key?: unknown;
+    title?: unknown;
+    variants?: Array<{
+      variant_key?: unknown;
+      title?: unknown;
+    }>;
+  }>;
   slides?: Array<{
     order?: unknown;
     text?: unknown;
@@ -129,8 +142,6 @@ type CapybaraParrotPresetsModule = {
 type ImportedStyleSeed = ParrotMusicStylePayload;
 
 const CAPYBARA_ROOT = path.resolve(process.cwd(), "..", "capybara_tales");
-const CAPYBARA_AUDIO_BUCKET =
-  "https://wazoncnmsxbjzvbjenpw.supabase.co/storage/v1/object/public/parrot-audio";
 
 function normalizeTranslationPayload(value: unknown): ParrotMusicStyleTranslationPayload | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -140,6 +151,29 @@ function normalizeTranslationPayload(value: unknown): ParrotMusicStyleTranslatio
   const record = value as TranslationShape;
   const title = typeof record.title === "string" ? record.title.trim() : "";
   const description = typeof record.description === "string" ? record.description.trim() : "";
+  const presets = Array.isArray(record.presets)
+    ? record.presets
+        .map((preset) => {
+          const presetKey = typeof preset?.preset_key === "string" ? preset.preset_key.trim() : "";
+          const presetTitle = typeof preset?.title === "string" ? preset.title.trim() : "";
+          if (!presetKey || !presetTitle) {
+            return null;
+          }
+
+          const variants = Array.isArray(preset.variants)
+            ? preset.variants
+                .map((variant) => {
+                  const variantKey = typeof variant?.variant_key === "string" ? variant.variant_key.trim() : "";
+                  const variantTitle = typeof variant?.title === "string" ? variant.title.trim() : "";
+                  return variantKey && variantTitle ? { variant_key: variantKey, title: variantTitle } : null;
+                })
+                .filter((variant): variant is NonNullable<typeof variant> => variant !== null)
+            : [];
+
+          return { preset_key: presetKey, title: presetTitle, variants };
+        })
+        .filter((preset): preset is NonNullable<typeof preset> => preset !== null)
+    : [];
   const slides = Array.isArray(record.slides)
     ? record.slides
         .map((slide) => {
@@ -153,13 +187,14 @@ function normalizeTranslationPayload(value: unknown): ParrotMusicStyleTranslatio
         .filter((slide): slide is NonNullable<typeof slide> => slide !== null)
     : [];
 
-  if (!title && !description && slides.length === 0) {
+  if (!title && !description && presets.length === 0 && slides.length === 0) {
     return undefined;
   }
 
   return {
     ...(title ? { title } : {}),
     ...(description ? { description } : {}),
+    presets,
     slides,
   };
 }
@@ -171,7 +206,7 @@ function normalizeSlides(slides: ParrotMusicStyleSlideInput[]): ParrotMusicStyle
       ...slide,
       slide_order: index + 1,
       text: slide.text.trim(),
-      media_url: slide.media_url?.trim() || null,
+      media_url: slide.media_url?.trim() ? normalizeParrotStyleMediaUrl(slide.media_url.trim()) : null,
       media_type: slide.media_type ?? null,
     }));
 }
@@ -181,21 +216,29 @@ function normalizeVariants(variants: ParrotMusicStyleVariantInput[]): ParrotMusi
     ...variant,
     variant_key: variant.variant_key.trim(),
     title: variant.title?.trim() || null,
-    audio_url: variant.audio_url.trim(),
+    audio_url: normalizeParrotAudioUrl(variant.audio_url.trim()),
     sort_order: variant.sort_order ?? index,
   }));
 }
 
 function normalizePresets(presets: ParrotMusicStylePresetInput[]): ParrotMusicStylePresetInput[] {
-  return presets.map((preset, index) => ({
-    ...preset,
-    preset_key: preset.preset_key.trim(),
-    title: preset.title.trim(),
-    icon_url: preset.icon_url?.trim() || null,
-    sort_order: preset.sort_order ?? index,
-    default_variant_key: preset.default_variant_key?.trim() || null,
-    variants: normalizeVariants(preset.variants),
-  }));
+  return presets.map((preset, index) => {
+    const variants = normalizeVariants(preset.variants);
+    const requestedDefault = preset.default_variant_key?.trim() || null;
+    const defaultExists = requestedDefault
+      ? variants.some((variant) => variant.variant_key === requestedDefault)
+      : false;
+
+    return {
+      ...preset,
+      preset_key: preset.preset_key.trim(),
+      title: preset.title.trim(),
+      icon_url: preset.icon_url?.trim() ? normalizeParrotStyleMediaUrl(preset.icon_url.trim()) : null,
+      sort_order: preset.sort_order ?? index,
+      default_variant_key: defaultExists ? requestedDefault : variants[0]?.variant_key ?? null,
+      variants,
+    };
+  });
 }
 
 function normalizeTranslations(
@@ -211,6 +254,18 @@ function normalizeTranslations(
 
     const title = payload.title?.trim() || "";
     const description = payload.description?.trim() || "";
+    const presets = (payload.presets ?? [])
+      .map((preset) => ({
+        preset_key: preset.preset_key.trim(),
+        title: preset.title.trim(),
+        variants: (preset.variants ?? [])
+          .map((variant) => ({
+            variant_key: variant.variant_key.trim(),
+            title: variant.title.trim(),
+          }))
+          .filter((variant) => variant.variant_key.length > 0 && variant.title.length > 0),
+      }))
+      .filter((preset) => preset.preset_key.length > 0 && preset.title.length > 0);
     const slides = (payload.slides ?? [])
       .map((slide) => ({
         order: slide.order,
@@ -219,13 +274,14 @@ function normalizeTranslations(
       .filter((slide) => slide.text.length > 0)
       .sort((left, right) => left.order - right.order);
 
-    if (!title && !description && slides.length === 0) {
+    if (!title && !description && presets.length === 0 && slides.length === 0) {
       continue;
     }
 
     normalized[language] = {
       ...(title ? { title } : {}),
       ...(description ? { description } : {}),
+      presets,
       slides,
     };
   }
@@ -275,7 +331,7 @@ function toEditorRecord(
     slug: row.slug,
     title: row.title,
     description: row.description,
-    icon_url: row.icon_url,
+    icon_url: row.icon_url ? normalizeParrotStyleMediaUrl(row.icon_url) : null,
     search_artist: row.search_artist,
     search_genre: row.search_genre,
     is_active: row.is_active,
@@ -286,7 +342,7 @@ function toEditorRecord(
         id: preset.id,
         preset_key: preset.preset_key,
         title: preset.title,
-        icon_url: preset.icon_url,
+        icon_url: preset.icon_url ? normalizeParrotStyleMediaUrl(preset.icon_url) : null,
         sort_order: preset.sort_order,
         default_on: preset.default_on,
         default_variant_key: preset.default_variant_key,
@@ -296,7 +352,7 @@ function toEditorRecord(
             id: variant.id,
             variant_key: variant.variant_key,
             title: variant.title,
-            audio_url: variant.audio_url,
+            audio_url: normalizeParrotAudioUrl(variant.audio_url),
             sort_order: variant.sort_order,
           })),
       })),
@@ -306,7 +362,7 @@ function toEditorRecord(
         id: slide.id,
         slide_order: slide.slide_order,
         text: slide.text,
-        media_url: slide.media_url,
+        media_url: slide.media_url ? normalizeParrotStyleMediaUrl(slide.media_url) : null,
         media_type: slide.media_type,
       })),
     translations,
@@ -503,7 +559,7 @@ async function loadCapybaraSeeds(): Promise<ImportedStyleSeed[]> {
     (specifier) => {
       if (specifier === "@/utils/storageParrot") {
         return {
-          getParrotLoopUrl: (relativePath: string) => `${CAPYBARA_AUDIO_BUCKET}/${relativePath}`,
+          getParrotLoopUrl: (relativePath: string) => getParrotAudioUrl(relativePath),
         };
       }
       throw new Error(`Unsupported import in parrot-presets.ts: ${specifier}`);
@@ -526,7 +582,7 @@ async function loadCapybaraSeeds(): Promise<ImportedStyleSeed[]> {
       slug: preset.id,
       title: ru?.title ?? preset.title,
       description: ru?.description ?? preset.description,
-      icon_url: presetsModule.iconForMusicStyle(preset.id),
+      icon_url: normalizeParrotStyleMediaUrl(presetsModule.iconForMusicStyle(preset.id)),
       search_artist: preset.searchArtist,
       search_genre: preset.searchGenre,
       is_active: true,
@@ -534,7 +590,7 @@ async function loadCapybaraSeeds(): Promise<ImportedStyleSeed[]> {
       presets: preset.loops.map((loop, loopIndex) => ({
         preset_key: loop.id,
         title: loop.label,
-        icon_url: presetsModule.iconForInstrument(loop.label || loop.id),
+        icon_url: normalizeParrotStyleMediaUrl(presetsModule.iconForInstrument(loop.label || loop.id)),
         sort_order: loopIndex,
         default_on: Boolean(loop.defaultOn),
         default_variant_key:
@@ -544,14 +600,14 @@ async function loadCapybaraSeeds(): Promise<ImportedStyleSeed[]> {
         variants: loop.variants.map((variant, variantIndex) => ({
           variant_key: variant.id,
           title: variant.label ?? null,
-          audio_url: variant.src,
+          audio_url: normalizeParrotAudioUrl(variant.src),
           sort_order: variantIndex,
         })),
       })),
       slides: (ru?.slides ?? []).map((slide, slideIndex) => ({
         slide_order: slideIndex + 1,
         text: slide.text,
-        media_url: slide.mediaUrl ?? null,
+        media_url: slide.mediaUrl ? normalizeParrotStyleMediaUrl(slide.mediaUrl) : null,
         media_type: slide.mediaType ?? null,
       })),
       translations: {
@@ -560,6 +616,7 @@ async function loadCapybaraSeeds(): Promise<ImportedStyleSeed[]> {
               en: {
                 title: en.title,
                 ...(en.description ? { description: en.description } : {}),
+                presets: [],
                 slides: en.slides.map((slide, slideIndex) => ({
                   order: slideIndex + 1,
                   text: slide.text,
@@ -572,6 +629,7 @@ async function loadCapybaraSeeds(): Promise<ImportedStyleSeed[]> {
               he: {
                 title: he.title,
                 ...(he.description ? { description: he.description } : {}),
+                presets: [],
                 slides: he.slides.map((slide, slideIndex) => ({
                   order: slideIndex + 1,
                   text: slide.text,
@@ -753,7 +811,7 @@ export async function createParrotMusicStyle(
       slug: parsed.slug,
       title: parsed.title,
       description: parsed.description ?? null,
-      icon_url: parsed.icon_url ?? null,
+      icon_url: parsed.icon_url ? normalizeParrotStyleMediaUrl(parsed.icon_url) : null,
       search_artist: parsed.search_artist ?? null,
       search_genre: parsed.search_genre ?? null,
       is_active: parsed.is_active,
@@ -793,7 +851,7 @@ export async function updateParrotMusicStyle(
       slug: parsed.slug,
       title: parsed.title,
       description: parsed.description ?? null,
-      icon_url: parsed.icon_url ?? null,
+      icon_url: parsed.icon_url ? normalizeParrotStyleMediaUrl(parsed.icon_url) : null,
       search_artist: parsed.search_artist ?? null,
       search_genre: parsed.search_genre ?? null,
       is_active: parsed.is_active,

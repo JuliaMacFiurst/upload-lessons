@@ -6,6 +6,10 @@ import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../AdminLogout";
 import { AdminTabs } from "../AdminTabs";
 import { parrotMusicStylePayloadSchema } from "../../lib/parrot-music-styles/types";
+import {
+  normalizeParrotAudioUrl,
+  normalizeParrotStyleMediaUrl,
+} from "../../lib/parrot-music-styles/media-urls";
 import type {
   ParrotMusicStyleMediaType,
   ParrotMusicStylePayload,
@@ -19,9 +23,6 @@ import type {
 type Props = {
   styleId?: string;
 };
-
-const PARROT_STYLE_MEDIA_BUCKET = "parrot-style-media";
-const PARROT_AUDIO_BUCKET = "parrot-audio";
 
 const sampleJson = `{
   "slug": "bossa",
@@ -134,6 +135,33 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   return data;
 }
 
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(new Error("Failed to read file."));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadParrotMedia(input: {
+  kind: "audio" | "styleMedia";
+  path: string;
+  file: File;
+  contentType: string;
+}) {
+  return fetchJson<{ publicUrl: string; path: string }>("/api/admin/parrot-music-styles/media", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kind: input.kind,
+      path: input.path,
+      contentType: input.contentType,
+      fileBase64: await fileToBase64(input.file),
+    }),
+  });
+}
+
 async function copyTextToClipboard(value: string) {
   if (navigator.clipboard?.writeText) {
     await navigator.clipboard.writeText(value);
@@ -202,25 +230,32 @@ function sanitizeStorageSegment(value: string) {
     .replace(/^-|-$/g, "");
 }
 
-function createEmptyVariant(): ParrotMusicStyleVariantInput {
+function createVariantForPreset(
+  preset: Pick<ParrotMusicStylePresetInput, "preset_key" | "title">,
+  index: number,
+): ParrotMusicStyleVariantInput {
+  const presetKey = sanitizeStorageSegment(preset.preset_key) || "loop";
+  const presetTitle = preset.title.trim() || presetKey;
+  const number = index + 1;
   return {
-    variant_key: "",
-    title: "",
+    variant_key: `${presetKey}_${number}`,
+    title: `${presetTitle}-${number}`,
     audio_url: "",
-    sort_order: null,
+    sort_order: index,
   };
 }
 
 function createEmptyPreset(): ParrotMusicStylePresetInput {
-  return {
+  const preset = {
     preset_key: "",
     title: "",
     icon_url: "",
     sort_order: null,
     default_on: false,
     default_variant_key: null,
-    variants: [createEmptyVariant()],
+    variants: [],
   };
+  return { ...preset, variants: [createVariantForPreset(preset, 0)] };
 }
 
 function createEmptySlide(order: number): ParrotMusicStyleSlideInput {
@@ -236,8 +271,60 @@ function createEmptyTranslation(): ParrotMusicStyleTranslationPayload {
   return {
     title: "",
     description: "",
+    presets: [],
     slides: [],
   };
+}
+
+function normalizedVariantForPreset(
+  preset: ParrotMusicStylePresetInput,
+  variant: ParrotMusicStyleVariantInput,
+  index: number,
+): ParrotMusicStyleVariantInput {
+  const generated = createVariantForPreset(preset, index);
+  return {
+    ...variant,
+    variant_key: generated.variant_key,
+    title: generated.title,
+    sort_order: index,
+  };
+}
+
+function normalizedPresetVariants(preset: ParrotMusicStylePresetInput): ParrotMusicStyleVariantInput[] {
+  return preset.variants.map((variant, index) => normalizedVariantForPreset(preset, variant, index));
+}
+
+function variantTitleForLanguage(
+  style: ParrotMusicStylePayload,
+  language: "en" | "he",
+  preset: ParrotMusicStylePresetInput,
+  variantIndex: number,
+) {
+  const presetTranslation = style.translations[language]?.presets?.find(
+    (item) => item.preset_key === preset.preset_key,
+  );
+  const presetTitle = presetTranslation?.title?.trim() || preset.title.trim() || preset.preset_key;
+  return `${presetTitle}-${variantIndex + 1}`;
+}
+
+function translationPresetsForSave(state: ParrotMusicStylePayload, language: "en" | "he") {
+  const translatedPresets = state.translations[language]?.presets ?? [];
+  return state.presets
+    .map((preset) => {
+      const translatedTitle = translatedPresets.find((item) => item.preset_key === preset.preset_key)?.title?.trim() ?? "";
+      if (!preset.preset_key.trim() || !translatedTitle) {
+        return null;
+      }
+      return {
+        preset_key: preset.preset_key.trim(),
+        title: translatedTitle,
+        variants: normalizedPresetVariants(preset).map((variant, variantIndex) => ({
+          variant_key: variant.variant_key,
+          title: `${translatedTitle}-${variantIndex + 1}`,
+        })),
+      };
+    })
+    .filter((preset): preset is NonNullable<typeof preset> => preset !== null);
 }
 
 function createEmptyState(): ParrotMusicStylePayload {
@@ -261,7 +348,7 @@ function toEditableState(style: ParrotMusicStyleRecord | ParrotMusicStylePayload
     slug: style.slug,
     title: style.title,
     description: style.description ?? "",
-    icon_url: style.icon_url ?? "",
+    icon_url: style.icon_url ? normalizeParrotStyleMediaUrl(style.icon_url) : "",
     search_artist: style.search_artist ?? "",
     search_genre: style.search_genre ?? "",
     is_active: style.is_active,
@@ -269,21 +356,21 @@ function toEditableState(style: ParrotMusicStyleRecord | ParrotMusicStylePayload
     presets: style.presets.map((preset) => ({
       preset_key: preset.preset_key,
       title: preset.title,
-      icon_url: preset.icon_url ?? "",
+      icon_url: preset.icon_url ? normalizeParrotStyleMediaUrl(preset.icon_url) : "",
       sort_order: preset.sort_order,
       default_on: preset.default_on,
       default_variant_key: preset.default_variant_key ?? "",
       variants: preset.variants.map((variant) => ({
         variant_key: variant.variant_key,
         title: variant.title ?? "",
-        audio_url: variant.audio_url,
+        audio_url: normalizeParrotAudioUrl(variant.audio_url),
         sort_order: variant.sort_order,
       })),
     })),
     slides: style.slides.map((slide) => ({
       slide_order: slide.slide_order,
       text: slide.text,
-      media_url: slide.media_url ?? null,
+      media_url: slide.media_url ? normalizeParrotStyleMediaUrl(slide.media_url) : null,
       media_type: slide.media_type ?? null,
     })),
     translations: {
@@ -292,6 +379,7 @@ function toEditableState(style: ParrotMusicStyleRecord | ParrotMusicStylePayload
             en: {
               title: style.translations.en.title ?? "",
               description: style.translations.en.description ?? "",
+              presets: style.translations.en.presets ?? [],
               slides: style.translations.en.slides ?? [],
             },
           }
@@ -301,6 +389,7 @@ function toEditableState(style: ParrotMusicStyleRecord | ParrotMusicStylePayload
             he: {
               title: style.translations.he.title ?? "",
               description: style.translations.he.description ?? "",
+              presets: style.translations.he.presets ?? [],
               slides: style.translations.he.slides ?? [],
             },
           }
@@ -315,29 +404,32 @@ function normalizeStateForSave(state: ParrotMusicStylePayload): ParrotMusicStyle
     slug: state.slug.trim(),
     title: state.title.trim(),
     description: state.description?.trim() || null,
-    icon_url: state.icon_url?.trim() || null,
+    icon_url: state.icon_url?.trim() ? normalizeParrotStyleMediaUrl(state.icon_url.trim()) : null,
     search_artist: state.search_artist?.trim() || null,
     search_genre: state.search_genre?.trim() || null,
-    presets: state.presets.map((preset, presetIndex) => ({
-      ...preset,
-      preset_key: preset.preset_key.trim(),
-      title: preset.title.trim(),
-      icon_url: preset.icon_url?.trim() || null,
-      sort_order: preset.sort_order ?? presetIndex,
-      default_variant_key: preset.default_variant_key?.trim() || null,
-      variants: preset.variants.map((variant, variantIndex) => ({
+    presets: state.presets.map((preset, presetIndex) => {
+      const normalizedPreset = {
+        ...preset,
+        preset_key: preset.preset_key.trim(),
+        title: preset.title.trim(),
+      };
+      const variants = normalizedPresetVariants(normalizedPreset).map((variant) => ({
         ...variant,
-        variant_key: variant.variant_key.trim(),
-        title: variant.title?.trim() || null,
-        audio_url: variant.audio_url.trim(),
-        sort_order: variant.sort_order ?? variantIndex,
-      })),
-    })),
+        audio_url: normalizeParrotAudioUrl(variant.audio_url.trim()),
+      }));
+      return {
+        ...normalizedPreset,
+        icon_url: normalizedPreset.icon_url?.trim() ? normalizeParrotStyleMediaUrl(normalizedPreset.icon_url.trim()) : null,
+        sort_order: normalizedPreset.sort_order ?? presetIndex,
+        default_variant_key: normalizedPreset.default_variant_key?.trim() || variants[0]?.variant_key || null,
+        variants,
+      };
+    }),
     slides: state.slides.map((slide, index) => ({
       ...slide,
       slide_order: index + 1,
       text: slide.text.trim(),
-      media_url: slide.media_url?.trim() || null,
+      media_url: slide.media_url?.trim() ? normalizeParrotStyleMediaUrl(slide.media_url.trim()) : null,
       media_type: slide.media_type ?? null,
     })),
     translations: {
@@ -346,6 +438,7 @@ function normalizeStateForSave(state: ParrotMusicStylePayload): ParrotMusicStyle
             en: {
               title: state.translations.en.title?.trim() || undefined,
               description: state.translations.en.description?.trim() || undefined,
+              presets: translationPresetsForSave(state, "en"),
               slides: (state.translations.en.slides ?? [])
                 .map((slide) => ({
                   order: slide.order,
@@ -360,6 +453,7 @@ function normalizeStateForSave(state: ParrotMusicStylePayload): ParrotMusicStyle
             he: {
               title: state.translations.he.title?.trim() || undefined,
               description: state.translations.he.description?.trim() || undefined,
+              presets: translationPresetsForSave(state, "he"),
               slides: (state.translations.he.slides ?? [])
                 .map((slide) => ({
                   order: slide.order,
@@ -398,12 +492,6 @@ function validateState(state: ParrotMusicStylePayload): string | null {
         return `Variant "${variant.variant_key}" must have audio_url.`;
       }
     }
-    if (
-      preset.default_variant_key?.trim() &&
-      !preset.variants.some((variant) => variant.variant_key.trim() === preset.default_variant_key?.trim())
-    ) {
-      return `Preset "${preset.preset_key}" references missing default_variant_key.`;
-    }
   }
   if (!state.slides.some((slide) => slide.text.trim().length > 0)) {
     return "At least one base slide with text is required.";
@@ -437,6 +525,7 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
   const [deleting, setDeleting] = useState(false);
   const [importingJson, setImportingJson] = useState(false);
   const [jsonImportValue, setJsonImportValue] = useState("");
+  const [activeVariantByPreset, setActiveVariantByPreset] = useState<Record<number, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -474,7 +563,49 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
       }
       return {
         ...current,
-        presets: current.presets.map((preset, index) => (index === presetIndex ? { ...preset, ...patch } : preset)),
+        presets: current.presets.map((preset, index) => {
+          if (index !== presetIndex) {
+            return preset;
+          }
+          const nextPreset = { ...preset, ...patch };
+          const nextVariants = patch.preset_key !== undefined || patch.title !== undefined
+            ? normalizedPresetVariants(nextPreset)
+            : nextPreset.variants;
+          return {
+            ...nextPreset,
+            variants: nextVariants,
+            default_variant_key:
+              patch.preset_key !== undefined || patch.title !== undefined
+                ? nextVariants[0]?.variant_key ?? nextPreset.default_variant_key
+                : nextPreset.default_variant_key,
+          };
+        }),
+        translations:
+          patch.preset_key !== undefined
+            ? {
+                ...current.translations,
+                en: current.translations.en
+                  ? {
+                      ...current.translations.en,
+                      presets: (current.translations.en.presets ?? []).map((item) =>
+                        item.preset_key === current.presets[presetIndex]?.preset_key
+                          ? { ...item, preset_key: current.presets[presetIndex] ? { ...current.presets[presetIndex], ...patch }.preset_key : item.preset_key }
+                          : item,
+                      ),
+                    }
+                  : current.translations.en,
+                he: current.translations.he
+                  ? {
+                      ...current.translations.he,
+                      presets: (current.translations.he.presets ?? []).map((item) =>
+                        item.preset_key === current.presets[presetIndex]?.preset_key
+                          ? { ...item, preset_key: current.presets[presetIndex] ? { ...current.presets[presetIndex], ...patch }.preset_key : item.preset_key }
+                          : item,
+                      ),
+                    }
+                  : current.translations.he,
+              }
+            : current.translations,
       };
     });
   };
@@ -525,20 +656,64 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
     });
   };
 
+  const updateTranslatedPresetTitle = (language: "en" | "he", preset: ParrotMusicStylePresetInput, title: string) => {
+    ensureTranslation(language);
+    setStyle((current) => {
+      if (!current) {
+        return current;
+      }
+      const existing = current.translations[language] ?? createEmptyTranslation();
+      const presets = existing.presets ?? [];
+      const variants = preset.variants.map((variant, variantIndex) => ({
+        variant_key: variant.variant_key,
+        title: title.trim() ? `${title.trim()}-${variantIndex + 1}` : "",
+      }));
+      const nextPreset = {
+        preset_key: preset.preset_key,
+        title,
+        variants,
+      };
+      const found = presets.some((item) => item.preset_key === preset.preset_key);
+      return {
+        ...current,
+        translations: {
+          ...current.translations,
+          [language]: {
+            ...existing,
+            presets: found
+              ? presets.map((item) => (item.preset_key === preset.preset_key ? nextPreset : item))
+              : [...presets, nextPreset],
+          },
+        },
+      };
+    });
+  };
+
+  const selectVariant = (presetIndex: number, variantIndex: number) => {
+    setActiveVariantByPreset((current) => ({
+      ...current,
+      [presetIndex]: Math.max(0, variantIndex),
+    }));
+  };
+
   const addVariant = (presetIndex: number) => {
+    let nextVariantIndex = 0;
     setStyle((current) => {
       if (!current) {
         return current;
       }
       return {
         ...current,
-        presets: current.presets.map((preset, index) => (
-          index === presetIndex
-            ? { ...preset, variants: [...preset.variants, createEmptyVariant()] }
-            : preset
-        )),
+        presets: current.presets.map((preset, index) => {
+          if (index !== presetIndex) {
+            return preset;
+          }
+          nextVariantIndex = preset.variants.length;
+          return { ...preset, variants: [...preset.variants, createVariantForPreset(preset, preset.variants.length)] };
+        }),
       };
     });
+    selectVariant(presetIndex, nextVariantIndex);
   };
 
   const removeVariant = (presetIndex: number, variantIndex: number) => {
@@ -552,7 +727,10 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
           index === presetIndex
             ? {
                 ...preset,
-                variants: preset.variants.filter((_, itemIndex) => itemIndex !== variantIndex),
+                variants: normalizedPresetVariants({
+                  ...preset,
+                  variants: preset.variants.filter((_, itemIndex) => itemIndex !== variantIndex),
+                }),
               }
             : preset
         )),
@@ -743,16 +921,13 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
     try {
       const converted = await imageFileToWebp(file, "style-icon");
       const storagePath = `styles/${slug}/style-icon.webp`;
-      const { error: uploadError } = await supabase.storage.from(PARROT_STYLE_MEDIA_BUCKET).upload(storagePath, converted, {
-        cacheControl: "3600",
-        upsert: true,
+      const { publicUrl } = await uploadParrotMedia({
+        kind: "styleMedia",
+        path: storagePath,
+        file: converted,
         contentType: "image/webp",
       });
-      if (uploadError) {
-        throw new Error(uploadError.message);
-      }
-      const { data } = supabase.storage.from(PARROT_STYLE_MEDIA_BUCKET).getPublicUrl(storagePath);
-      updateStyle({ icon_url: data.publicUrl });
+      updateStyle({ icon_url: publicUrl });
       setSuccess("Иконка стиля загружена.");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
@@ -783,16 +958,13 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
     try {
       const converted = await imageFileToWebp(file, presetKey);
       const storagePath = `styles/${slug}/presets/${presetKey}.webp`;
-      const { error: uploadError } = await supabase.storage.from(PARROT_STYLE_MEDIA_BUCKET).upload(storagePath, converted, {
-        cacheControl: "3600",
-        upsert: true,
+      const { publicUrl } = await uploadParrotMedia({
+        kind: "styleMedia",
+        path: storagePath,
+        file: converted,
         contentType: "image/webp",
       });
-      if (uploadError) {
-        throw new Error(uploadError.message);
-      }
-      const { data } = supabase.storage.from(PARROT_STYLE_MEDIA_BUCKET).getPublicUrl(storagePath);
-      updatePreset(presetIndex, { icon_url: data.publicUrl });
+      updatePreset(presetIndex, { icon_url: publicUrl });
       setSuccess(`Иконка инструмента "${style.presets[presetIndex]?.title || style.presets[presetIndex]?.preset_key}" загружена.`);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
@@ -818,8 +990,9 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
       setError("Не удалось собрать имя файла для mp3.");
       return;
     }
-    if (file.type && file.type !== "audio/mpeg" && file.type !== "audio/mp3") {
-      setError("Загружайте mp3 файл.");
+    const isWav = file.type === "audio/wav" || file.type === "audio/wave" || file.type === "audio/x-wav" || /\.wav$/i.test(file.name);
+    if (file.type && file.type !== "audio/mpeg" && file.type !== "audio/mp3" && !isWav) {
+      setError("Загружайте mp3 или wav файл.");
       return;
     }
 
@@ -827,16 +1000,13 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
     setSuccess(null);
     try {
       const storagePath = `parrots/${slug}/${presetKey}/${fileName}.mp3`;
-      const { error: uploadError } = await supabase.storage.from(PARROT_AUDIO_BUCKET).upload(storagePath, file, {
-        cacheControl: "3600",
-        upsert: true,
-        contentType: "audio/mpeg",
+      const { publicUrl } = await uploadParrotMedia({
+        kind: "audio",
+        path: storagePath,
+        file,
+        contentType: isWav ? "audio/wav" : "audio/mpeg",
       });
-      if (uploadError) {
-        throw new Error(uploadError.message);
-      }
-      const { data } = supabase.storage.from(PARROT_AUDIO_BUCKET).getPublicUrl(storagePath);
-      updateVariant(presetIndex, variantIndex, { audio_url: data.publicUrl });
+      updateVariant(presetIndex, variantIndex, { audio_url: publicUrl });
       setSuccess("Аудио загружено и подставлено в variant.");
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
@@ -1069,7 +1239,7 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                   value={style.icon_url ?? ""}
                   onChange={(event) => updateStyle({ icon_url: event.target.value })}
                 />
-                <span className="books-field__help">Можно вставить URL вручную или загрузить png/jpeg в bucket `parrot-style-media`.</span>
+                <span className="books-field__help">Можно вставить URL вручную или загрузить png/jpeg.</span>
                 <input
                   className="books-input"
                   type="file"
@@ -1127,14 +1297,23 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                 </button>
               </div>
             </div>
-            {style.presets.map((preset, presetIndex) => (
-              <div className="books-subpanel" key={`preset-${presetIndex}`}>
+            <div className="parrot-presets-grid">
+            {style.presets.map((preset, presetIndex) => {
+              const activeVariantIndex = Math.min(
+                activeVariantByPreset[presetIndex] ?? 0,
+                Math.max(0, preset.variants.length - 1),
+              );
+              const activeVariant = preset.variants[activeVariantIndex] ?? preset.variants[0];
+              const enPresetTitle = style.translations.en?.presets?.find((item) => item.preset_key === preset.preset_key)?.title ?? "";
+              const hePresetTitle = style.translations.he?.presets?.find((item) => item.preset_key === preset.preset_key)?.title ?? "";
+              return (
+              <div className={`books-subpanel parrot-preset-card parrot-preset-card--${(presetIndex % 4) + 1}`} key={`preset-${presetIndex}`}>
                 <div className="books-section-head">
                   <div>
                     <h3 className="books-subpanel__title">
                       {preset.title || preset.preset_key || `Инструмент ${presetIndex + 1}`}
                     </h3>
-                    <p className="books-section-help">Один инструмент содержит свою иконку, дефолтный variant и список mp3-вариантов.</p>
+                    <p className="books-section-help">Ключи и названия loop-ов заполняются автоматически.</p>
                   </div>
                   <div className="books-actions">
                     <button
@@ -1146,7 +1325,7 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                     </button>
                   </div>
                 </div>
-                <div className="books-grid books-grid--3">
+                <div className="books-grid books-grid--2">
                   <label className="books-field">
                     <span className="books-field__label">Preset key</span>
                     <input
@@ -1157,11 +1336,30 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                     />
                   </label>
                   <label className="books-field">
-                    <span className="books-field__label">Название</span>
+                    <span className="books-field__label">Название RU</span>
                     <input
                       className="books-input"
                       value={preset.title}
                       onChange={(event) => updatePreset(presetIndex, { title: event.target.value })}
+                    />
+                  </label>
+                  <label className="books-field">
+                    <span className="books-field__label">Название EN</span>
+                    <input
+                      className="books-input"
+                      value={enPresetTitle}
+                      onChange={(event) => updateTranslatedPresetTitle("en", preset, event.target.value)}
+                      placeholder="Lute"
+                    />
+                  </label>
+                  <label className="books-field">
+                    <span className="books-field__label">Название HE</span>
+                    <input
+                      className="books-input"
+                      dir="rtl"
+                      value={hePresetTitle}
+                      onChange={(event) => updateTranslatedPresetTitle("he", preset, event.target.value)}
+                      placeholder="לאוטה"
                     />
                   </label>
                   <label className="books-field">
@@ -1183,7 +1381,7 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                       value={preset.icon_url ?? ""}
                       onChange={(event) => updatePreset(presetIndex, { icon_url: event.target.value })}
                     />
-                    <span className="books-field__help">Загрузка сохраняет png/jpeg как webp в `parrot-style-media`.</span>
+                    <span className="books-field__help">Загрузка сохраняет png/jpeg как webp.</span>
                     <input
                       className="books-input"
                       type="file"
@@ -1219,28 +1417,27 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                   </span>
                 </label>
 
-                <div className="books-section-head">
-                  <div>
-                    <h4 className="books-subpanel__title">Варианты</h4>
-                    <p className="books-section-help">Можно вставить `audio_url` вручную или загрузить mp3 прямо в bucket `parrot-audio`.</p>
-                  </div>
-                  <div className="books-actions">
+                <div className="parrot-variant-tabs" aria-label="Варианты лупов">
+                  {preset.variants.map((variant, variantIndex) => (
                     <button
                       type="button"
-                      className="books-button books-button--secondary"
-                      onClick={() => addVariant(presetIndex)}
+                      className={`parrot-variant-tab ${variantIndex === activeVariantIndex ? "parrot-variant-tab--active" : ""}`}
+                      key={`preset-${presetIndex}-tab-${variantIndex}`}
+                      onClick={() => selectVariant(presetIndex, variantIndex)}
                     >
-                      Добавить вариант
+                      {variantIndex + 1}
                     </button>
-                  </div>
+                  ))}
                 </div>
-                {preset.variants.map((variant, variantIndex) => (
-                  <div className="books-question" key={`preset-${presetIndex}-variant-${variantIndex}`}>
+
+                {activeVariant ? (
+                  <div className="books-question parrot-variant-panel" key={`preset-${presetIndex}-variant-${activeVariantIndex}`}>
                     <div className="books-actions books-actions--compact">
                       <button
                         type="button"
                         className="books-button books-button--ghost"
-                        onClick={() => removeVariant(presetIndex, variantIndex)}
+                        onClick={() => removeVariant(presetIndex, activeVariantIndex)}
+                        disabled={preset.variants.length <= 1}
                       >
                         Удалить вариант
                       </button>
@@ -1250,19 +1447,17 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                         <span className="books-field__label">Variant key</span>
                         <input
                           className="books-input"
-                          value={variant.variant_key}
-                          onChange={(event) =>
-                            updateVariant(presetIndex, variantIndex, { variant_key: event.target.value })}
+                          value={activeVariant.variant_key}
+                          readOnly
                           placeholder="bells_01"
                         />
                       </label>
                       <label className="books-field">
-                        <span className="books-field__label">Название</span>
+                        <span className="books-field__label">Название RU</span>
                         <input
                           className="books-input"
-                          value={variant.title ?? ""}
-                          onChange={(event) =>
-                            updateVariant(presetIndex, variantIndex, { title: event.target.value })}
+                          value={activeVariant.title ?? ""}
+                          readOnly
                         />
                       </label>
                       <label className="books-field">
@@ -1270,31 +1465,36 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                         <input
                           className="books-input"
                           type="number"
-                          value={variant.sort_order ?? ""}
-                          onChange={(event) =>
-                            updateVariant(presetIndex, variantIndex, {
-                              sort_order: event.target.value === "" ? null : Number(event.target.value),
-                            })}
+                          value={activeVariant.sort_order ?? activeVariantIndex}
+                          readOnly
                         />
+                      </label>
+                      <label className="books-field">
+                        <span className="books-field__label">Название EN</span>
+                        <input className="books-input" value={variantTitleForLanguage(style, "en", preset, activeVariantIndex)} readOnly />
+                      </label>
+                      <label className="books-field">
+                        <span className="books-field__label">Название HE</span>
+                        <input className="books-input" dir="rtl" value={variantTitleForLanguage(style, "he", preset, activeVariantIndex)} readOnly />
                       </label>
                       <label className="books-field books-field--wide">
                         <span className="books-field__label">Audio URL</span>
                         <input
                           className="books-input"
-                          value={variant.audio_url}
+                          value={activeVariant.audio_url}
                           onChange={(event) =>
-                            updateVariant(presetIndex, variantIndex, { audio_url: event.target.value })}
+                            updateVariant(presetIndex, activeVariantIndex, { audio_url: event.target.value })}
                           placeholder="https://.../parrots/afroperc/bells/afroperc_bells_01.mp3"
                         />
-                        <span className="books-field__help">Upload path: <code>parrots/{`{style.slug}`}/{`{preset_key}`}/filename.mp3</code></span>
+                        <span className="books-field__help">Можно загрузить mp3 или wav. WAV сохранится как mp3.</span>
                         <input
                           className="books-input"
                           type="file"
-                          accept=".mp3,audio/mpeg"
+                          accept=".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav"
                           onChange={(event) => {
                             const file = event.target.files?.[0];
                             if (file) {
-                              void uploadVariantAudio(presetIndex, variantIndex, file);
+                              void uploadVariantAudio(presetIndex, activeVariantIndex, file);
                             }
                             event.currentTarget.value = "";
                           }}
@@ -1302,9 +1502,18 @@ export function ParrotMusicStyleEditor({ styleId }: Props) {
                       </label>
                     </div>
                   </div>
-                ))}
+                ) : null}
+                <button
+                  type="button"
+                  className="books-button books-button--secondary parrot-add-variant-button"
+                  onClick={() => addVariant(presetIndex)}
+                >
+                  Добавить вариант
+                </button>
               </div>
-            ))}
+              );
+            })}
+            </div>
           </section>
 
           <section className="books-panel">
