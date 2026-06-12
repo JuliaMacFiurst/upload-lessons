@@ -18,6 +18,8 @@ import type {
 
 const LANGUAGES: BedtimeStoryLanguage[] = ["en", "ru", "he"];
 const STATUSES: BedtimeStoryStatus[] = ["draft", "ready", "exported", "scheduled", "published", "archived"];
+const MAX_UPLOAD_IMAGE_SIDE = 2600;
+const UPLOAD_WEBP_QUALITY = 0.9;
 
 type BedtimeTextFont =
   | "Nunito"
@@ -182,7 +184,20 @@ const LAPLAPLA_LOGO_URL = "https://media.laplapla.com/stickers/laplapla-logo-aqu
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
-  const data = (await response.json()) as T & { error?: string; issues?: Array<{ message: string; path: Array<string | number> }> };
+  const raw = await response.text();
+  const contentType = response.headers.get("content-type") ?? "";
+
+  if (!contentType.includes("application/json")) {
+    throw new Error(raw.slice(0, 300) || `Request failed with status ${response.status}.`);
+  }
+
+  let data: T & { error?: string; issues?: Array<{ message: string; path: Array<string | number> }> };
+  try {
+    data = JSON.parse(raw) as T & { error?: string; issues?: Array<{ message: string; path: Array<string | number> }> };
+  } catch {
+    throw new Error(`Invalid JSON response from ${url}.`);
+  }
+
   if (!response.ok) {
     const issueText = data.issues?.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("\n");
     throw new Error(issueText || data.error || "Request failed.");
@@ -214,6 +229,49 @@ function blobToDataUrl(blob: Blob): Promise<string> {
     reader.onerror = () => reject(new Error("Failed to read image blob."));
     reader.readAsDataURL(blob);
   });
+}
+
+async function imageFileToUploadFile(file: File) {
+  const imageUrl = URL.createObjectURL(file);
+  try {
+    const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+      const nextImage = new Image();
+      nextImage.onload = () => resolve(nextImage);
+      nextImage.onerror = () => reject(new Error("Failed to process image."));
+      nextImage.src = imageUrl;
+    });
+
+    const maxSide = Math.max(image.naturalWidth, image.naturalHeight);
+    const scale = maxSide > MAX_UPLOAD_IMAGE_SIDE ? MAX_UPLOAD_IMAGE_SIDE / maxSide : 1;
+    const width = Math.max(1, Math.round(image.naturalWidth * scale));
+    const height = Math.max(1, Math.round(image.naturalHeight * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const context = canvas.getContext("2d");
+    if (!context) {
+      throw new Error("Canvas is not available.");
+    }
+
+    context.drawImage(image, 0, 0, width, height);
+
+    const webpBlob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob((result) => {
+        if (!result) {
+          reject(new Error("Failed to convert image to webp."));
+          return;
+        }
+        resolve(result);
+      }, "image/webp", UPLOAD_WEBP_QUALITY);
+    });
+
+    const baseName = file.name.replace(/\.[^/.]+$/, "") || "image";
+    return new File([webpBlob], `${baseName}.webp`, { type: "image/webp" });
+  } finally {
+    URL.revokeObjectURL(imageUrl);
+  }
 }
 
 async function copyTextToClipboard(value: string) {
@@ -1076,7 +1134,8 @@ export default function BedtimeStoryEditorPage() {
       });
       lastSavedStorySignatureRef.current = storyAutosaveSignature(savedData.story);
 
-      const imageBase64 = await blobToDataUrl(file);
+      const uploadFile = await imageFileToUploadFile(file);
+      const imageBase64 = await blobToDataUrl(uploadFile);
       const data = await fetchJson<{ publicUrl: string; story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${savedData.story.id}/media`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1085,7 +1144,7 @@ export default function BedtimeStoryEditorPage() {
           language,
           slideNumber,
           imageBase64,
-          fileName: file.name,
+          fileName: uploadFile.name,
         }),
       });
       if (kind === "stamp" && selectedSlide) {
