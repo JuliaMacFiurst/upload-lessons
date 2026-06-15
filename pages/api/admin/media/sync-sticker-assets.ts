@@ -8,6 +8,7 @@ import {
 } from "../../../../lib/server/sticker-assets";
 
 const IMAGE_EXTENSIONS = new Set(["apng", "avif", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
+const STICKER_IMPORT_PREFIXES = ["stickers/", "stickers-for-"];
 
 function extensionForPath(path: string) {
   return path.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase() ?? "";
@@ -17,7 +18,7 @@ function isImportableStickerPath(path: string) {
   if (isStickerSourcePath(path)) {
     return false;
   }
-  if (!path.startsWith("stickers/")) {
+  if (!STICKER_IMPORT_PREFIXES.some((prefix) => path.startsWith(prefix))) {
     return false;
   }
   return IMAGE_EXTENSIONS.has(extensionForPath(path));
@@ -26,7 +27,7 @@ function isImportableStickerPath(path: string) {
 function setKeyFromPath(path: string) {
   const parts = path.split("/").filter(Boolean);
   if (parts[0] !== "stickers") {
-    return null;
+    return parts[0]?.startsWith("stickers-for-") ? parts[0] : null;
   }
   if (parts[1] === "raccoon-stickers") {
     return parts[2] ?? null;
@@ -34,8 +35,26 @@ function setKeyFromPath(path: string) {
   return parts[1] ?? null;
 }
 
+async function listImportableStickerKeys() {
+  const keys = new Set<string>();
+  for (const prefix of STICKER_IMPORT_PREFIXES) {
+    const prefixedKeys = await listAllPublicR2ObjectKeys(prefix);
+    for (const key of prefixedKeys) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
+function isManagedStickerPath(path: string | null | undefined) {
+  if (!path) {
+    return false;
+  }
+  return STICKER_IMPORT_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
 async function syncStickerAssetsWithR2Inline(supabase: Awaited<ReturnType<typeof requireAdminSession>>) {
-  const existingKeys = await listAllPublicR2ObjectKeys("stickers/");
+  const existingKeys = await listImportableStickerKeys();
   const staleIds: string[] = [];
   const existingAssetPaths = new Set<string>();
   let from = 0;
@@ -57,7 +76,12 @@ async function syncStickerAssetsWithR2Inline(supabase: Awaited<ReturnType<typeof
       if (row.storage_path) {
         existingAssetPaths.add(row.storage_path);
       }
-      if (row.id && row.storage_path && (isStickerSourcePath(row.storage_path) || !existingKeys.has(row.storage_path))) {
+      if (
+        row.id &&
+        row.storage_path &&
+        isManagedStickerPath(row.storage_path) &&
+        (isStickerSourcePath(row.storage_path) || !existingKeys.has(row.storage_path))
+      ) {
         staleIds.push(row.id);
       }
     }

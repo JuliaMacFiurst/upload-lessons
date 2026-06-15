@@ -1,6 +1,8 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { listAllPublicR2ObjectKeys } from "./r2-storage";
 
+const STICKER_R2_PREFIXES = ["stickers/", "stickers-for-"];
+
 export type StickerAssetInput = {
   title: string;
   tags: string[];
@@ -59,6 +61,24 @@ export function isStickerSourcePath(path: string | null | undefined) {
   return /(^|\/)source\.webp$/i.test(path ?? "");
 }
 
+function isManagedStickerPath(path: string | null | undefined) {
+  if (!path) {
+    return false;
+  }
+  return STICKER_R2_PREFIXES.some((prefix) => path.startsWith(prefix));
+}
+
+async function listAllStickerR2ObjectKeys(): Promise<Set<string>> {
+  const keys = new Set<string>();
+  for (const prefix of STICKER_R2_PREFIXES) {
+    const prefixedKeys = await listAllPublicR2ObjectKeys(prefix);
+    for (const key of prefixedKeys) {
+      keys.add(key);
+    }
+  }
+  return keys;
+}
+
 export async function upsertStickerAsset(supabase: SupabaseClient, input: StickerAssetInput) {
   if (isStickerSourcePath(input.storagePath)) {
     throw new Error("Source sheet files must not be saved as sticker assets.");
@@ -97,7 +117,7 @@ export async function upsertStickerAsset(supabase: SupabaseClient, input: Sticke
 }
 
 export async function syncStickerAssetsWithR2(supabase: SupabaseClient) {
-  const existingKeys = await listAllPublicR2ObjectKeys("stickers/");
+  const existingKeys = await listAllStickerR2ObjectKeys();
   const staleIds: string[] = [];
   let from = 0;
   const pageSize = 1000;
@@ -115,7 +135,12 @@ export async function syncStickerAssetsWithR2(supabase: SupabaseClient) {
 
     const rows = (data ?? []) as Array<{ id: string; storage_path: string | null }>;
     for (const row of rows) {
-      if (row.id && row.storage_path && (isStickerSourcePath(row.storage_path) || !existingKeys.has(row.storage_path))) {
+      if (
+        row.id &&
+        row.storage_path &&
+        isManagedStickerPath(row.storage_path) &&
+        (isStickerSourcePath(row.storage_path) || !existingKeys.has(row.storage_path))
+      ) {
         staleIds.push(row.id);
       }
     }

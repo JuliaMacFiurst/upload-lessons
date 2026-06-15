@@ -13,6 +13,7 @@ import {
   normalizeFreeformMaskPoints,
   type FreeformMaskInput,
 } from "../../../../lib/server/media/freeform-crop";
+import { removeEdgeWhiteBackground } from "../../../../lib/server/media/removeWhiteBackground";
 
 export const config = {
   api: {
@@ -35,6 +36,8 @@ type StickerCropBody = {
     height?: number;
   };
   mask?: FreeformMaskInput;
+  removeWhiteBackground?: boolean;
+  whiteRemovalIntensity?: number;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -100,12 +103,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       height: safeHeight,
     });
     const alphaMask = buildFreeformAlphaMask(safeWidth, safeHeight, maskPoints);
-    const cropped = await (alphaMask
+    const croppedImage = alphaMask
       ? croppedBase
           .composite([{ input: alphaMask, blend: "dest-in" }])
-      : croppedBase)
-      .webp({ quality: 92, alphaQuality: 95 })
-      .toBuffer();
+      : croppedBase;
+    const cropped = body.removeWhiteBackground
+      ? await removeEdgeWhiteBackground(croppedImage, body.whiteRemovalIntensity)
+      : await croppedImage
+          .webp({ quality: 92, alphaQuality: 95 })
+          .toBuffer();
 
     const publicUrl = await uploadPublicR2Object({
       key: outputPath,

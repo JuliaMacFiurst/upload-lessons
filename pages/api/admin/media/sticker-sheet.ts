@@ -117,7 +117,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const fallbackSetName = fallbackStickerSetKey(body.fileName);
     const setKey = normalizeStorageSegment(body.setName || "") || fallbackSetName;
-    const webp = await imageToWebp(decodeImageBase64(body.imageBase64), body.removeWhite !== false);
+    const webp = await imageToWebp(decodeImageBase64(body.imageBase64), body.removeWhite === true);
     const path = `stickers/${setKey}/source.webp`;
     const publicUrl = await uploadPublicR2Object({
       key: path,

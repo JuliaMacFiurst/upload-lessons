@@ -8,7 +8,7 @@ type MediaTreeNode = {
   children: MediaTreeNode[];
 };
 
-const ROOT_FOLDERS = ["bedtime_story/", "recipes/", "stickers/"];
+const ROOT_FOLDERS = ["bedtime_story/", "recipes/", "stickers/", "stickers-for-laplapla-song/"];
 const KNOWN_FOLDERS_BY_PREFIX: Record<string, string[]> = {
   "recipes/": [
     "recipes/assets/",

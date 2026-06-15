@@ -49,6 +49,12 @@ type AnimatedStickerRecord = {
   updated_at: string | null;
 };
 
+type StickerUndoRecord = {
+  backupPath: string;
+  originalPath: string;
+  processedPath: string;
+};
+
 type MediaLibraryObject = {
   key: string;
   size: number;
@@ -78,7 +84,7 @@ const STICKER_TAGS = [
   { label: "ribbon", value: "ribbon" },
 ];
 
-const ROOT_MEDIA_FOLDERS = ["bedtime_story/", "recipes/", "stickers/"];
+const ROOT_MEDIA_FOLDERS = ["bedtime_story/", "recipes/", "stickers/", "stickers-for-laplapla-song/"];
 const KNOWN_MEDIA_FOLDERS_BY_PREFIX: Record<string, string[]> = {
   "recipes/": ["recipes/assets/", "recipes/exports/", "recipes/recipes-pics/"],
   "stickers/": ["stickers/capybara-stickers/", "stickers/raccoon-stickers/"],
@@ -128,6 +134,18 @@ function mediaLabelFromKey(key: string) {
 
 function tagsToText(tags: string[] | null | undefined) {
   return (tags ?? []).join(", ");
+}
+
+function normalizeDraftTags(value: string) {
+  return value
+    .split(/\r?\n|,|;/)
+    .map((item) => item.trim().toLowerCase().replace(/^#/, "").replace(/\s+/g, "-"))
+    .filter(Boolean)
+    .join(", ");
+}
+
+function isStickerDraftDirty(sticker: StickerAssetRecord, draft: { title: string; tags: string }) {
+  return draft.title.trim() !== sticker.title.trim() || normalizeDraftTags(draft.tags) !== tagsToText(sticker.tags);
 }
 
 function isWebpPath(path: string | null | undefined) {
@@ -196,6 +214,7 @@ export default function AdminMediaPage() {
   const [syncingAssets, setSyncingAssets] = useState(false);
   const [renamingFolder, setRenamingFolder] = useState(false);
   const [cropSelectionMode, setCropSelectionMode] = useState<CropSelectionMode>("rect");
+  const [cropWhiteRemovalIntensity, setCropWhiteRemovalIntensity] = useState(65);
   const [cropRect, setCropRect] = useState<CropRect>({ x: 12, y: 12, width: 28, height: 28 });
   const [cropNaturalSize, setCropNaturalSize] = useState({ width: 0, height: 0 });
   const [cropLassoPoints, setCropLassoPoints] = useState<CropPoint[]>([]);
@@ -208,6 +227,8 @@ export default function AdminMediaPage() {
   const [assetSearch, setAssetSearch] = useState("");
   const [stickerAssets, setStickerAssets] = useState<StickerAssetRecord[]>([]);
   const [assetDrafts, setAssetDrafts] = useState<Record<string, { title: string; tags: string }>>({});
+  const [assetWhiteRemovalIntensity, setAssetWhiteRemovalIntensity] = useState<Record<string, number>>({});
+  const [assetUndoRecords, setAssetUndoRecords] = useState<Record<string, StickerUndoRecord>>({});
   const [loadingAssets, setLoadingAssets] = useState(false);
   const [assetActionId, setAssetActionId] = useState<string | null>(null);
   const [animatedSearch, setAnimatedSearch] = useState("");
@@ -239,6 +260,31 @@ export default function AdminMediaPage() {
       setSessionChecked(true);
     });
   }, [router, supabase]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem("laplapla-sticker-undo-records");
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw) as Record<string, StickerUndoRecord>;
+      setAssetUndoRecords(parsed);
+    } catch {
+      window.localStorage.removeItem("laplapla-sticker-undo-records");
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      if (Object.keys(assetUndoRecords).length === 0) {
+        window.localStorage.removeItem("laplapla-sticker-undo-records");
+        return;
+      }
+      window.localStorage.setItem("laplapla-sticker-undo-records", JSON.stringify(assetUndoRecords));
+    } catch {
+      // Undo remains available in memory even if localStorage is unavailable.
+    }
+  }, [assetUndoRecords]);
 
   const activeSetKey = setName.trim() || setKey;
   const sourceUrl = useMemo(
@@ -614,7 +660,7 @@ export default function AdminMediaPage() {
           imageBase64,
           fileName: file.name,
           setName,
-          removeWhite: true,
+          removeWhite: false,
         }),
       });
 
@@ -691,12 +737,19 @@ export default function AdminMediaPage() {
     setError(null);
     setSuccess(null);
     try {
-      await fetchJson<{ sticker: StickerAssetRecord }>(`/api/admin/media/sticker-assets/${sticker.id}`, {
+      const response = await fetchJson<{ sticker: StickerAssetRecord }>(`/api/admin/media/sticker-assets/${sticker.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(draft),
       });
-      await loadStickerAssets();
+      setStickerAssets((current) => current.map((item) => (item.id === sticker.id ? response.sticker : item)));
+      setAssetDrafts((current) => ({
+        ...current,
+        [sticker.id]: {
+          title: response.sticker.title,
+          tags: tagsToText(response.sticker.tags),
+        },
+      }));
       setSuccess("Стикер обновлен.");
     } catch (updateError) {
       setError(updateError instanceof Error ? updateError.message : String(updateError));
@@ -738,6 +791,71 @@ export default function AdminMediaPage() {
       setSuccess(response.converted ? "Стикер пересохранен в WebP." : "Стикер уже был в WebP.");
     } catch (convertError) {
       setError(convertError instanceof Error ? convertError.message : String(convertError));
+    } finally {
+      setAssetActionId(null);
+    }
+  };
+
+  const removeStickerAssetWhiteBackground = async (sticker: StickerAssetRecord) => {
+    const intensity = assetWhiteRemovalIntensity[sticker.id] ?? 65;
+    setAssetActionId(sticker.id);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await fetchJson<{
+        sticker: StickerAssetRecord;
+        backupPath: string;
+        originalPath: string;
+        processedPath: string;
+      }>(`/api/admin/media/sticker-assets/${sticker.id}/remove-white-background`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intensity }),
+      });
+      setStickerAssets((current) => current.map((item) => (item.id === sticker.id ? response.sticker : item)));
+      setAssetUndoRecords((current) => ({
+        ...current,
+        [sticker.id]: {
+          backupPath: response.backupPath,
+          originalPath: response.originalPath,
+          processedPath: response.processedPath,
+        },
+      }));
+      setSuccess("Белый фон удален. Можно отменить до перезагрузки страницы.");
+    } catch (removeError) {
+      setError(removeError instanceof Error ? removeError.message : String(removeError));
+    } finally {
+      setAssetActionId(null);
+    }
+  };
+
+  const restoreStickerAssetWhiteBackground = async (sticker: StickerAssetRecord) => {
+    const undo = assetUndoRecords[sticker.id];
+    if (!undo) {
+      return;
+    }
+
+    setAssetActionId(sticker.id);
+    setError(null);
+    setSuccess(null);
+    try {
+      const response = await fetchJson<{ sticker: StickerAssetRecord }>(
+        `/api/admin/media/sticker-assets/${sticker.id}/restore-white-background`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(undo),
+        },
+      );
+      setStickerAssets((current) => current.map((item) => (item.id === sticker.id ? response.sticker : item)));
+      setAssetUndoRecords((current) => {
+        const next = { ...current };
+        delete next[sticker.id];
+        return next;
+      });
+      setSuccess("Стикер восстановлен из последней версии.");
+    } catch (restoreError) {
+      setError(restoreError instanceof Error ? restoreError.message : String(restoreError));
     } finally {
       setAssetActionId(null);
     }
@@ -849,6 +967,8 @@ export default function AdminMediaPage() {
           searchTags,
           crop,
           mask: cropSelectionMode === "lasso" ? { points: cropLassoPoints } : undefined,
+          removeWhiteBackground: cropWhiteRemovalIntensity > 0,
+          whiteRemovalIntensity: cropWhiteRemovalIntensity,
         }),
       });
 
@@ -1353,6 +1473,22 @@ export default function AdminMediaPage() {
               </button>
             ) : null}
             <label className="books-field">
+              <span className="books-field__label">Интенсивность удаления белого фона</span>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                step={5}
+                value={cropWhiteRemovalIntensity}
+                onChange={(event) => setCropWhiteRemovalIntensity(Number(event.target.value))}
+              />
+              <span className="books-field__help">
+                {cropWhiteRemovalIntensity === 0
+                  ? "0%: фон не удаляется."
+                  : `${cropWhiteRemovalIntensity}%: при сохранении crop удаляется белый, связанный с краями; белые детали внутри сохраняются.`}
+              </span>
+            </label>
+            <label className="books-field">
               <span className="books-field__label">Набор</span>
               <input className="books-input" value={activeSetKey} onChange={(event) => setSetName(event.target.value)} />
               {sourceUrl ? (
@@ -1470,6 +1606,9 @@ export default function AdminMediaPage() {
         <div className="media-sticker-grid">
           {stickerAssets.map((sticker) => {
             const draft = assetDrafts[sticker.id] ?? { title: sticker.title, tags: tagsToText(sticker.tags) };
+            const draftDirty = isStickerDraftDirty(sticker, draft);
+            const whiteRemovalIntensity = assetWhiteRemovalIntensity[sticker.id] ?? 65;
+            const undo = assetUndoRecords[sticker.id];
             const busy = assetActionId === sticker.id;
             return (
               <article key={sticker.id} className="media-sticker-card">
@@ -1501,17 +1640,56 @@ export default function AdminMediaPage() {
                   />
                 </label>
                 <small>{sticker.storage_path}</small>
+                <label className="books-field">
+                  <span className="books-field__label">Белый фон: {whiteRemovalIntensity}%</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={whiteRemovalIntensity}
+                    onChange={(event) => setAssetWhiteRemovalIntensity((current) => ({
+                      ...current,
+                      [sticker.id]: Number(event.target.value),
+                    }))}
+                  />
+                  <span className="books-field__help">
+                    0% не обрабатывает фон. Чем выше значение, тем агрессивнее удаляется белый фон от краев картинки.
+                  </span>
+                </label>
                 <div className="books-actions">
                   <button
                     type="button"
                     className="books-button books-button--primary"
-                    disabled={busy}
+                    disabled={busy || !draftDirty}
                     onClick={() => {
                       void updateStickerAsset(sticker);
                     }}
                   >
                     Сохранить
                   </button>
+                  <button
+                    type="button"
+                    className="books-button books-button--secondary"
+                    disabled={busy || whiteRemovalIntensity <= 0}
+                    onClick={() => {
+                      void removeStickerAssetWhiteBackground(sticker);
+                    }}
+                  >
+                    Убрать фон
+                  </button>
+                  {undo ? (
+                    <button
+                      type="button"
+                      className="books-button books-button--ghost"
+                      disabled={busy}
+                      onClick={() => {
+                        void restoreStickerAssetWhiteBackground(sticker);
+                      }}
+                    >
+                      Отменить
+                    </button>
+                  ) : null}
                   {!isWebpPath(sticker.storage_path) ? (
                     <button
                       type="button"

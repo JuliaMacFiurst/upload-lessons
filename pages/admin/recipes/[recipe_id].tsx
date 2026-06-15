@@ -244,7 +244,7 @@ const ASSET_TAGS = [
   { label: "sticker", value: "sticker" },
 ];
 
-const ROOT_MEDIA_FOLDERS = ["bedtime_story/", "recipes/", "stickers/"];
+const ROOT_MEDIA_FOLDERS = ["bedtime_story/", "recipes/", "stickers/", "stickers-for-laplapla-song/"];
 const KNOWN_MEDIA_FOLDERS_BY_PREFIX: Record<string, string[]> = {
   "recipes/": ["recipes/assets/", "recipes/exports/", "recipes/recipes-pics/"],
   "stickers/": ["stickers/capybara-stickers/", "stickers/raccoon-stickers/"],
@@ -2284,7 +2284,7 @@ export default function RecipeEditorPage() {
           imageBase64,
           fileName: file.name,
           setName: kind === "recipe_asset_sheet" ? assetSetName : kind === "raccoon_sticker_sheet" ? stickerSetName : undefined,
-          removeWhite: true,
+          removeWhite: false,
         }),
       });
 

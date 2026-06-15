@@ -3,7 +3,7 @@ import { requireAdminSession } from "../../../../lib/server/admin-session";
 import { listPublicR2Objects } from "../../../../lib/server/r2-storage";
 
 const IMAGE_EXTENSIONS = new Set([".apng", ".avif", ".gif", ".jpeg", ".jpg", ".png", ".svg", ".webp"]);
-const ROOT_FOLDERS = ["bedtime_story/", "recipes/", "stickers/"];
+const ROOT_FOLDERS = ["bedtime_story/", "recipes/", "stickers/", "stickers-for-laplapla-song/"];
 const KNOWN_FOLDERS_BY_PREFIX: Record<string, string[]> = {
   "recipes/": [
     "recipes/assets/",

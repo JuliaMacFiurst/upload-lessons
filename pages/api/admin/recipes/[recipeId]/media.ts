@@ -170,7 +170,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fallbackSetName = normalizeStorageSegment(body.fileName?.replace(/\.[^/.]+$/, "") || slug);
     const setKey = normalizeStorageSegment(body.setName || fallbackSetName) || slug;
     const input = decodeImageBase64(body.imageBase64);
-    const webp = await imageToWebp(input, body.removeWhite !== false);
+    const webp = await imageToWebp(input, body.removeWhite === true);
 
     let path: string;
     let updatedRecipe = recipe;
