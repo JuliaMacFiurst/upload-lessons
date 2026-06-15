@@ -167,6 +167,18 @@ function EmptyState({ text }: { text: string }) {
   return <div className="analytics-empty">{text}</div>;
 }
 
+function PeriodButtons({ period, setPeriod }: { period: AnalyticsPeriodKey; setPeriod: (period: AnalyticsPeriodKey) => void }) {
+  return (
+    <div className="analytics-periods">
+      {(Object.keys(periodLabels) as AnalyticsPeriodKey[]).map((key) => (
+        <button key={key} className={`analytics-chip ${period === key ? "analytics-chip--active" : ""}`} type="button" onClick={() => setPeriod(key)}>
+          {periodLabels[key]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ExportButtons({ payload, tab }: { payload: AnalyticsAdminPayload; tab: AnalyticsTab }) {
   const [status, setStatus] = useState("");
   const text = useMemo(() => buildExportText(payload, tab), [payload, tab]);
@@ -265,13 +277,6 @@ function LineChart({ payload }: { payload: AnalyticsAdminPayload }) {
 function OverviewTab({ payload, period, setPeriod }: { payload: AnalyticsAdminPayload; period: AnalyticsPeriodKey; setPeriod: (period: AnalyticsPeriodKey) => void }) {
   return (
     <>
-      <div className="analytics-periods">
-        {(Object.keys(periodLabels) as AnalyticsPeriodKey[]).map((key) => (
-          <button key={key} className={`analytics-chip ${period === key ? "analytics-chip--active" : ""}`} type="button" onClick={() => setPeriod(key)}>
-            {periodLabels[key]}
-          </button>
-        ))}
-      </div>
       <div className="analytics-metric-grid">
         {payload.periods[period].map((card) => <MetricCard key={card.key} card={card} />)}
       </div>
@@ -490,12 +495,15 @@ export default function AnalyticsAdminPage() {
         {payload ? (
           <>
             <div className="analytics-mode-row">
-              <div className="analytics-tabs">
-                {tabLabels.map((tab) => (
-                  <button key={tab.key} type="button" className={`analytics-tab ${activeTab === tab.key ? "analytics-tab--active" : ""}`} onClick={() => setActiveTab(tab.key)}>
-                    {tab.label}
-                  </button>
-                ))}
+              <div className="analytics-mode-stack">
+                <div className="analytics-tabs">
+                  {tabLabels.map((tab) => (
+                    <button key={tab.key} type="button" className={`analytics-tab ${activeTab === tab.key ? "analytics-tab--active" : ""}`} onClick={() => setActiveTab(tab.key)}>
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                {activeTab === "overview" ? <PeriodButtons period={period} setPeriod={setPeriod} /> : null}
               </div>
               <ExportButtons payload={payload} tab={activeTab} />
             </div>
