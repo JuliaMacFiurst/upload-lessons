@@ -181,7 +181,7 @@ function ExportButtons({ payload, tab }: { payload: AnalyticsAdminPayload; tab: 
           setStatus("Данные скопированы");
         }}
       >
-        Скопировать данные для ChatGPT
+        ChatGPT
       </button>
       <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-${tab}.json`, JSON.stringify(payload, null, 2), "application/json")}>
         JSON
@@ -489,14 +489,16 @@ export default function AnalyticsAdminPage() {
 
         {payload ? (
           <>
-            <div className="analytics-tabs">
-              {tabLabels.map((tab) => (
-                <button key={tab.key} type="button" className={`analytics-tab ${activeTab === tab.key ? "analytics-tab--active" : ""}`} onClick={() => setActiveTab(tab.key)}>
-                  {tab.label}
-                </button>
-              ))}
+            <div className="analytics-mode-row">
+              <div className="analytics-tabs">
+                {tabLabels.map((tab) => (
+                  <button key={tab.key} type="button" className={`analytics-tab ${activeTab === tab.key ? "analytics-tab--active" : ""}`} onClick={() => setActiveTab(tab.key)}>
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+              <ExportButtons payload={payload} tab={activeTab} />
             </div>
-            <ExportButtons payload={payload} tab={activeTab} />
 
             {activeTab === "overview" ? <OverviewTab payload={payload} period={period} setPeriod={setPeriod} /> : null}
             {activeTab === "content" ? <ContentTab payload={payload} /> : null}
