@@ -1,5 +1,5 @@
 import Image from 'next/image';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useSession, useSupabaseClient } from '@supabase/auth-helpers-react';
 import { useRouter } from 'next/router';
 
@@ -8,6 +8,10 @@ export default function Login() {
   const session = useSession();
   const router = useRouter();
   const [authError, setAuthError] = useState<string | null>(null);
+  const [authStatus, setAuthStatus] = useState<string | null>(null);
+  const [loginStarting, setLoginStarting] = useState(false);
+  const callbackCleanupRef = useRef(false);
+  const callbackCleanupTimerRef = useRef<number | null>(null);
 
   const redirectPath = useMemo(() => {
     const nextParam = typeof router.query.next === 'string' ? router.query.next : '';
@@ -18,6 +22,52 @@ export default function Login() {
   }, [router.query.next]);
 
   useEffect(() => {
+    if (!router.isReady) {
+      return;
+    }
+
+    const code = typeof router.query.code === 'string' ? router.query.code : '';
+    const cleanCallbackUrl = async () => {
+      const nextQuery = typeof router.query.next === 'string' ? { next: router.query.next } : {};
+      await router.replace({ pathname: '/login', query: nextQuery }, undefined, { shallow: true });
+    };
+
+    if (code && session) {
+      if (callbackCleanupTimerRef.current !== null) {
+        window.clearTimeout(callbackCleanupTimerRef.current);
+        callbackCleanupTimerRef.current = null;
+      }
+      callbackCleanupRef.current = true;
+      void cleanCallbackUrl();
+      return;
+    }
+
+    if (!code || callbackCleanupRef.current) {
+      return;
+    }
+
+    callbackCleanupRef.current = true;
+    setAuthError(null);
+    setAuthStatus('Завершаю вход через Google...');
+
+    callbackCleanupTimerRef.current = window.setTimeout(() => {
+      void cleanCallbackUrl();
+      callbackCleanupTimerRef.current = null;
+      setAuthStatus(null);
+      setLoginStarting(false);
+      setAuthError('Не удалось завершить вход. Если видите 429, подождите несколько минут и попробуйте снова.');
+    }, 8000);
+  }, [router, session]);
+
+  useEffect(() => {
+    return () => {
+      if (callbackCleanupTimerRef.current !== null) {
+        window.clearTimeout(callbackCleanupTimerRef.current);
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     if (!router.isReady || !session) {
       return;
     }
@@ -25,6 +75,7 @@ export default function Login() {
     let cancelled = false;
 
     const verifyAdmin = async () => {
+      setAuthStatus('Проверяю доступ администратора...');
       const response = await fetch('/api/admin/session-check', {
         method: 'GET',
         credentials: 'include',
@@ -39,6 +90,7 @@ export default function Login() {
         return;
       }
 
+      setAuthStatus(null);
       setAuthError('Этот аккаунт не входит в список администраторов.');
       await supabase.auth.signOut();
     };
@@ -51,6 +103,13 @@ export default function Login() {
   }, [redirectPath, router, session, supabase]);
 
   const handleGoogleLogin = async () => {
+    if (loginStarting) {
+      return;
+    }
+
+    setLoginStarting(true);
+    setAuthError(null);
+    setAuthStatus('Открываю вход через Google...');
     const callbackPath = `/login?next=${encodeURIComponent(redirectPath)}`;
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
@@ -62,7 +121,9 @@ export default function Login() {
       },
     });
     if (error) {
-      alert('Ошибка входа: ' + error.message);
+      setLoginStarting(false);
+      setAuthStatus(null);
+      setAuthError('Ошибка входа: ' + error.message);
     }
   };
 
@@ -70,10 +131,12 @@ export default function Login() {
     <div style={{ padding: 40, maxWidth: 400, margin: '0 auto', fontFamily: 'sans-serif' }}>
       <h1 style={{ marginBottom: 24 }}>Вход в систему</h1>
       <p style={{ marginBottom: 24, color: '#666' }}>Доступ разрешен только через Google.</p>
+      {authStatus ? <p style={{ marginBottom: 24, color: '#334155' }}>{authStatus}</p> : null}
       {authError ? <p style={{ marginBottom: 24, color: '#c0392b' }}>{authError}</p> : null}
 
       <button
         onClick={handleGoogleLogin}
+        disabled={loginStarting || authStatus !== null}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -85,7 +148,8 @@ export default function Login() {
           borderRadius: 4,
           width: '100%',
           marginBottom: 24,
-          cursor: 'pointer',
+          cursor: loginStarting || authStatus !== null ? 'wait' : 'pointer',
+          opacity: loginStarting || authStatus !== null ? 0.65 : 1,
         }}
       >
         <Image
