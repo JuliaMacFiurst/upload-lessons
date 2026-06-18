@@ -10,6 +10,7 @@ type NormalizedEvent = {
   contentId: string | null;
   contentSlug: string | null;
   contentTitle: string | null;
+  pageTitle: string | null;
   language: string | null;
   sessionId: string | null;
   userId: string | null;
@@ -79,6 +80,7 @@ export type AnalyticsPageRow = {
   exits: number;
   exitRate: number;
   averageDurationSeconds: number | null;
+  durationStatus: "нет данных" | "0 секунд" | "нормальное" | "подозрительно долго";
   averageEvents: number;
 };
 
@@ -137,6 +139,9 @@ export type AnalyticsAdminPayload = {
     exportStarted: number;
     exportCompleted: number;
     exportFailed: number;
+    recordingStarted: number;
+    recordingCompleted: number;
+    recordingFailed: number;
     breakpoints: Array<{ step: string; count: number; conversionPercent: number | null; note: string }>;
     funnels: AnalyticsFunnel[];
   };
@@ -150,6 +155,8 @@ export type AnalyticsAdminPayload = {
     dailyDrops: AnalyticsQualityIssue[];
     unavailableMetrics: AnalyticsQualityIssue[];
   };
+  availablePeriods: AnalyticsPeriodKey[];
+  unavailablePeriodReasons: Partial<Record<AnalyticsPeriodKey, string>>;
   exportSummary: string;
 };
 
@@ -182,12 +189,14 @@ const EXPECTED_EVENTS = [
   "studio_export_started",
   "studio_export_completed",
   "studio_export_failed",
+  "studio_recording_started",
+  "studio_recording_completed",
+  "studio_recording_failed",
   "cat_question_opened",
   "cat_question_completed",
   "raccoon_map_opened",
   "country_opened",
   "recipe_opened",
-  "recipe_steps_viewed",
   "dog_lesson_opened",
   "dog_lesson_completed",
   "parrot_music_opened",
@@ -215,12 +224,14 @@ const EVENT_EXPECTATIONS: Record<string, string> = {
   studio_export_started: "Старт любого export flow.",
   studio_export_completed: "Успешное завершение export flow.",
   studio_export_failed: "Ошибка export flow.",
+  studio_recording_started: "Старт screen/canvas recording flow.",
+  studio_recording_completed: "Успешное завершение recording flow.",
+  studio_recording_failed: "Ошибка recording flow.",
   cat_question_opened: "Открытие вопроса в cats.",
   cat_question_completed: "Завершение вопроса в cats.",
   raccoon_map_opened: "Открытие карты raccoons.",
   country_opened: "Открытие страны на SEO/entity page.",
   recipe_opened: "Открытие рецепта.",
-  recipe_steps_viewed: "Пользователь открыл шаги рецепта.",
   dog_lesson_opened: "Открытие dog lesson.",
   dog_lesson_completed: "Завершение dog lesson.",
   parrot_music_opened: "Открытие parrot music.",
@@ -304,10 +315,14 @@ function canonicalEventName(eventName: string) {
   return LEGACY_EVENT_MAP[eventName] || eventName;
 }
 
+function normalizeSection(value: string | null) {
+  return value ? value.replace(/_/g, "-") : null;
+}
+
 function inferSection(row: AnalyticsRawRow, props: Record<string, unknown>, metadata: Record<string, unknown>, eventName: string) {
   const explicit = stringValue(row.section, props.section, metadata.section, row.entity_type, props.entity_type, metadata.entity_type);
   if (explicit) {
-    return explicit.replace(/_/g, "-");
+    return normalizeSection(explicit);
   }
   if (eventName.includes("cat")) return "cats";
   if (eventName.includes("raccoon") || eventName === "map_opened") return "raccoons";
@@ -353,7 +368,8 @@ function normalizeEvent(row: AnalyticsRawRow): NormalizedEvent {
     section,
     contentId: stringValue(row.content_id, properties.content_id, metadata.content_id, row.entity_id),
     contentSlug: stringValue(row.content_slug, properties.content_slug, metadata.content_slug, properties.slug, metadata.slug),
-    contentTitle: stringValue(row.content_title, properties.content_title, metadata.content_title, row.entity_title, properties.title, metadata.title),
+    contentTitle: stringValue(row.content_title, properties.content_title, properties.readable_title, properties.page_title, metadata.content_title, metadata.readable_title, metadata.page_title, row.entity_title, properties.title, metadata.title),
+    pageTitle: stringValue(row.page_title, properties.page_title, properties.readable_title, metadata.page_title, metadata.readable_title, row.entity_title),
     language: normalizeLanguage(stringValue(row.language, properties.language, metadata.language, row.lang, properties.lang, metadata.lang)),
     sessionId: stringValue(row.session_id, properties.session_id, metadata.session_id),
     userId: stringValue(row.anonymous_user_id, properties.anonymous_user_id, metadata.anonymous_user_id, row.visitor_id, properties.visitor_id, metadata.visitor_id),
@@ -398,6 +414,13 @@ function average(values: number[]) {
     return null;
   }
   return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10;
+}
+
+function durationStatus(value: number | null): AnalyticsPageRow["durationStatus"] {
+  if (value == null) return "нет данных";
+  if (value === 0) return "0 секунд";
+  if (value > 60 * 60) return "подозрительно долго";
+  return "нормальное";
 }
 
 function uniqueCount(rows: NormalizedEvent[], key: "userId" | "sessionId") {
@@ -723,7 +746,8 @@ function buildPageRows(rows: NormalizedEvent[], pages: string[]): AnalyticsPageR
     const visitors = uniqueCount(pageRows, "userId");
     const explicitDurations = pageRows.map((row) => row.durationSeconds).filter((value): value is number => value != null);
     const computedDurations = sessionDurationsByPage.get(page) || [];
-    const title = pageRows.map((row) => row.contentTitle).find(Boolean) || page;
+    const title = pageRows.map((row) => row.contentTitle || row.pageTitle).find(Boolean) || page;
+    const averageDurationSeconds = average(explicitDurations.length > 0 ? explicitDurations : computedDurations);
     return {
       page,
       title,
@@ -731,7 +755,8 @@ function buildPageRows(rows: NormalizedEvent[], pages: string[]): AnalyticsPageR
       visitors,
       exits,
       exitRate: percent(exits, views),
-      averageDurationSeconds: average(explicitDurations.length > 0 ? explicitDurations : computedDurations),
+      averageDurationSeconds,
+      durationStatus: durationStatus(averageDurationSeconds),
       averageEvents: visitors > 0 ? Math.round((pageRows.length / visitors) * 10) / 10 : 0,
     };
   });
@@ -756,14 +781,21 @@ function buildPages(rows: NormalizedEvent[]) {
 
 function buildStudio(rows: NormalizedEvent[]) {
   const flowPredicate = (flow: string) => (row: NormalizedEvent) => {
-    if (flow === "mobile_recording") return row.deviceType === "mobile" || row.exportFormat === "mobile_recording";
-    if (flow === "tablet_recording") return row.deviceType === "tablet" || row.exportFormat === "tablet_recording";
-    if (flow === "desktop_recording") return row.deviceType === "desktop" || row.exportFormat === "desktop_recording";
+    if (flow === "mobile_recording") return row.deviceType === "mobile" || row.exportFormat === "mobile_recording" || row.exportMethod === "mobile_recording";
+    if (flow === "tablet_recording") return row.deviceType === "tablet" || row.exportFormat === "tablet_recording" || row.exportMethod === "tablet_recording";
+    if (flow === "desktop_recording") return row.deviceType === "desktop" || row.exportFormat === "desktop_recording" || row.exportMethod === "desktop_recording";
     if (flow === "direct_canvas_recording") return row.exportMethod === "direct_canvas_recording";
     if (flow === "guided_screen_recording") return row.exportMethod === "guided_screen_recording" || row.exportFormat === "screen_recording";
     if (flow === "offline_audio_render") return row.exportMethod === "offline_audio_render";
     return false;
   };
+  const recordingFlow = (key: string, title: string, predicate: (row: NormalizedEvent) => boolean) => buildFunnel(rows, key, title, "Recording и export считаются отдельно. Conversion нельзя считать надёжной, если нет studio_open.", [
+    ["Studio opened", (row) => row.eventName === "studio_open" && (predicate(row) || !row.exportMethod)],
+    ["Project created", (row) => row.eventName === "studio_project_created" && (predicate(row) || !row.exportMethod)],
+    ["Recording started", (row) => row.eventName === "studio_recording_started" && predicate(row)],
+    ["Recording completed", (row) => row.eventName === "studio_recording_completed" && predicate(row)],
+    ["Recording failed", (row) => row.eventName === "studio_recording_failed" && predicate(row)],
+  ], rows.some((row) => row.eventName === "studio_recording_started" && predicate(row)) ? "средняя" : "низкая");
   const exportFlow = (key: string, title: string, predicate: (row: NormalizedEvent) => boolean) => buildFunnel(rows, key, title, "Реальный экспортный путь. Media/sticker не считаются обязательными шагами.", [
     ["Studio opened", (row) => row.eventName === "studio_open" && (predicate(row) || !row.exportMethod)],
     ["Project created", (row) => row.eventName === "studio_project_created" && (predicate(row) || !row.exportMethod)],
@@ -795,13 +827,15 @@ function buildStudio(rows: NormalizedEvent[]) {
     exportStarted: steps[4][1],
     exportCompleted: steps[5][1],
     exportFailed: rows.filter((row) => row.eventName === "studio_export_failed").length,
+    recordingStarted: rows.filter((row) => row.eventName === "studio_recording_started").length,
+    recordingCompleted: rows.filter((row) => row.eventName === "studio_recording_completed").length,
+    recordingFailed: rows.filter((row) => row.eventName === "studio_recording_failed").length,
     breakpoints,
     funnels: [
-      exportFlow("mobile-recording", "Mobile recording", flowPredicate("mobile_recording")),
-      exportFlow("tablet-recording", "Tablet recording", flowPredicate("tablet_recording")),
-      exportFlow("desktop-recording", "Desktop recording", flowPredicate("desktop_recording")),
-      exportFlow("direct-canvas", "Direct canvas export", flowPredicate("direct_canvas_recording")),
-      exportFlow("guided-screen", "Guided screen recording", flowPredicate("guided_screen_recording")),
+      recordingFlow("mobile-recording", "Mobile recording", flowPredicate("mobile_recording")),
+      recordingFlow("tablet-recording", "Tablet recording", flowPredicate("tablet_recording")),
+      recordingFlow("desktop-recording", "Desktop recording", flowPredicate("desktop_recording")),
+      exportFlow("direct-canvas", "Desktop / direct canvas export", flowPredicate("direct_canvas_recording")),
       exportFlow("parrot-audio", "Parrot offline audio export", flowPredicate("offline_audio_render")),
     ],
   };
@@ -879,7 +913,7 @@ function buildDataQuality(rows: NormalizedEvent[], allRows: NormalizedEvent[], g
     ["events без session_id", (row) => !row.sessionId],
     ["events без anonymous_user_id/visitor_id", (row) => !row.userId],
   ];
-  const propertyIssues = propertyChecks
+  const propertyIssues: AnalyticsQualityIssue[] = propertyChecks
     .map(([title, predicate]) => ({ title, count: countMissing(rows, predicate), description: "Такие строки ухудшают точность продуктовых метрик. Проверка сгруппирована по типам событий.", severity: "warning" as const }))
     .filter((issue) => issue.count > 0);
   if (studio.projectsCreated > studio.opened) {
@@ -888,6 +922,14 @@ function buildDataQuality(rows: NormalizedEvent[], allRows: NormalizedEvent[], g
       description: `Созданий проектов ${studio.projectsCreated}, открытий студии ${studio.opened}. Вероятно, часть flow не отправляет studio_open или project_created приходит из другого экрана.`,
       count: studio.projectsCreated - studio.opened,
       severity: "warning",
+    });
+  }
+  if (studio.opened === 0 && (studio.projectsCreated > 0 || studio.exportStarted > 0 || studio.recordingStarted > 0)) {
+    propertyIssues.push({
+      title: "Studio activity без studio_open",
+      description: "За период есть studio project/export/recording события, но нет studio_open. Conversion в studio funnels нельзя считать надёжной.",
+      count: studio.projectsCreated + studio.exportStarted + studio.recordingStarted,
+      severity: "critical",
     });
   }
 
@@ -1023,6 +1065,23 @@ async function loadDailySummary(supabase: SupabaseClient, start: Date, end: Date
   return { rows: data as DailySummaryRow[], warning: null };
 }
 
+async function loadSummaryAvailability(supabase: SupabaseClient, start: Date, end: Date): Promise<{ available: boolean; reason?: string }> {
+  const { data, error } = await supabase
+    .from("analytics_daily_summary")
+    .select("summary_date")
+    .gte("summary_date", formatDay(start))
+    .lt("summary_date", formatDay(end))
+    .limit(1);
+
+  if (error) {
+    return { available: false, reason: `analytics_daily_summary недоступна: ${error.message}` };
+  }
+  if (!data || data.length === 0) {
+    return { available: false, reason: "analytics_daily_summary пустая для длинных периодов." };
+  }
+  return { available: true };
+}
+
 function buildSummaryGrowth(rows: DailySummaryRow[]) {
   return rows.map((row) => ({
     date: row.summary_date,
@@ -1115,14 +1174,17 @@ export function normalizeAnalyticsPeriod(value: unknown): AnalyticsPeriodKey {
 }
 
 export async function buildAdminAnalytics(supabase: SupabaseClient, period: AnalyticsPeriodKey = "7d", now = new Date()): Promise<AnalyticsAdminPayload> {
-  const days = PERIOD_DAYS[period];
   const todayStart = startOfUtcDay(now);
   const tomorrowStart = addDays(todayStart, 1);
+  const summaryAvailability = await loadSummaryAvailability(supabase, addDays(tomorrowStart, -90), tomorrowStart);
+  const availablePeriods: AnalyticsPeriodKey[] = summaryAvailability.available ? ["7d", "14d", "30d", "90d"] : ["7d", "14d"];
+  const effectivePeriod: AnalyticsPeriodKey = availablePeriods.includes(period) ? period : "14d";
+  const days = PERIOD_DAYS[effectivePeriod];
   const periodStart = addDays(tomorrowStart, -days);
   const previousStart = addDays(periodStart, -days);
-  const rawStart = period === "7d" || period === "14d" ? previousStart : addDays(tomorrowStart, -15);
+  const rawStart = effectivePeriod === "7d" || effectivePeriod === "14d" ? previousStart : addDays(tomorrowStart, -15);
   const rows = await loadRows(supabase, rawStart, tomorrowStart);
-  const summary = period === "30d" || period === "90d" ? await loadDailySummary(supabase, previousStart, tomorrowStart) : { rows: [] as DailySummaryRow[], warning: null };
+  const summary = effectivePeriod === "30d" || effectivePeriod === "90d" ? await loadDailySummary(supabase, previousStart, tomorrowStart) : { rows: [] as DailySummaryRow[], warning: null };
   const summaryCurrentRows = summary.rows.filter((row) => row.summary_date >= formatDay(periodStart) && row.summary_date < formatDay(tomorrowStart));
   const summaryPreviousRows = summary.rows.filter((row) => row.summary_date >= formatDay(previousStart) && row.summary_date < formatDay(periodStart));
   const currentRows = rowsInRange(rows, periodStart, tomorrowStart);
@@ -1131,8 +1193,13 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
   const languages = buildLanguages(currentRows, previousRows);
   const pages = buildPages(currentRows);
   const studio = buildStudio(currentRows);
-  const usesSummary = period === "30d" || period === "90d";
+  const usesSummary = effectivePeriod === "30d" || effectivePeriod === "90d";
   const summaryWarnings = [
+    ...(!summaryAvailability.available ? [{
+      title: "30/90 дней скрыты",
+      description: summaryAvailability.reason || "analytics_daily_summary не заполнена, поэтому доступны только raw periods 7/14 дней.",
+      severity: "warning" as const,
+    }] : []),
     ...(summary.warning ? [summary.warning] : []),
     ...(usesSummary && summary.rows.length > 0 ? [{
       title: "Длинный период считается по daily summary",
@@ -1150,16 +1217,16 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
 
   const basePayload = {
     generatedAt: now.toISOString(),
-    period,
-    periodLabel: PERIOD_LABELS[period],
+    period: effectivePeriod,
+    periodLabel: PERIOD_LABELS[effectivePeriod],
     periodStart: periodStart.toISOString(),
     periodEnd: tomorrowStart.toISOString(),
     availableDays: days,
     periods: {
       "7d": buildMetricCards(rowsInRange(rows, addDays(tomorrowStart, -7), tomorrowStart), rowsInRange(rows, addDays(tomorrowStart, -14), addDays(tomorrowStart, -7))),
       "14d": buildMetricCards(rowsInRange(rows, addDays(tomorrowStart, -14), tomorrowStart), rowsInRange(rows, addDays(tomorrowStart, -28), addDays(tomorrowStart, -14))),
-      "30d": usesSummary && summary.rows.length > 0 ? summaryMetricCards(summaryCurrentRows, summaryPreviousRows) : buildMetricCards(rowsInRange(rows, addDays(tomorrowStart, -30), tomorrowStart), rowsInRange(rows, addDays(tomorrowStart, -60), addDays(tomorrowStart, -30))),
-      "90d": usesSummary && summary.rows.length > 0 ? summaryMetricCards(summaryCurrentRows, summaryPreviousRows) : buildMetricCards(rowsInRange(rows, addDays(tomorrowStart, -90), tomorrowStart), rowsInRange(rows, addDays(tomorrowStart, -180), addDays(tomorrowStart, -90))),
+      "30d": summaryAvailability.available && summary.rows.length > 0 ? summaryMetricCards(summaryCurrentRows, summaryPreviousRows) : buildMetricCards([], []),
+      "90d": summaryAvailability.available && summary.rows.length > 0 ? summaryMetricCards(summaryCurrentRows, summaryPreviousRows) : buildMetricCards([], []),
     },
     growth,
     content: {
@@ -1176,6 +1243,8 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
     studio,
     opportunities: buildOpportunities(currentRows, contentRows, pages, languages, studio),
     dataQuality: buildDataQuality(currentRows, rows, growth, formatDay(todayStart), summaryWarnings, studio),
+    availablePeriods,
+    unavailablePeriodReasons: summaryAvailability.available ? {} : { "30d": summaryAvailability.reason, "90d": summaryAvailability.reason },
   };
 
   return {

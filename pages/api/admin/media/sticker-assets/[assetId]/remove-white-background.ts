@@ -4,7 +4,6 @@ import { requireAdminSession } from "../../../../../../lib/server/admin-session"
 import {
   deletePublicR2Object,
   fetchPublicR2Object,
-  publicR2ObjectUrl,
   uploadPublicR2Object,
 } from "../../../../../../lib/server/r2-storage";
 import { removeEdgeWhiteBackground } from "../../../../../../lib/server/media/removeWhiteBackground";

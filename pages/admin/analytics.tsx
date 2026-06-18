@@ -104,7 +104,7 @@ function buildCsv(payload: AnalyticsAdminPayload, tab: AnalyticsTab) {
     return tableToCsv(["lang", "events", "opens", "completions", "exits", "completion_rate"], payload.languages.map((row) => [row.lang, row.events, row.opens, row.completions, row.exits, row.completionRate]));
   }
   if (tab === "pages") {
-    return tableToCsv(["page", "views", "visitors", "exits", "exit_rate", "avg_duration", "avg_events"], payload.pages.topPages.map((row) => [row.page, row.views, row.visitors, row.exits, row.exitRate, row.averageDurationSeconds, row.averageEvents]));
+    return tableToCsv(["title", "page", "views", "visitors", "exits", "exit_rate", "avg_duration", "duration_status", "avg_events"], payload.pages.topPages.map((row) => [row.title, row.page, row.views, row.visitors, row.exits, row.exitRate, row.averageDurationSeconds, row.durationStatus, row.averageEvents]));
   }
   if (tab === "funnels") {
     return tableToCsv(["funnel", "step", "count", "conversion_percent", "note"], payload.funnels.flatMap((funnel) => funnel.steps.map((step) => [funnel.title, step.step, step.count, step.conversionPercent, step.note])));
@@ -119,10 +119,10 @@ function EmptyState({ text }: { text: string }) {
   return <div className="analytics-empty">{text}</div>;
 }
 
-function PeriodButtons({ period, setPeriod }: { period: AnalyticsPeriodKey; setPeriod: (period: AnalyticsPeriodKey) => void }) {
+function PeriodButtons({ period, setPeriod, availablePeriods }: { period: AnalyticsPeriodKey; setPeriod: (period: AnalyticsPeriodKey) => void; availablePeriods: AnalyticsPeriodKey[] }) {
   return (
     <div className="analytics-periods">
-      {(Object.keys(periodLabels) as AnalyticsPeriodKey[]).map((key) => (
+      {availablePeriods.map((key) => (
         <button key={key} className={`analytics-chip ${period === key ? "analytics-chip--active" : ""}`} type="button" onClick={() => setPeriod(key)}>
           {periodLabels[key]}
         </button>
@@ -409,7 +409,7 @@ function PagePanel({ title, help, rows }: { title: string; help: string; rows: A
           { label: "Посетители", render: (row) => row.visitors },
           { label: "Выходы", render: (row) => row.exits },
           { label: "Exit rate", render: (row) => `${row.exitRate}%` },
-          { label: "Длительность", render: (row) => row.averageDurationSeconds == null ? "нет данных" : `${row.averageDurationSeconds} сек.` },
+          { label: "Длительность", render: (row) => row.averageDurationSeconds == null ? "нет данных" : `${row.averageDurationSeconds} сек. · ${row.durationStatus}` },
         ]}
       />
     </section>
@@ -460,6 +460,9 @@ function StudioTab({ payload }: { payload: AnalyticsAdminPayload }) {
         <MetricCard card={studioCard({ key: "project-created", label: "Создали проект", value: payload.studio.projectsCreated, explanation: "`studio_project_created` и старый `project_created`." }, ["studio_project_created", "project_created"])} />
         <MetricCard card={studioCard({ key: "export-completed", label: "Успешно экспортировали", value: payload.studio.exportCompleted, explanation: "`studio_export_completed` и старый `video_exported`." }, ["studio_export_completed", "video_exported"])} />
         <MetricCard card={studioCard({ key: "export-failed", label: "Export failed", value: payload.studio.exportFailed, explanation: "Ошибки экспорта из `studio_export_failed`." }, ["studio_export_failed"])} />
+        <MetricCard card={studioCard({ key: "recording-started", label: "Recording started", value: payload.studio.recordingStarted, explanation: "Старт записи экрана/canvas." }, ["studio_recording_started"])} />
+        <MetricCard card={studioCard({ key: "recording-completed", label: "Recording completed", value: payload.studio.recordingCompleted, explanation: "Успешное завершение записи." }, ["studio_recording_completed"])} />
+        <MetricCard card={studioCard({ key: "recording-failed", label: "Recording failed", value: payload.studio.recordingFailed, explanation: "Ошибка записи." }, ["studio_recording_failed"])} />
       </div>
       <SimpleRows
         rows={payload.studio.breakpoints}
@@ -607,6 +610,12 @@ export default function AnalyticsAdminPage() {
     }
   }, [loadAnalytics, period, sessionChecked]);
 
+  useEffect(() => {
+    if (payload && payload.period !== period) {
+      setPeriod(payload.period);
+    }
+  }, [payload, period]);
+
   if (!sessionChecked) return null;
 
   return (
@@ -641,7 +650,7 @@ export default function AnalyticsAdminPage() {
                     </button>
                   ))}
                 </div>
-                <PeriodButtons period={period} setPeriod={setPeriod} />
+                <PeriodButtons period={period} setPeriod={setPeriod} availablePeriods={payload.availablePeriods} />
               </div>
               <ExportButtons payload={payload} tab={activeTab} />
             </div>
