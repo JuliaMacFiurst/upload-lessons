@@ -173,6 +173,15 @@
   font-weight: 700;
 }
 
+.analytics-loading-line {
+  padding: 10px 14px;
+  border: 1px solid #dbe5ef;
+  border-radius: 12px;
+  background: #ffffff;
+  color: #516173;
+  font-weight: 700;
+}
+
 .analytics-metric-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -195,7 +204,7 @@
 
 .analytics-metric {
   padding: 16px;
-  min-height: 190px;
+  min-height: 178px;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -364,7 +373,7 @@
 
 .analytics-funnel {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 12px;
   margin-top: 18px;
 }
@@ -398,6 +407,27 @@
 .analytics-funnel-step em {
   color: #64748b;
   font-style: normal;
+}
+
+.analytics-funnel-step p {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.analytics-bar {
+  display: block;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e5edf6;
+}
+
+.analytics-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #111827;
 }
 
 .analytics-transition-list {
@@ -474,6 +504,53 @@
 
 .analytics-opportunity--idea {
   border-left-color: #a855f7;
+}
+
+.analytics-quality-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.analytics-quality {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid #e0e8f2;
+  border-left-width: 5px;
+  border-radius: 12px;
+  background: #f8fbff;
+}
+
+.analytics-quality span {
+  color: #64748b;
+  line-height: 1.45;
+}
+
+.analytics-quality--info {
+  border-left-color: #60a5fa;
+}
+
+.analytics-quality--warning {
+  border-left-color: #f97316;
+}
+
+.analytics-quality--critical {
+  border-left-color: #dc2626;
+}
+
+.analytics-export-text {
+  max-height: 560px;
+  overflow: auto;
+  margin: 18px 0 0;
+  padding: 16px;
+  border: 1px solid #dbe5ef;
+  border-radius: 12px;
+  background: #f8fbff;
+  color: #172033;
+  font: 0.9rem/1.55 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 980px) {

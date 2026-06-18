@@ -11,9 +11,10 @@ import type {
   AnalyticsMetricCard,
   AnalyticsPageRow,
   AnalyticsPeriodKey,
+  AnalyticsQualityIssue,
 } from "../../lib/server/admin-analytics";
 
-type AnalyticsTab = "overview" | "content" | "funnels" | "languages" | "pages" | "studio" | "drawing" | "opportunities";
+type AnalyticsTab = "overview" | "content" | "funnels" | "languages" | "pages" | "studio" | "opportunities" | "quality" | "export";
 type SortKey = keyof AnalyticsContentRow;
 
 const tabLabels: Array<{ key: AnalyticsTab; label: string }> = [
@@ -23,14 +24,16 @@ const tabLabels: Array<{ key: AnalyticsTab; label: string }> = [
   { key: "languages", label: "Languages" },
   { key: "pages", label: "Pages" },
   { key: "studio", label: "Studio" },
-  { key: "drawing", label: "Drawing lesson" },
-  { key: "opportunities", label: "Opportunities" },
+  { key: "opportunities", label: "Что делать" },
+  { key: "quality", label: "Data Quality" },
+  { key: "export", label: "Export" },
 ];
 
 const periodLabels: Record<AnalyticsPeriodKey, string> = {
-  today: "Сегодня",
-  "7d": "Последние 7 дней",
-  "14d": "Последние 2 недели",
+  "7d": "7 дней",
+  "14d": "14 дней",
+  "30d": "30 дней",
+  "90d": "90 дней",
 };
 
 const metricColors = {
@@ -53,7 +56,6 @@ async function copyTextToClipboard(value: string) {
     await navigator.clipboard.writeText(value);
     return;
   }
-
   const textarea = document.createElement("textarea");
   textarea.value = value;
   textarea.style.position = "fixed";
@@ -67,12 +69,8 @@ async function copyTextToClipboard(value: string) {
 }
 
 function formatChange(value: number | null) {
-  if (value == null) {
-    return "новое";
-  }
-  if (value === 0) {
-    return "0%";
-  }
+  if (value == null) return "новое";
+  if (value === 0) return "0%";
   return `${value > 0 ? "+" : ""}${value}%`;
 }
 
@@ -81,10 +79,7 @@ function numberText(value: number, suffix = "") {
 }
 
 function tableToCsv(headers: string[], rows: Array<Array<string | number | null>>) {
-  const escape = (value: string | number | null) => {
-    const text = value == null ? "" : String(value);
-    return `"${text.replace(/"/g, '""')}"`;
-  };
+  const escape = (value: string | number | null) => `"${(value == null ? "" : String(value)).replace(/"/g, '""')}"`;
   return [headers, ...rows].map((row) => row.map(escape).join(",")).join("\n");
 }
 
@@ -98,67 +93,24 @@ function downloadFile(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-function buildExportText(payload: AnalyticsAdminPayload, tab: AnalyticsTab) {
-  const lines: string[] = [`=== LAPLAPLA ANALYTICS: ${tab.toUpperCase()} ===`, `Generated: ${payload.generatedAt}`, ""];
-  if (tab === "overview") {
-    lines.push("=== VISITORS LAST 14 DAYS ===");
-    payload.growth.forEach((item) => lines.push(`${item.date}: visitors=${item.visitors} sessions=${item.sessions} events=${item.events}`));
-    lines.push("", "=== SUMMARY LAST 14 DAYS ===");
-    payload.periods["14d"].forEach((card) => lines.push(`${card.label}: ${card.value}${card.suffix || ""} (${formatChange(card.changePercent)})`));
-  }
-  if (tab === "content") {
-    lines.push("=== TOP CONTENT ===");
-    payload.content.rows.forEach((row) => lines.push(`${row.title} | type=${row.type} | opens=${row.opens} | completed=${row.completions} | completion=${row.completionRate}% | growth=${formatChange(row.growthPercent)}`));
-  }
-  if (tab === "funnels") {
-    lines.push("=== FUNNEL ===");
-    payload.funnels.forEach((row) => lines.push(`${row.step}: users=${row.users} dropoff=${row.dropoffPercent == null ? "n/a" : `${row.dropoffPercent}%`}`));
-  }
-  if (tab === "languages") {
-    lines.push("=== LANGUAGES ===");
-    payload.languages.forEach((row) => lines.push(`${row.lang}: events=${row.events} completion=${row.completionRate}% growth=${formatChange(row.growthPercent)}`));
-  }
-  if (tab === "pages") {
-    lines.push("=== TOP PAGES ===");
-    payload.pages.topPages.forEach((row) => lines.push(`${row.page}: views=${row.views} visitors=${row.visitors} avg_events=${row.averageEvents}`));
-    lines.push("", "=== TOP ENTRY PAGES ===");
-    payload.pages.entryPages.forEach((row) => lines.push(`${row.page}: entries=${row.views} visitors=${row.visitors}`));
-    lines.push("", "=== TOP EXIT PAGES ===");
-    payload.pages.exitPages.forEach((row) => lines.push(`${row.page}: exits=${row.views} visitors=${row.visitors}`));
-  }
-  if (tab === "studio") {
-    lines.push("=== STUDIO ===");
-    lines.push(`projects_created=${payload.studio.projectsCreated}`);
-    lines.push(`videos_exported=${payload.studio.videosExported}`);
-    lines.push(`downloads=${payload.studio.downloads}`);
-    lines.push(`average_slides=${payload.studio.averageSlides ?? "n/a"}`);
-    lines.push(`average_video_seconds=${payload.studio.averageVideoSeconds ?? "n/a"}`);
-  }
-  if (tab === "drawing") {
-    lines.push("=== DRAWING LESSONS ===");
-    payload.drawingLessons.lessons.forEach((row) => lines.push(`${row.title}: completions=${row.completions} growth=${formatChange(row.growthPercent)}`));
-    lines.push("", "=== DRAWING CATEGORIES ===");
-    payload.drawingLessons.categories.forEach((row) => lines.push(`${row.title}: completions=${row.completions}`));
-  }
-  if (tab === "opportunities") {
-    lines.push("=== OPPORTUNITIES ===");
-    payload.opportunities.forEach((item) => lines.push(`${item.title}\n${item.description}\n`));
-  }
-  return lines.join("\n");
-}
-
 function buildCsv(payload: AnalyticsAdminPayload, tab: AnalyticsTab) {
   if (tab === "content") {
-    return tableToCsv(["title", "type", "opens", "completions", "completion_rate", "growth_percent"], payload.content.rows.map((row) => [row.title, row.type, row.opens, row.completions, row.completionRate, row.growthPercent]));
+    return tableToCsv(
+      ["title", "type", "opens", "completions", "progress", "exits", "shares", "errors", "completion_rate", "growth_percent"],
+      payload.content.rows.map((row) => [row.title, row.type, row.opens, row.completions, row.progress, row.exits, row.shares, row.errors, row.completionStatus, row.growthPercent]),
+    );
   }
   if (tab === "languages") {
-    return tableToCsv(["lang", "events", "completion_rate", "growth_percent"], payload.languages.map((row) => [row.lang, row.events, row.completionRate, row.growthPercent]));
+    return tableToCsv(["lang", "events", "opens", "completions", "exits", "completion_rate"], payload.languages.map((row) => [row.lang, row.events, row.opens, row.completions, row.exits, row.completionRate]));
   }
   if (tab === "pages") {
-    return tableToCsv(["page", "views", "visitors", "average_events"], payload.pages.topPages.map((row) => [row.page, row.views, row.visitors, row.averageEvents]));
+    return tableToCsv(["page", "views", "visitors", "exits", "exit_rate", "avg_duration", "avg_events"], payload.pages.topPages.map((row) => [row.page, row.views, row.visitors, row.exits, row.exitRate, row.averageDurationSeconds, row.averageEvents]));
   }
   if (tab === "funnels") {
-    return tableToCsv(["step", "users", "dropoff_percent"], payload.funnels.map((row) => [row.step, row.users, row.dropoffPercent]));
+    return tableToCsv(["funnel", "step", "count", "conversion_percent", "note"], payload.funnels.flatMap((funnel) => funnel.steps.map((step) => [funnel.title, step.step, step.count, step.conversionPercent, step.note])));
+  }
+  if (tab === "studio") {
+    return tableToCsv(["step", "count", "conversion_percent", "note"], payload.studio.breakpoints.map((step) => [step.step, step.count, step.conversionPercent, step.note]));
   }
   return tableToCsv(["date", "visitors", "sessions", "events"], payload.growth.map((row) => [row.date, row.visitors, row.sessions, row.events]));
 }
@@ -181,7 +133,7 @@ function PeriodButtons({ period, setPeriod }: { period: AnalyticsPeriodKey; setP
 
 function ExportButtons({ payload, tab }: { payload: AnalyticsAdminPayload; tab: AnalyticsTab }) {
   const [status, setStatus] = useState("");
-  const text = useMemo(() => buildExportText(payload, tab), [payload, tab]);
+  const copyText = tab === "export" ? payload.exportSummary : payload.exportSummary;
 
   return (
     <div className="analytics-export">
@@ -189,16 +141,16 @@ function ExportButtons({ payload, tab }: { payload: AnalyticsAdminPayload; tab: 
         className="analytics-button analytics-button--primary"
         type="button"
         onClick={async () => {
-          await copyTextToClipboard(text);
-          setStatus("Данные скопированы");
+          await copyTextToClipboard(copyText);
+          setStatus("Скопировано");
         }}
       >
         ChatGPT
       </button>
-      <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-${tab}.json`, JSON.stringify(payload, null, 2), "application/json")}>
+      <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-analytics-${payload.period}.json`, JSON.stringify(payload, null, 2), "application/json")}>
         JSON
       </button>
-      <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-${tab}.csv`, buildCsv(payload, tab), "text/csv;charset=utf-8")}>
+      <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-${tab}-${payload.period}.csv`, buildCsv(payload, tab), "text/csv;charset=utf-8")}>
         CSV
       </button>
       {status ? <span className="analytics-copy-status">{status}</span> : null}
@@ -212,23 +164,26 @@ function MetricCard({ card }: { card: AnalyticsMetricCard }) {
     <article className="analytics-metric">
       <div className="analytics-metric__label">{card.label}</div>
       <div className="analytics-metric__value">{numberText(card.value, card.suffix)}</div>
-      <div className={`analytics-metric__change ${positive ? "analytics-metric__change--up" : "analytics-metric__change--down"}`}>
-        {formatChange(card.changePercent)}
-      </div>
+      <div className={`analytics-metric__change ${positive ? "analytics-metric__change--up" : "analytics-metric__change--down"}`}>{formatChange(card.changePercent)}</div>
       <p>{card.explanation}</p>
+      <p><strong>Как считается:</strong> {card.formula}</p>
+      <p><strong>События:</strong> {card.events.join(", ")}</p>
+      <p><strong>Доверие:</strong> {card.confidence}. {card.reliability}</p>
     </article>
   );
 }
 
+function Bar({ value, max }: { value: number; max: number }) {
+  return <span className="analytics-bar"><span style={{ width: `${Math.max(4, Math.round((value / Math.max(1, max)) * 100))}%` }} /></span>;
+}
+
 function LineChart({ payload }: { payload: AnalyticsAdminPayload }) {
   const [visible, setVisible] = useState({ visitors: true, sessions: true, events: true });
-  const [days, setDays] = useState<7 | 14>(14);
-  const data = payload.growth.slice(days === 7 ? -7 : 0);
+  const data = payload.growth;
   const max = Math.max(1, ...data.flatMap((row) => [visible.visitors ? row.visitors : 0, visible.sessions ? row.sessions : 0, visible.events ? row.events : 0]));
   const width = 760;
   const height = 260;
   const padding = 32;
-
   const points = (key: "visitors" | "sessions" | "events") => data.map((row, index) => {
     const x = padding + (index * (width - padding * 2)) / Math.max(1, data.length - 1);
     const y = height - padding - (row[key] / max) * (height - padding * 2);
@@ -239,33 +194,29 @@ function LineChart({ payload }: { payload: AnalyticsAdminPayload }) {
     <section className="analytics-panel">
       <div className="analytics-section-head">
         <div>
-          <h2>График роста</h2>
-          <p>Этот график показывает, как менялись посетители, сессии и события по дням. Если линия растёт, значит активность на сайте увеличивается.</p>
+          <h2>Динамика по дням</h2>
+          <p>Посетители, сессии и события за выбранный период. Резкие провалы часто означают проблему с трекингом или релизом.</p>
         </div>
         <div className="analytics-control-row">
-          <button className={`analytics-chip ${days === 7 ? "analytics-chip--active" : ""}`} type="button" onClick={() => setDays(7)}>7 дней</button>
-          <button className={`analytics-chip ${days === 14 ? "analytics-chip--active" : ""}`} type="button" onClick={() => setDays(14)}>14 дней</button>
+          {(["visitors", "sessions", "events"] as const).map((key) => (
+            <label key={key} className="analytics-toggle">
+              <input type="checkbox" checked={visible[key]} onChange={(event) => setVisible((current) => ({ ...current, [key]: event.target.checked }))} />
+              <span style={{ backgroundColor: metricColors[key] }} />
+              {key}
+            </label>
+          ))}
         </div>
       </div>
-      <div className="analytics-control-row">
-        {(["visitors", "sessions", "events"] as const).map((key) => (
-          <label key={key} className="analytics-toggle">
-            <input type="checkbox" checked={visible[key]} onChange={(event) => setVisible((current) => ({ ...current, [key]: event.target.checked }))} />
-            <span style={{ backgroundColor: metricColors[key] }} />
-            {key}
-          </label>
-        ))}
-      </div>
-      {data.length === 0 ? <EmptyState text="Пока нет данных для графика роста." /> : (
+      {data.length === 0 ? <EmptyState text="Пока нет данных для графика." /> : (
         <div className="analytics-chart-wrap">
-          <svg className="analytics-line-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="График роста">
+          <svg className="analytics-line-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="График активности">
             <line x1={padding} y1={height - padding} x2={width - padding} y2={height - padding} />
             <line x1={padding} y1={padding} x2={padding} y2={height - padding} />
             {visible.visitors ? <polyline points={points("visitors")} stroke={metricColors.visitors} /> : null}
             {visible.sessions ? <polyline points={points("sessions")} stroke={metricColors.sessions} /> : null}
             {visible.events ? <polyline points={points("events")} stroke={metricColors.events} /> : null}
           </svg>
-          <div className="analytics-chart-labels">
+          <div className="analytics-chart-labels" style={{ gridTemplateColumns: `repeat(${data.length}, minmax(0, 1fr))` }}>
             {data.map((row) => <span key={row.date}>{row.date.slice(5)}</span>)}
           </div>
         </div>
@@ -274,29 +225,13 @@ function LineChart({ payload }: { payload: AnalyticsAdminPayload }) {
   );
 }
 
-function OverviewTab({ payload, period, setPeriod }: { payload: AnalyticsAdminPayload; period: AnalyticsPeriodKey; setPeriod: (period: AnalyticsPeriodKey) => void }) {
+function OverviewTab({ payload }: { payload: AnalyticsAdminPayload }) {
   return (
     <>
       <div className="analytics-metric-grid">
-        {payload.periods[period].map((card) => <MetricCard key={card.key} card={card} />)}
+        {payload.periods[payload.period].map((card) => <MetricCard key={card.key} card={card} />)}
       </div>
       <LineChart payload={payload} />
-      <section className="analytics-panel">
-        <h2>Схема переходов</h2>
-        <p className="analytics-help">Этот блок показывает, с какой страницы пользователь чаще переходил дальше. Если переходов мало, значит данных пока недостаточно или люди смотрят только одну страницу за визит.</p>
-        {payload.pages.transitions.length === 0 ? <EmptyState text="Пока нет достаточных данных о переходах между страницами." /> : (
-          <div className="analytics-transition-list">
-            {payload.pages.transitions.map((item) => (
-              <div key={`${item.from}-${item.to}`} className="analytics-transition">
-                <span>{item.from}</span>
-                <strong>→</strong>
-                <span>{item.to}</span>
-                <b>{item.count}</b>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
     </>
   );
 }
@@ -327,23 +262,29 @@ function ContentTable({ rows }: { rows: AnalyticsContentRow[] }) {
       <table className="analytics-table">
         <thead>
           <tr>
-            {header("title", "Название")}
-            {header("type", "Тип")}
+            {header("title", "Контент")}
+            {header("type", "Раздел")}
             {header("opens", "Открытия")}
             {header("completions", "Завершения")}
-            {header("completionRate", "Completion %")}
-            {header("growthPercent", "Рост")}
+            {header("progress", "Progress")}
+            {header("exits", "Exits")}
+            {header("shares", "Share")}
+            {header("errors", "Ошибки")}
+            {header("completionRate", "Completion")}
           </tr>
         </thead>
         <tbody>
           {sorted.map((row) => (
-            <tr key={`${row.type}-${row.title}`}>
+            <tr key={row.key}>
               <td>{row.title}</td>
               <td>{row.type}</td>
               <td>{row.opens}</td>
               <td>{row.completions}</td>
-              <td>{row.completionRate}%</td>
-              <td>{formatChange(row.growthPercent)}</td>
+              <td>{row.progress}</td>
+              <td>{row.exits}</td>
+              <td>{row.shares}</td>
+              <td>{row.errors}</td>
+              <td>{row.completionStatus}</td>
             </tr>
           ))}
         </tbody>
@@ -359,9 +300,9 @@ function MiniList({ title, rows, empty }: { title: string; rows: AnalyticsConten
       {rows.length === 0 ? <EmptyState text={empty} /> : (
         <div className="analytics-mini-list">
           {rows.map((row) => (
-            <div key={`${title}-${row.type}-${row.title}`}>
+            <div key={`${title}-${row.key}`}>
               <strong>{row.title}</strong>
-              <span>{row.type} · opens {row.opens} · completion {row.completionRate}% · рост {formatChange(row.growthPercent)}</span>
+              <span>{row.type} · opens {row.opens} · completes {row.completions} · exits {row.exits} · completion {row.completionStatus}</span>
             </div>
           ))}
         </div>
@@ -375,23 +316,22 @@ function ContentTab({ payload }: { payload: AnalyticsAdminPayload }) {
     <>
       <section className="analytics-panel">
         <h2>Content</h2>
-        <p className="analytics-help">Эта таблица показывает, что пользователи открывают и что доводят до конца. Высокий completion означает, что материал удерживает внимание.</p>
+        <p className="analytics-help">Группировка идёт по `content_id`, затем `content_slug`, затем названию. Старые story/map/recipe события тоже попадают сюда.</p>
         {payload.content.rows.length === 0 ? <EmptyState text="Пока нет данных по контенту." /> : <ContentTable rows={payload.content.rows} />}
       </section>
       <div className="analytics-grid-2">
-        <MiniList title="Лучший контент" rows={payload.content.best} empty="Пока нет контента с завершениями." />
-        <MiniList title="Худший контент" rows={payload.content.worst} empty="Пока недостаточно открытий, чтобы честно выбрать слабые материалы." />
-        <MiniList title="Быстрорастущий контент" rows={payload.content.fastest} empty="Пока не видно роста относительно прошлого периода." />
-        <MiniList title="Скрытые жемчужины" rows={payload.content.hiddenGems} empty="Пока нет контента с высоким completion и низким трафиком." />
+        <MiniList title="Лучший контент недели" rows={payload.content.best} empty="Пока нет открытий." />
+        <MiniList title="Открывают, но не заканчивают" rows={payload.content.openedNotFinished} empty="Нет явных кандидатов." />
+        <MiniList title="Высокий completion rate" rows={payload.content.highCompletion} empty="Пока мало завершений." />
+        <MiniList title="Низкий completion rate" rows={payload.content.lowCompletion} empty="Пока нет слабых мест с достаточным трафиком." />
+        <MiniList title="Кандидаты развивать дальше" rows={payload.content.developFurther} empty="Пока нет сильных кандидатов." />
       </div>
     </>
   );
 }
 
-function SimpleRows<T>({ rows, columns, empty }: { rows: T[]; columns: Array<{ label: string; render: (row: T) => string | number }>; empty: string }) {
-  if (rows.length === 0) {
-    return <EmptyState text={empty} />;
-  }
+function SimpleRows<T>({ rows, columns, empty }: { rows: T[]; columns: Array<{ label: string; render: (row: T) => string | number | null }>; empty: string }) {
+  if (rows.length === 0) return <EmptyState text={empty} />;
   return (
     <div className="analytics-table-wrap">
       <table className="analytics-table">
@@ -406,6 +346,55 @@ function SimpleRows<T>({ rows, columns, empty }: { rows: T[]; columns: Array<{ l
   );
 }
 
+function FunnelsTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  return (
+    <div className="analytics-grid-1">
+      {payload.funnels.map((funnel) => {
+        const max = Math.max(1, ...funnel.steps.map((step) => step.count));
+        return (
+          <section key={funnel.key} className="analytics-panel">
+            <h2>{funnel.title}</h2>
+            <p className="analytics-help">{funnel.explanation} Доверие: {funnel.confidence}.</p>
+            <div className="analytics-funnel">
+              {funnel.steps.map((step) => (
+                <div key={step.step} className="analytics-funnel-step">
+                  <strong>{step.step}</strong>
+                  <span>{step.count}</span>
+                  <Bar value={step.count} max={max} />
+                  <em>{step.conversionPercent == null ? "первый шаг" : `${step.conversionPercent}% от прошлого шага`}</em>
+                  <p>{step.note}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function LanguagesTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  return (
+    <section className="analytics-panel">
+      <h2>Languages</h2>
+      <p className="analytics-help">Язык берётся из `language`, потом из `properties`, потом из старого `lang`.</p>
+      <SimpleRows
+        rows={payload.languages}
+        empty="Пока нет языковых данных."
+        columns={[
+          { label: "Язык", render: (row) => row.lang },
+          { label: "События", render: (row) => row.events },
+          { label: "Открытия", render: (row) => row.opens },
+          { label: "Завершения", render: (row) => row.completions },
+          { label: "Уходы", render: (row) => row.exits },
+          { label: "Completion", render: (row) => `${row.completionRate}%` },
+          { label: "Рост", render: (row) => formatChange(row.growthPercent) },
+        ]}
+      />
+    </section>
+  );
+}
+
 function PagePanel({ title, help, rows }: { title: string; help: string; rows: AnalyticsPageRow[] }) {
   return (
     <section className="analytics-panel">
@@ -415,12 +404,167 @@ function PagePanel({ title, help, rows }: { title: string; help: string; rows: A
         rows={rows}
         empty="Пока нет данных по страницам."
         columns={[
-          { label: "Страница", render: (row) => row.page },
+          { label: "Контент", render: (row) => row.title === row.page ? row.page : `${row.title} · ${row.page}` },
           { label: "Просмотры", render: (row) => row.views },
-          { label: "Уникальные посетители", render: (row) => row.visitors },
-          { label: "Среднее число событий", render: (row) => row.averageEvents },
+          { label: "Посетители", render: (row) => row.visitors },
+          { label: "Выходы", render: (row) => row.exits },
+          { label: "Exit rate", render: (row) => `${row.exitRate}%` },
+          { label: "Длительность", render: (row) => row.averageDurationSeconds == null ? "нет данных" : `${row.averageDurationSeconds} сек.` },
         ]}
       />
+    </section>
+  );
+}
+
+function PagesTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  return (
+    <div className="analytics-grid-1">
+      <PagePanel title="Самые посещаемые страницы" help="Страницы с максимальным вниманием пользователей." rows={payload.pages.topPages} />
+      <PagePanel title="Страницы с высоким выходом" help="Где визит чаще заканчивается или приходит `content_exit`." rows={payload.pages.highExitPages} />
+      <PagePanel title="Низкая длительность" help="Страницы с коротким `duration_seconds`, если это поле приходит." rows={payload.pages.lowDurationPages} />
+      <section className="analytics-panel">
+        <h2>Переходы между страницами</h2>
+        <p className="analytics-help">Считается по порядку событий внутри `session_id`.</p>
+        {payload.pages.transitions.length === 0 ? <EmptyState text="Пока нет достаточных данных о переходах." /> : (
+          <div className="analytics-transition-list">
+            {payload.pages.transitions.map((item) => (
+              <div key={`${item.from}-${item.to}`} className="analytics-transition">
+                <span>{item.from}</span>
+                <strong>→</strong>
+                <span>{item.to}</span>
+                <b>{item.count}</b>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function StudioTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  const studioCard = (card: Pick<AnalyticsMetricCard, "key" | "label" | "value" | "explanation">, events: string[]): AnalyticsMetricCard => ({
+    ...card,
+    changePercent: 0,
+    formula: "count events",
+    events,
+    confidence: "средняя",
+    reliability: "Studio-счётчик точен, если событие отправляется во всех вариантах студии.",
+  });
+  return (
+    <section className="analytics-panel">
+      <h2>Studio</h2>
+      <p className="analytics-help">Путь студии показывает, где люди теряются: открытие, создание проекта, добавление медиа, экспорт и ошибки.</p>
+      <div className="analytics-metric-grid analytics-metric-grid--compact">
+        <MetricCard card={studioCard({ key: "studio-open", label: "Открыли студию", value: payload.studio.opened, explanation: "Событие `studio_open`." }, ["studio_open"])} />
+        <MetricCard card={studioCard({ key: "project-created", label: "Создали проект", value: payload.studio.projectsCreated, explanation: "`studio_project_created` и старый `project_created`." }, ["studio_project_created", "project_created"])} />
+        <MetricCard card={studioCard({ key: "export-completed", label: "Успешно экспортировали", value: payload.studio.exportCompleted, explanation: "`studio_export_completed` и старый `video_exported`." }, ["studio_export_completed", "video_exported"])} />
+        <MetricCard card={studioCard({ key: "export-failed", label: "Export failed", value: payload.studio.exportFailed, explanation: "Ошибки экспорта из `studio_export_failed`." }, ["studio_export_failed"])} />
+      </div>
+      <SimpleRows
+        rows={payload.studio.breakpoints}
+        empty="Пока нет studio-событий."
+        columns={[
+          { label: "Шаг", render: (row) => row.step },
+          { label: "Count", render: (row) => row.count },
+          { label: "Conversion", render: (row) => row.conversionPercent == null ? "первый шаг" : `${row.conversionPercent}%` },
+          { label: "Комментарий", render: (row) => row.note },
+        ]}
+      />
+      <div className="analytics-grid-1">
+        {payload.studio.funnels.map((funnel) => {
+          const max = Math.max(1, ...funnel.steps.map((step) => step.count));
+          return (
+            <section key={funnel.key} className="analytics-subpanel">
+              <strong>{funnel.title}</strong>
+              <span>{funnel.explanation} Доверие: {funnel.confidence}.</span>
+              <div className="analytics-funnel analytics-funnel--compact">
+                {funnel.steps.map((step) => (
+                  <div key={step.step} className="analytics-funnel-step">
+                    <strong>{step.step}</strong>
+                    <span>{step.count}</span>
+                    <Bar value={step.count} max={max} />
+                    <em>{step.conversionPercent == null ? "первый шаг" : `${step.conversionPercent}%`}</em>
+                  </div>
+                ))}
+              </div>
+            </section>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function OpportunitiesTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  return (
+    <section className="analytics-panel">
+      <h2>Что делать дальше</h2>
+      <p className="analytics-help">Это rule-based блок без LLM. Он смотрит на открытия, completion, exits, export funnel и языки.</p>
+      <div className="analytics-opportunities">
+        {payload.opportunities.map((item) => (
+          <article key={item.title} className={`analytics-opportunity analytics-opportunity--${item.tone}`}>
+            <h3>{item.title}</h3>
+            <strong>Уверенность: {item.confidence}</strong>
+            <p>{item.description}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function QualityList({ title, rows, empty }: { title: string; rows: AnalyticsQualityIssue[]; empty: string }) {
+  return (
+    <section className="analytics-panel">
+      <h2>{title}</h2>
+      {rows.length === 0 ? <EmptyState text={empty} /> : (
+        <div className="analytics-quality-list">
+          {rows.map((row, index) => (
+            <article key={`${row.title}-${index}`} className={`analytics-quality analytics-quality--${row.severity}`}>
+              <strong>{row.title}{row.count == null ? "" : ` · ${row.count}`}</strong>
+              <span>{row.description}</span>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function DataQualityTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  const missingRows = payload.dataQuality.missingExpectedEvents.map((eventName) => ({ title: eventName, description: "За выбранный период событие не приходило. Это не всегда ошибка: событие может относиться к экрану без трафика.", severity: "info" as const }));
+  return (
+    <div className="analytics-grid-2">
+      <QualityList title="Summary / длинные периоды" rows={payload.dataQuality.summaryWarnings} empty="Для выбранного периода нет предупреждений по summary." />
+      <QualityList title="События не встречались вообще" rows={payload.dataQuality.missingEverEvents} empty="Все ожидаемые события встречались в загруженном окне." />
+      <QualityList title="События не пришли за период" rows={missingRows} empty="Все ожидаемые события встретились за период." />
+      <QualityList title="Проблемы с properties" rows={payload.dataQuality.propertyIssues} empty="Критичные поля выглядят заполненными." />
+      <QualityList title="Подозрительные дубликаты" rows={payload.dataQuality.duplicateIssues} empty="Быстрых повторов не найдено." />
+      <QualityList title="Провалы по дням" rows={payload.dataQuality.dailyDrops} empty="Резких дневных провалов не видно." />
+      <QualityList title="Что невозможно посчитать точно" rows={payload.dataQuality.unavailableMetrics} empty="Основные метрики можно посчитать." />
+    </div>
+  );
+}
+
+function ExportTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  const [status, setStatus] = useState("");
+  return (
+    <section className="analytics-panel">
+      <h2>Export</h2>
+      <p className="analytics-help">JSON содержит весь payload. CSV выгружается для активной вкладки. Текст для ChatGPT написан по-русски и готов для анализа без персональных данных.</p>
+      <div className="analytics-control-row">
+        <button className="analytics-button analytics-button--primary" type="button" onClick={async () => {
+          await copyTextToClipboard(payload.exportSummary);
+          setStatus("Текст скопирован");
+        }}>
+          Скопировать для ChatGPT
+        </button>
+        <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-analytics-${payload.period}.json`, JSON.stringify(payload, null, 2), "application/json")}>JSON</button>
+        <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-overview-${payload.period}.csv`, buildCsv(payload, "overview"), "text/csv;charset=utf-8")}>CSV overview</button>
+        {status ? <span className="analytics-copy-status">{status}</span> : null}
+      </div>
+      <pre className="analytics-export-text">{payload.exportSummary}</pre>
     </section>
   );
 }
@@ -445,11 +589,11 @@ export default function AnalyticsAdminPage() {
     });
   }, [router, supabase]);
 
-  const loadAnalytics = useCallback(async () => {
+  const loadAnalytics = useCallback(async (selectedPeriod: AnalyticsPeriodKey) => {
     setLoading(true);
     setError(null);
     try {
-      setPayload(await fetchJson<AnalyticsAdminPayload>("/api/admin/analytics/overview"));
+      setPayload(await fetchJson<AnalyticsAdminPayload>(`/api/admin/analytics/overview?period=${selectedPeriod}`));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Не удалось загрузить аналитику.");
     } finally {
@@ -459,32 +603,26 @@ export default function AnalyticsAdminPage() {
 
   useEffect(() => {
     if (sessionChecked) {
-      void loadAnalytics();
+      void loadAnalytics(period);
     }
-  }, [loadAnalytics, sessionChecked]);
+  }, [loadAnalytics, period, sessionChecked]);
 
-  if (!sessionChecked) {
-    return null;
-  }
+  if (!sessionChecked) return null;
 
   return (
     <div className="analytics-page">
       <div className="admin-top-bar">
-        <div className="admin-top-bar__row admin-top-bar__row--right">
-          <AdminLogout />
-        </div>
-        <div className="admin-top-bar__row admin-top-bar__row--tabs">
-          <AdminTabs />
-        </div>
+        <div className="admin-top-bar__row admin-top-bar__row--right"><AdminLogout /></div>
+        <div className="admin-top-bar__row admin-top-bar__row--tabs"><AdminTabs /></div>
       </div>
 
       <main className="analytics-shell">
         <header className="analytics-header">
           <div>
             <h1>Analytics</h1>
-            <p>Продуктовая аналитика LapLapLa: что растёт, где люди уходят и какие идеи стоит развивать дальше.</p>
+            <p>Админский dashboard LapLapLa: продуктовые метрики, контент, воронки, качество данных и экспорт из Supabase `analytics_events`.</p>
           </div>
-          <button className="analytics-button" type="button" onClick={() => void loadAnalytics()} disabled={loading}>
+          <button className="analytics-button" type="button" onClick={() => void loadAnalytics(period)} disabled={loading}>
             Обновить
           </button>
         </header>
@@ -503,103 +641,21 @@ export default function AnalyticsAdminPage() {
                     </button>
                   ))}
                 </div>
-                {activeTab === "overview" ? <PeriodButtons period={period} setPeriod={setPeriod} /> : null}
+                <PeriodButtons period={period} setPeriod={setPeriod} />
               </div>
               <ExportButtons payload={payload} tab={activeTab} />
             </div>
 
-            {activeTab === "overview" ? <OverviewTab payload={payload} period={period} setPeriod={setPeriod} /> : null}
+            {loading ? <div className="analytics-loading-line">Обновляю данные за {periodLabels[period]}...</div> : null}
+            {activeTab === "overview" ? <OverviewTab payload={payload} /> : null}
             {activeTab === "content" ? <ContentTab payload={payload} /> : null}
-            {activeTab === "funnels" ? (
-              <section className="analytics-panel">
-                <h2>Funnels</h2>
-                <p className="analytics-help">Этот отчёт показывает, на каком этапе пользователи чаще всего прекращают взаимодействие.</p>
-                <div className="analytics-funnel">
-                  {payload.funnels.map((step) => (
-                    <div key={step.step} className="analytics-funnel-step">
-                      <strong>{step.step}</strong>
-                      <span>{step.users} пользователей</span>
-                      <em>{step.dropoffPercent == null ? "первый шаг" : `потери ${step.dropoffPercent}%`}</em>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            ) : null}
-            {activeTab === "languages" ? (
-              <section className="analytics-panel">
-                <h2>Languages</h2>
-                <p className="analytics-help">Здесь видно, на каких языках пользователи активнее взаимодействуют с сайтом. Новые языки появятся автоматически, если начнут приходить в событиях.</p>
-                <SimpleRows
-                  rows={payload.languages}
-                  empty="Пока нет языковых данных."
-                  columns={[
-                    { label: "Язык", render: (row) => row.lang },
-                    { label: "События", render: (row) => row.events },
-                    { label: "Completion", render: (row) => `${row.completionRate}%` },
-                    { label: "Рост", render: (row) => formatChange(row.growthPercent) },
-                  ]}
-                />
-              </section>
-            ) : null}
-            {activeTab === "pages" ? (
-              <div className="analytics-grid-1">
-                <PagePanel title="Top Pages" help="Самые просматриваемые страницы. Они показывают, куда чаще всего попадает внимание пользователей." rows={payload.pages.topPages} />
-                <PagePanel title="Top Entry Pages" help="Страницы, с которых чаще всего начинается визит. Они важны как первое впечатление о сайте." rows={payload.pages.entryPages} />
-                <PagePanel title="Top Exit Pages" help="Страницы, на которых визит чаще всего заканчивается. Высокое число выходов не всегда плохо, но такие страницы стоит проверять." rows={payload.pages.exitPages} />
-              </div>
-            ) : null}
-            {activeTab === "studio" ? (
-              <section className="analytics-panel">
-                <h2>Studio</h2>
-                <p className="analytics-help">Этот экран показывает, сколько пользователей создают проекты и доходят до результата: экспорта или скачивания.</p>
-                <div className="analytics-metric-grid analytics-metric-grid--compact">
-                  <MetricCard card={{ key: "projects", label: "Созданные проекты", value: payload.studio.projectsCreated, changePercent: 0, explanation: "Сколько проектов создано пользователями за последние 2 недели." }} />
-                  <MetricCard card={{ key: "exports", label: "Экспортированные видео", value: payload.studio.videosExported, changePercent: 0, explanation: "Сколько раз пользователи получили готовое видео." }} />
-                  <MetricCard card={{ key: "downloads", label: "Скачивания", value: payload.studio.downloads, changePercent: 0, explanation: "Скачивания показывают, что результат оказался достаточно ценным, чтобы забрать его себе." }} />
-                </div>
-                <div className="analytics-grid-2">
-                  <div className="analytics-subpanel"><strong>Среднее количество слайдов</strong><span>{payload.studio.averageSlides ?? "нет данных"}</span></div>
-                  <div className="analytics-subpanel"><strong>Средняя длина видео</strong><span>{payload.studio.averageVideoSeconds == null ? "нет данных" : `${payload.studio.averageVideoSeconds} сек.`}</span></div>
-                  <div className="analytics-subpanel"><strong>Топ пресетов</strong><span>{payload.studio.topPresets.map((item) => `${item.label}: ${item.count}`).join(", ") || "нет данных"}</span></div>
-                  <div className="analytics-subpanel"><strong>Топ языков</strong><span>{payload.studio.topLanguages.map((item) => `${item.label}: ${item.count}`).join(", ") || "нет данных"}</span></div>
-                </div>
-              </section>
-            ) : null}
-            {activeTab === "drawing" ? (
-              <div className="analytics-grid-2">
-                <section className="analytics-panel">
-                  <h2>Какие уроки пройдены</h2>
-                  <p className="analytics-help">Здесь видно, какие drawing lessons пользователи завершали чаще всего.</p>
-                  <SimpleRows rows={payload.drawingLessons.lessons} empty="Пока нет завершённых уроков рисования." columns={[
-                    { label: "Урок", render: (row) => row.title },
-                    { label: "Завершения", render: (row) => row.completions },
-                    { label: "Рост", render: (row) => formatChange(row.growthPercent) },
-                  ]} />
-                </section>
-                <section className="analytics-panel">
-                  <h2>Категории</h2>
-                  <p className="analytics-help">Категории помогают понять, какие темы рисования стоит развивать дальше.</p>
-                  <SimpleRows rows={payload.drawingLessons.categories} empty="Пока нет данных по категориям." columns={[
-                    { label: "Категория", render: (row) => row.title },
-                    { label: "Завершения", render: (row) => row.completions },
-                  ]} />
-                </section>
-              </div>
-            ) : null}
-            {activeTab === "opportunities" ? (
-              <section className="analytics-panel">
-                <h2>Opportunities</h2>
-                <p className="analytics-help">Этот экран автоматически ищет сигналы, которые помогают принимать решения: что продвигать, что улучшить и какие направления растут.</p>
-                <div className="analytics-opportunities">
-                  {payload.opportunities.map((item) => (
-                    <article key={item.title} className={`analytics-opportunity analytics-opportunity--${item.tone}`}>
-                      <h3>{item.title}</h3>
-                      <p>{item.description}</p>
-                    </article>
-                  ))}
-                </div>
-              </section>
-            ) : null}
+            {activeTab === "funnels" ? <FunnelsTab payload={payload} /> : null}
+            {activeTab === "languages" ? <LanguagesTab payload={payload} /> : null}
+            {activeTab === "pages" ? <PagesTab payload={payload} /> : null}
+            {activeTab === "studio" ? <StudioTab payload={payload} /> : null}
+            {activeTab === "opportunities" ? <OpportunitiesTab payload={payload} /> : null}
+            {activeTab === "quality" ? <DataQualityTab payload={payload} /> : null}
+            {activeTab === "export" ? <ExportTab payload={payload} /> : null}
           </>
         ) : null}
       </main>

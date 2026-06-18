@@ -1,5 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { buildAdminAnalytics } from "../../../../lib/server/admin-analytics";
+import { buildAdminAnalytics, normalizeAnalyticsPeriod } from "../../../../lib/server/admin-analytics";
 import { requireAdminSession } from "../../../../lib/server/admin-session";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -17,7 +17,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   }
 
   try {
-    const data = await buildAdminAnalytics(supabase);
+    const data = await buildAdminAnalytics(supabase, normalizeAnalyticsPeriod(req.query.period));
     return res.status(200).json(data);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load analytics.";
