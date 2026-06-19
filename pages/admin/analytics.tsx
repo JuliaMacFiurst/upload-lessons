@@ -409,7 +409,7 @@ function PagePanel({ title, help, rows }: { title: string; help: string; rows: A
           { label: "Посетители", render: (row) => row.visitors },
           { label: "Выходы", render: (row) => row.exits },
           { label: "Exit rate", render: (row) => `${row.exitRate}%` },
-          { label: "Длительность", render: (row) => row.averageDurationSeconds == null ? "нет данных" : `${row.averageDurationSeconds} сек. · ${row.durationStatus}` },
+          { label: "Длительность", render: (row) => row.averageDurationSeconds == null ? "нет данных" : `${row.averageDurationSeconds} сек. · ${row.durationStatus}${row.hasExplicitDuration ? "" : " · вычислено по session_id"}` },
         ]}
       />
     </section>
@@ -458,7 +458,7 @@ function StudioTab({ payload }: { payload: AnalyticsAdminPayload }) {
       <div className="analytics-metric-grid analytics-metric-grid--compact">
         <MetricCard card={studioCard({ key: "studio-open", label: "Открыли студию", value: payload.studio.opened, explanation: "Событие `studio_open`." }, ["studio_open"])} />
         <MetricCard card={studioCard({ key: "project-created", label: "Создали проект", value: payload.studio.projectsCreated, explanation: "`studio_project_created` и старый `project_created`." }, ["studio_project_created", "project_created"])} />
-        <MetricCard card={studioCard({ key: "export-completed", label: "Успешно экспортировали", value: payload.studio.exportCompleted, explanation: "`studio_export_completed` и старый `video_exported`." }, ["studio_export_completed", "video_exported"])} />
+        <MetricCard card={studioCard({ key: "export-completed", label: "Успешный output", value: payload.studio.successfulExports, explanation: "`studio_export_completed`, `studio_recording_completed` и старый `video_exported`." }, ["studio_export_completed", "studio_recording_completed", "video_exported"])} />
         <MetricCard card={studioCard({ key: "export-failed", label: "Export failed", value: payload.studio.exportFailed, explanation: "Ошибки экспорта из `studio_export_failed`." }, ["studio_export_failed"])} />
         <MetricCard card={studioCard({ key: "recording-started", label: "Recording started", value: payload.studio.recordingStarted, explanation: "Старт записи экрана/canvas." }, ["studio_recording_started"])} />
         <MetricCard card={studioCard({ key: "recording-completed", label: "Recording completed", value: payload.studio.recordingCompleted, explanation: "Успешное завершение записи." }, ["studio_recording_completed"])} />
@@ -474,8 +474,20 @@ function StudioTab({ payload }: { payload: AnalyticsAdminPayload }) {
           { label: "Комментарий", render: (row) => row.note },
         ]}
       />
+      <h3>Export method</h3>
+      <SimpleRows
+        rows={payload.studio.exportMethods}
+        empty="Пока нет данных по export_method."
+        columns={[
+          { label: "Метод", render: (row) => row.method },
+          { label: "Started", render: (row) => row.started },
+          { label: "Completed", render: (row) => row.completed },
+          { label: "Failed", render: (row) => row.failed },
+        ]}
+      />
+      {payload.studio.funnelBlockedReason ? <div className="analytics-error">{payload.studio.funnelBlockedReason}</div> : null}
       <div className="analytics-grid-1">
-        {payload.studio.funnels.map((funnel) => {
+        {payload.studio.funnelBlockedReason ? null : payload.studio.funnels.map((funnel) => {
           const max = Math.max(1, ...funnel.steps.map((step) => step.count));
           return (
             <section key={funnel.key} className="analytics-subpanel">
@@ -545,7 +557,22 @@ function QualityList({ title, rows, empty }: { title: string; rows: AnalyticsQua
 }
 
 function DataQualityTab({ payload }: { payload: AnalyticsAdminPayload }) {
-  const missingRows = payload.dataQuality.missingExpectedEvents.map((eventName) => ({ title: eventName, description: "За выбранный период событие не приходило. Это не всегда ошибка: событие может относиться к экрану без трафика.", severity: "info" as const }));
+  const missingImpact: Record<string, string> = {
+    page_view: "Влияет на посещения страниц, переходы и bounce rate.",
+    session_start: "Влияет на диагностику session tracking.",
+    content_open: "Влияет на Content, Funnels и denominator для completion.",
+    content_complete: "Completion rate, Languages и продуктовые выводы будут N/A.",
+    content_exit: "Влияет на exit rate, duration и bounce hints.",
+    studio_open: "Studio funnels заблокированы: сначала подключить стартовый шаг.",
+    studio_export_started: "Нельзя понять, сколько людей начали экспорт.",
+    studio_export_completed: "Нельзя доверять счётчику успешных экспортов.",
+    studio_export_failed: "Не видно ошибок экспорта.",
+    studio_recording_started: "Нельзя понять, сколько людей начали recording.",
+    studio_recording_completed: "Нельзя доверять счётчику успешных recording.",
+    studio_recording_failed: "Не видно ошибок recording.",
+    duration_seconds: "Pages duration и средняя длительность будут приблизительными или N/A.",
+  };
+  const missingRows = payload.dataQuality.missingExpectedEvents.map((eventName) => ({ title: eventName, description: `За выбранный период сигнал не приходил. ${missingImpact[eventName] || "Это не всегда ошибка: событие может относиться к экрану без трафика."}`, severity: "info" as const }));
   return (
     <div className="analytics-grid-2">
       <QualityList title="Summary / длинные периоды" rows={payload.dataQuality.summaryWarnings} empty="Для выбранного периода нет предупреждений по summary." />
