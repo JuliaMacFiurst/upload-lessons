@@ -32,12 +32,13 @@ type NormalizedEvent = {
   createdMs: number;
 };
 
-export type AnalyticsPeriodKey = "7d" | "14d" | "30d" | "90d";
+export type AnalyticsPeriodKey = "7d" | "14d";
 
 export type AnalyticsMetricCard = {
   key: string;
   label: string;
   value: number;
+  valueText?: string;
   suffix?: string;
   changePercent: number | null;
   explanation: string;
@@ -54,8 +55,10 @@ export type AnalyticsContentRow = {
   opens: number;
   completions: number;
   progress: number;
+  hasProgressData: boolean;
   exits: number;
   shares: number;
+  hasShareData: boolean;
   errors: number;
   completionRate: number | null;
   completionStatus: string;
@@ -68,7 +71,8 @@ export type AnalyticsLanguageRow = {
   opens: number;
   completions: number;
   exits: number;
-  completionRate: number;
+  completionRate: number | null;
+  completionStatus: string;
   growthPercent: number | null;
 };
 
@@ -80,7 +84,7 @@ export type AnalyticsPageRow = {
   exits: number;
   exitRate: number;
   averageDurationSeconds: number | null;
-  durationStatus: "нет данных" | "0 секунд" | "нормальное" | "подозрительно долго";
+  durationStatus: "нет данных" | "0 секунд" | "короткое время" | "нормальное" | "подозрительно долго";
   averageEvents: number;
 };
 
@@ -97,6 +101,7 @@ export type AnalyticsOpportunity = {
   description: string;
   tone: "good" | "warning" | "growth" | "idea";
   confidence: "высокая" | "средняя" | "низкая";
+  category: "technical" | "product";
 };
 
 export type AnalyticsQualityIssue = {
@@ -150,24 +155,23 @@ export type AnalyticsAdminPayload = {
     summaryWarnings: AnalyticsQualityIssue[];
     missingEverEvents: AnalyticsQualityIssue[];
     missingExpectedEvents: string[];
+    optionalEventNotes: AnalyticsQualityIssue[];
     propertyIssues: AnalyticsQualityIssue[];
     duplicateIssues: AnalyticsQualityIssue[];
     dailyDrops: AnalyticsQualityIssue[];
     unavailableMetrics: AnalyticsQualityIssue[];
   };
   availablePeriods: AnalyticsPeriodKey[];
-  unavailablePeriodReasons: Partial<Record<AnalyticsPeriodKey, string>>;
+  unavailablePeriodReasons: Partial<Record<"30d" | "90d", string>>;
   exportSummary: string;
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_ROWS = 50000;
-const PERIOD_DAYS: Record<AnalyticsPeriodKey, number> = { "7d": 7, "14d": 14, "30d": 30, "90d": 90 };
+const PERIOD_DAYS: Record<AnalyticsPeriodKey, number> = { "7d": 7, "14d": 14 };
 const PERIOD_LABELS: Record<AnalyticsPeriodKey, string> = {
   "7d": "последние 7 дней",
   "14d": "последние 14 дней",
-  "30d": "последние 30 дней",
-  "90d": "последние 90 дней",
 };
 
 const EXPECTED_EVENTS = [
@@ -179,13 +183,11 @@ const EXPECTED_EVENTS = [
   "content_complete",
   "content_exit",
   "language_changed",
-  "share_clicked",
   "external_link_clicked",
   "error_seen",
   "studio_open",
   "studio_project_created",
   "studio_media_added",
-  "studio_sticker_added",
   "studio_export_started",
   "studio_export_completed",
   "studio_export_failed",
@@ -214,7 +216,6 @@ const EVENT_EXPECTATIONS: Record<string, string> = {
   content_complete: "Пользователь дошёл до конца контента.",
   content_exit: "Пользователь ушёл со страницы контента, желательно с duration_seconds.",
   language_changed: "Language switcher.",
-  share_clicked: "Кнопки share/download/export link.",
   external_link_clicked: "Клик по внешней ссылке.",
   error_seen: "Показанная пользователю ошибка.",
   studio_open: "Открытие cats/parrots/studio.",
@@ -239,6 +240,12 @@ const EVENT_EXPECTATIONS: Record<string, string> = {
   bedtime_story_opened: "Открытие bedtime story.",
   bedtime_story_completed: "Завершение bedtime story.",
 };
+
+const OPTIONAL_EVENTS = [
+  "share_clicked",
+  "studio_sticker_added",
+  "recipe_steps_viewed",
+];
 
 const LEGACY_EVENT_MAP: Record<string, string> = {
   page_viewed: "page_view",
@@ -419,6 +426,7 @@ function average(values: number[]) {
 function durationStatus(value: number | null): AnalyticsPageRow["durationStatus"] {
   if (value == null) return "нет данных";
   if (value === 0) return "0 секунд";
+  if (value < 10) return "короткое время";
   if (value > 60 * 60) return "подозрительно долго";
   return "нормальное";
 }
@@ -521,23 +529,25 @@ function buildMetricCards(rows: NormalizedEvent[], previousRows: NormalizedEvent
   const hasUserIds = rows.some((row) => row.userId);
   const hasSessionIds = rows.some((row) => row.sessionId);
   const hasCompletionEvents = rows.some(isContentComplete) || previousRows.some(isContentComplete);
+  const hasExportEvents = rows.some((row) => row.eventName === "studio_export_completed") || previousRows.some((row) => row.eventName === "studio_export_completed");
   const hasDurationSignals = rows.some((row) => row.durationSeconds != null) || hasSessionIds;
   const values = [
     ["visitors", "Посетители", uniqueCount(rows, "userId"), uniqueCount(previousRows, "userId"), undefined, "Сколько разных людей было за период.", "count distinct anonymous_user_id, fallback visitor_id", ["anonymous_user_id", "visitor_id"], hasUserIds ? "высокая" : "низкая", hasUserIds ? "Можно доверять: есть идентификатор пользователя." : "Низкая точность: нет anonymous_user_id/visitor_id."],
     ["sessions", "Сессии", uniqueCount(rows, "sessionId"), uniqueCount(previousRows, "sessionId"), undefined, "Сколько визитов было за период.", "count distinct session_id", ["session_id"], hasSessionIds ? "высокая" : "низкая", hasSessionIds ? "Можно доверять: есть session_id." : "Низкая точность: session_id отсутствует."],
     ["events", "События", rows.length, previousRows.length, undefined, "Все действия, которые пришли в аналитику.", "count(*)", ["analytics_events"], "высокая", "Можно доверять как техническому счётчику полученных строк."],
     ["averageSessionDuration", "Средняя длительность сессии", sessionStats.averageDuration, previousSessionStats.averageDuration, " сек.", "Среднее время визита.", "content_exit.duration_seconds или разница первого/последнего события в session_id", ["content_exit", "session_id"], hasDurationSignals ? "средняя" : "низкая", hasDurationSignals ? "Точность средняя: часть длительности может быть вычислена по событиям." : "Нет данных для длительности."],
-    ["completionRate", "Completion rate", hasCompletionEvents ? percent(completions, opens) : 0, hasCompletionEvents ? percent(previousCompletions, previousOpens) : 0, "%", hasCompletionEvents ? "Доля открытий контента, которые закончились завершением." : "Недостаточно данных: события завершения не приходят.", "content_complete / content_open с legacy fallback", ["content_open", "content_complete", "story_opened", "story_completed"], hasCompletionEvents ? "средняя" : "низкая", hasCompletionEvents ? "Можно использовать, но только для разделов, где отправляется completion." : "Нельзя интерпретировать: completion data отсутствует."],
+    ["completionRate", "Completion rate", hasCompletionEvents ? percent(completions, opens) : 0, hasCompletionEvents ? percent(previousCompletions, previousOpens) : 0, "%", hasCompletionEvents ? "Доля открытий контента, которые закончились завершением." : "Недостаточно данных: события завершения не приходят.", "content_complete / content_open с legacy fallback", ["content_open", "content_complete", "story_opened", "story_completed"], hasCompletionEvents ? "средняя" : "низкая", hasCompletionEvents ? "Можно использовать, но только для разделов, где отправляется completion." : "Нельзя интерпретировать: completion data отсутствует.", hasCompletionEvents ? undefined : "Недостаточно данных"],
     ["returningUsers", "Возвращающиеся пользователи", returningUsers(rows), returningUsers(previousRows), undefined, "Пользователи с событиями в разные дни или несколькими сессиями.", "user_id with >1 day or >1 session", ["anonymous_user_id", "session_id"], hasUserIds && hasSessionIds ? "средняя" : "низкая", hasUserIds ? "Можно оценивать как приблизительный сигнал возврата." : "Низкая точность без user id."],
     ["bounceRate", "Bounce rate", sessionStats.bounceRate, previousSessionStats.bounceRate, "%", "Доля коротких или одношаговых визитов.", "sessions with <=1 page/content event or duration < 10 sec", ["session_id", "page_view", "content_open", "content_exit"], hasSessionIds ? "средняя" : "низкая", hasSessionIds ? "Можно использовать как приблизительный сигнал." : "Нельзя точно считать без session_id."],
     ["createdProjects", "Созданные проекты", rows.filter((row) => row.eventName === "studio_project_created").length, previousRows.filter((row) => row.eventName === "studio_project_created").length, undefined, "Сколько проектов создали в студии.", "studio_project_created + project_created", ["studio_project_created", "project_created"], "высокая", "Можно доверять, если событие отправляется во всех studio flows."],
-    ["successfulExports", "Успешные экспорты", rows.filter((row) => row.eventName === "studio_export_completed").length, previousRows.filter((row) => row.eventName === "studio_export_completed").length, undefined, "Сколько экспортов успешно завершилось.", "studio_export_completed + video_exported", ["studio_export_completed", "video_exported"], "высокая", "Можно доверять как счётчику успешных экспортов."],
+    ["successfulExports", "Успешные экспорты", rows.filter((row) => row.eventName === "studio_export_completed").length, previousRows.filter((row) => row.eventName === "studio_export_completed").length, undefined, hasExportEvents ? "Сколько экспортов успешно завершилось." : "Недостаточно данных: export-событий нет.", "studio_export_completed + video_exported", ["studio_export_completed", "video_exported"], hasExportEvents ? "высокая" : "низкая", hasExportEvents ? "Можно доверять как счётчику успешных экспортов." : "Нельзя делать выводы об экспорте без export events.", hasExportEvents ? undefined : "Недостаточно данных"],
   ] as const;
 
-  return values.map(([key, label, value, previous, suffix, explanation, formula, events, confidence, reliability]) => ({
+  return values.map(([key, label, value, previous, suffix, explanation, formula, events, confidence, reliability, valueText]) => ({
     key,
     label,
     value,
+    valueText,
     suffix,
     changePercent: percentChange(value, previous),
     explanation,
@@ -565,6 +575,8 @@ function buildGrowth(rows: NormalizedEvent[], start: Date, days: number) {
 function buildContentRows(rows: NormalizedEvent[], previousRows: NormalizedEvent[]) {
   const previousOpens = new Map<string, number>();
   const completionSections = new Set(rows.filter(isContentComplete).map((row) => contentType(row)));
+  const hasProgressData = rows.some((row) => row.eventName === "content_progress");
+  const hasShareData = rows.some((row) => row.eventName === "share_clicked");
   for (const row of previousRows) {
     if (isContentOpen(row)) {
       const key = contentKey(row);
@@ -585,8 +597,10 @@ function buildContentRows(rows: NormalizedEvent[], previousRows: NormalizedEvent
       opens: 0,
       completions: 0,
       progress: 0,
+      hasProgressData,
       exits: 0,
       shares: 0,
+      hasShareData,
       errors: 0,
       completionRate: null,
       completionStatus: "Недостаточно данных",
@@ -617,10 +631,12 @@ function buildContentRows(rows: NormalizedEvent[], previousRows: NormalizedEvent
 function funnelStep(rows: NormalizedEvent[], label: string, predicate: (row: NormalizedEvent) => boolean, previousCount: number | null) {
   const matched = rows.filter(predicate);
   const userCount = uniqueCount(matched, "userId") || matched.length;
-  const conversionPercent = previousCount == null ? null : percent(userCount, previousCount);
+  const conversionPercent = previousCount == null || previousCount === 0 ? null : percent(userCount, previousCount);
   const conversionValue = conversionPercent ?? 0;
   const note = previousCount == null
     ? "Первый шаг воронки."
+    : previousCount === 0
+      ? "Невозможно посчитать: нет данных предыдущего шага. Если следующий шаг больше 0, воронка повреждена."
     : conversionValue >= 70
       ? "Переход выглядит здоровым."
       : conversionValue >= 35
@@ -691,15 +707,22 @@ function buildLanguages(rows: NormalizedEvent[], previousRows: NormalizedEvent[]
     byLang.set(lang, current);
   }
   return Array.from(byLang.entries())
-    .map(([lang, langRows]) => ({
-      lang,
-      events: langRows.length,
-      opens: langRows.filter(isContentOpen).length,
-      completions: langRows.filter(isContentComplete).length,
-      exits: langRows.filter((row) => row.eventName === "content_exit").length,
-      completionRate: percent(langRows.filter(isContentComplete).length, langRows.filter(isContentOpen).length),
-      growthPercent: percentChange(langRows.length, previousCounts.get(lang) || 0),
-    }))
+    .map(([lang, langRows]) => {
+      const opens = langRows.filter(isContentOpen).length;
+      const completions = langRows.filter(isContentComplete).length;
+      const hasCompletionData = completions > 0 || rows.some(isContentComplete);
+      const completionRate = hasCompletionData ? percent(completions, opens) : null;
+      return {
+        lang,
+        events: langRows.length,
+        opens,
+        completions,
+        exits: langRows.filter((row) => row.eventName === "content_exit").length,
+        completionRate,
+        completionStatus: completionRate == null ? "Недостаточно данных" : `${completionRate}%`,
+        growthPercent: percentChange(langRows.length, previousCounts.get(lang) || 0),
+      };
+    })
     .sort((a, b) => b.events - a.events || a.lang.localeCompare(b.lang));
 }
 
@@ -851,6 +874,7 @@ function buildOpportunities(rows: NormalizedEvent[], contentRows: AnalyticsConte
       description: `${!hasIdentityData ? "Не хватает user/session id. " : ""}${!hasCompletionData ? "Не хватает completion-событий. " : ""}Продуктовые выводы ниже имеют пониженную уверенность.`,
       tone: "warning",
       confidence: "высокая",
+      category: "technical",
     });
   }
   const bySection = new Map<string, { opens: number; completes: number }>();
@@ -867,25 +891,25 @@ function buildOpportunities(rows: NormalizedEvent[], contentRows: AnalyticsConte
     .sort((a, b) => b.opens - a.opens)[0];
   const weakContent = contentRows.filter((row) => row.opens >= 5 && row.completionRate != null && row.completionRate < 35).sort((a, b) => b.opens - a.opens)[0];
   const exitPage = pages.highExitPages.find((row) => row.views >= 3 && row.exitRate >= 60);
-  const bestLang = languages.filter((row) => row.opens >= 3).sort((a, b) => b.completionRate - a.completionRate || b.events - a.events)[0];
+  const bestLang = languages.filter((row) => row.opens >= 3 && row.completionRate != null).sort((a, b) => (b.completionRate ?? -1) - (a.completionRate ?? -1) || b.events - a.events)[0];
 
   if (strongSection) {
-    opportunities.push({ title: `Развивать раздел ${strongSection.section}`, description: `В этом разделе много открытий и completion ${strongSection.completionRate}%. Стоит добавить похожий контент или вывести раздел выше.`, tone: "growth", confidence: hasIdentityData ? "средняя" : "низкая" });
+    opportunities.push({ title: `Развивать раздел ${strongSection.section}`, description: `В этом разделе много открытий и completion ${strongSection.completionRate}%. Стоит добавить похожий контент или вывести раздел выше.`, tone: "growth", confidence: hasIdentityData ? "средняя" : "низкая", category: "product" });
   }
   if (exitPage) {
-    opportunities.push({ title: "Проверить страницу с высоким выходом", description: `${exitPage.page}: exit rate ${exitPage.exitRate}%. Проверь, понятно ли пользователю, куда идти дальше.`, tone: "warning", confidence: hasIdentityData ? "средняя" : "низкая" });
+    opportunities.push({ title: "Проверить страницу с высоким выходом", description: `${exitPage.page}: exit rate ${exitPage.exitRate}%. Проверь, понятно ли пользователю, куда идти дальше.`, tone: "warning", confidence: hasIdentityData ? "средняя" : "низкая", category: hasIdentityData ? "product" : "technical" });
   }
   if (weakContent) {
-    opportunities.push({ title: "Контент открывают, но не досматривают", description: `${weakContent.title}: ${weakContent.opens} открытий и completion ${weakContent.completionRate}%. Проверь длину, первый экран и момент, где пользователь теряет интерес.`, tone: "warning", confidence: hasCompletionData ? "средняя" : "низкая" });
+    opportunities.push({ title: "Контент открывают, но не досматривают", description: `${weakContent.title}: ${weakContent.opens} открытий и completion ${weakContent.completionRate}%. Проверь длину, первый экран и момент, где пользователь теряет интерес.`, tone: "warning", confidence: hasCompletionData ? "средняя" : "низкая", category: hasCompletionData ? "product" : "technical" });
   }
   if (studio.exportStarted > 0 && percent(studio.exportCompleted, studio.exportStarted) < 60) {
-    opportunities.push({ title: "Проверить UX экспорта или событие", description: `Экспорт начали ${studio.exportStarted} раз, успешно завершили ${studio.exportCompleted}. Нужно проверить ошибки, ожидание и отправку события завершения.`, tone: "warning", confidence: "средняя" });
+    opportunities.push({ title: "Проверить UX экспорта или событие", description: `Экспорт начали ${studio.exportStarted} раз, успешно завершили ${studio.exportCompleted}. Нужно проверить ошибки, ожидание и отправку события завершения.`, tone: "warning", confidence: "средняя", category: "product" });
   }
-  if (bestLang && bestLang.completionRate >= 50) {
-    opportunities.push({ title: `Хорошее удержание на языке ${bestLang.lang}`, description: `На этом языке completion ${bestLang.completionRate}%. Можно проверить, какой контент там работает, и повторить подход в других языках.`, tone: "good", confidence: hasCompletionData ? "средняя" : "низкая" });
+  if (bestLang && (bestLang.completionRate ?? 0) >= 50) {
+    opportunities.push({ title: `Хорошее удержание на языке ${bestLang.lang}`, description: `На этом языке completion ${bestLang.completionRate}%. Можно проверить, какой контент там работает, и повторить подход в других языках.`, tone: "good", confidence: hasCompletionData ? "средняя" : "низкая", category: "product" });
   }
   if (opportunities.length === 0) {
-    opportunities.push({ title: "Пока мало сильных сигналов", description: "Когда накопится больше открытий, завершений, выходов и экспортов, здесь появятся более точные рекомендации.", tone: "idea", confidence: "низкая" });
+    opportunities.push({ title: "Пока мало сильных сигналов", description: "Когда накопится больше открытий, завершений, выходов и экспортов, здесь появятся более точные рекомендации.", tone: "idea", confidence: "низкая", category: "technical" });
   }
   return opportunities;
 }
@@ -905,6 +929,14 @@ function buildDataQuality(rows: NormalizedEvent[], allRows: NormalizedEvent[], g
       description: `Во всём загруженном окне событие не встречалось. Где ожидается: ${EVENT_EXPECTATIONS[eventName] || "см. capybara_tales analytics events"}`,
       severity: "info" as const,
     }));
+  const optionalEventNotes = OPTIONAL_EVENTS.map((eventName) => ({
+    title: eventName,
+    description: presentEvents.has(eventName)
+      ? "Optional-событие приходило за период. Его можно использовать как дополнительный сигнал."
+      : "Optional-событие не приходило за период. Это не ошибка, если на экране нет соответствующего UI или это legacy event.",
+    severity: "info" as const,
+    count: rows.filter((row) => row.eventName === eventName).length,
+  }));
   const propertyChecks: Array<[string, (row: NormalizedEvent) => boolean]> = [
     ["page_view без current_page", (row) => row.eventName === "page_view" && !row.currentPage],
     ["content events без content_id/content_title", (row) => (isContentOpen(row) || row.eventName === "content_progress" || isContentComplete(row)) && !row.contentId && !row.contentTitle],
@@ -967,11 +999,14 @@ function buildDataQuality(rows: NormalizedEvent[], allRows: NormalizedEvent[], g
   if (!rows.some(isContentComplete)) unavailableMetrics.push({ title: "Нельзя считать completion rate", description: "За период не пришли события завершения контента.", severity: "warning" });
   if (!rows.some((row) => row.durationSeconds != null)) unavailableMetrics.push({ title: "Длительность сессий приблизительная", description: "Нет `duration_seconds`, поэтому используется разница между первым и последним событием.", severity: "info" });
 
-  return { summaryWarnings, missingEverEvents, missingExpectedEvents, propertyIssues, duplicateIssues, dailyDrops, unavailableMetrics };
+  return { summaryWarnings, missingEverEvents, missingExpectedEvents, optionalEventNotes, propertyIssues, duplicateIssues, dailyDrops, unavailableMetrics };
 }
 
 function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary">) {
-  const metric = (key: string) => payload.periods[payload.period].find((card) => card.key === key)?.value ?? 0;
+  const metric = (key: string) => {
+    const card = payload.periods[payload.period].find((item) => item.key === key);
+    return card?.valueText || `${card?.value ?? 0}${card?.suffix || ""}`;
+  };
   const lines = [
     `Период: ${payload.periodLabel} (${payload.periodStart.slice(0, 10)} - ${payload.periodEnd.slice(0, 10)})`,
     "",
@@ -979,8 +1014,8 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
     `- Посетители: ${metric("visitors")}`,
     `- Сессии: ${metric("sessions")}`,
     `- События: ${metric("events")}`,
-    `- Completion rate: ${metric("completionRate")}%`,
-    `- Bounce rate: ${metric("bounceRate")}%`,
+    `- Completion rate: ${metric("completionRate")}`,
+    `- Bounce rate: ${metric("bounceRate")}`,
     `- Созданные проекты: ${metric("createdProjects")}`,
     `- Успешные экспорты: ${metric("successfulExports")}`,
     "",
@@ -1017,142 +1052,6 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
   return lines.join("\n");
 }
 
-type DailySummaryRow = {
-  summary_date: string;
-  visitors: number | null;
-  sessions: number | null;
-  events: number | null;
-  page_views: number | null;
-  content_opens: number | null;
-  content_completes: number | null;
-  studio_projects: number | null;
-  studio_exports: number | null;
-  avg_session_duration_seconds: number | null;
-  event_counts: Record<string, number> | null;
-  top_content: Array<Record<string, unknown>> | null;
-};
-
-async function loadDailySummary(supabase: SupabaseClient, start: Date, end: Date): Promise<{ rows: DailySummaryRow[]; warning: AnalyticsQualityIssue | null }> {
-  const { data, error } = await supabase
-    .from("analytics_daily_summary")
-    .select("*")
-    .gte("summary_date", formatDay(start))
-    .lt("summary_date", formatDay(end))
-    .order("summary_date", { ascending: true });
-
-  if (error) {
-    return {
-      rows: [],
-      warning: {
-        title: "analytics_daily_summary недоступна",
-        description: `Для 30/90 дней нужны агрегаты daily summary. Supabase вернул: ${error.message}`,
-        severity: "critical",
-      },
-    };
-  }
-
-  if (!data || data.length === 0) {
-    return {
-      rows: [],
-      warning: {
-        title: "analytics_daily_summary пустая",
-        description: "Для 30/90 дней нет агрегатов. Метрики длинного периода нельзя считать точными.",
-        severity: "critical",
-      },
-    };
-  }
-
-  return { rows: data as DailySummaryRow[], warning: null };
-}
-
-async function loadSummaryAvailability(supabase: SupabaseClient, start: Date, end: Date): Promise<{ available: boolean; reason?: string }> {
-  const { data, error } = await supabase
-    .from("analytics_daily_summary")
-    .select("summary_date")
-    .gte("summary_date", formatDay(start))
-    .lt("summary_date", formatDay(end))
-    .limit(1);
-
-  if (error) {
-    return { available: false, reason: `analytics_daily_summary недоступна: ${error.message}` };
-  }
-  if (!data || data.length === 0) {
-    return { available: false, reason: "analytics_daily_summary пустая для длинных периодов." };
-  }
-  return { available: true };
-}
-
-function buildSummaryGrowth(rows: DailySummaryRow[]) {
-  return rows.map((row) => ({
-    date: row.summary_date,
-    visitors: row.visitors || 0,
-    sessions: row.sessions || 0,
-    events: row.events || 0,
-  }));
-}
-
-function summaryMetricCards(rows: DailySummaryRow[], previousRows: DailySummaryRow[]): AnalyticsMetricCard[] {
-  const sum = (items: DailySummaryRow[], key: keyof Pick<DailySummaryRow, "visitors" | "sessions" | "events" | "content_opens" | "content_completes" | "studio_projects" | "studio_exports">) => items.reduce((total, row) => total + (row[key] || 0), 0);
-  const avgDuration = (items: DailySummaryRow[]) => average(items.map((row) => Number(row.avg_session_duration_seconds)).filter((value) => Number.isFinite(value))) || 0;
-  const values = [
-    ["visitors", "Посетители", sum(rows, "visitors"), sum(previousRows, "visitors"), undefined, "Сколько разных людей было за период.", "sum visitors from analytics_daily_summary", ["analytics_daily_summary.visitors"], "средняя", "Длинный период считается по daily summary."],
-    ["sessions", "Сессии", sum(rows, "sessions"), sum(previousRows, "sessions"), undefined, "Сколько визитов было за период.", "sum sessions from analytics_daily_summary", ["analytics_daily_summary.sessions"], "средняя", "Длинный период считается по daily summary."],
-    ["events", "События", sum(rows, "events"), sum(previousRows, "events"), undefined, "Все события за период.", "sum events from analytics_daily_summary", ["analytics_daily_summary.events"], "средняя", "Длинный период считается по daily summary."],
-    ["averageSessionDuration", "Средняя длительность сессии", avgDuration(rows), avgDuration(previousRows), " сек.", "Среднее время визита.", "avg avg_session_duration_seconds", ["analytics_daily_summary.avg_session_duration_seconds"], avgDuration(rows) > 0 ? "средняя" : "низкая", avgDuration(rows) > 0 ? "Есть агрегированная длительность." : "В summary нет duration."],
-    ["completionRate", "Completion rate", percent(sum(rows, "content_completes"), sum(rows, "content_opens")), percent(sum(previousRows, "content_completes"), sum(previousRows, "content_opens")), "%", "Доля открытий контента, которые закончились завершением.", "content_completes / content_opens", ["analytics_daily_summary.content_opens", "analytics_daily_summary.content_completes"], sum(rows, "content_completes") > 0 ? "средняя" : "низкая", sum(rows, "content_completes") > 0 ? "Есть агрегированные completion события." : "Completion в summary отсутствует."],
-    ["returningUsers", "Возвращающиеся пользователи", 0, 0, undefined, "Для daily summary эта метрика недоступна.", "requires raw user/session events", ["anonymous_user_id", "session_id"], "низкая", "Нельзя точно считать по daily summary."],
-    ["bounceRate", "Bounce rate", 0, 0, "%", "Для daily summary эта метрика недоступна.", "requires raw session event ordering", ["session_id", "page_view", "content_exit"], "низкая", "Нельзя точно считать по daily summary."],
-    ["createdProjects", "Созданные проекты", sum(rows, "studio_projects"), sum(previousRows, "studio_projects"), undefined, "Сколько проектов создали в студии.", "sum studio_projects", ["analytics_daily_summary.studio_projects"], "средняя", "Длинный период считается по daily summary."],
-    ["successfulExports", "Успешные экспорты", sum(rows, "studio_exports"), sum(previousRows, "studio_exports"), undefined, "Сколько экспортов успешно завершилось.", "sum studio_exports", ["analytics_daily_summary.studio_exports"], "средняя", "Длинный период считается по daily summary."],
-  ] as const;
-
-  return values.map(([key, label, value, previous, suffix, explanation, formula, events, confidence, reliability]) => ({
-    key,
-    label,
-    value,
-    suffix,
-    changePercent: percentChange(value, previous),
-    explanation,
-    formula,
-    events: [...events],
-    confidence,
-    reliability,
-  }));
-}
-
-function buildSummaryContentRows(rows: DailySummaryRow[]): AnalyticsContentRow[] {
-  const content = new Map<string, AnalyticsContentRow>();
-  for (const row of rows) {
-    for (const item of row.top_content || []) {
-      const key = stringValue(item.content_id, item.content_slug, item.content_title) || "unknown";
-      const current = content.get(key) || {
-        key,
-        title: stringValue(item.content_title, item.content_slug, item.content_id) || "Без названия",
-        type: "summary",
-        opens: 0,
-        completions: 0,
-        progress: 0,
-        exits: 0,
-        shares: 0,
-        errors: 0,
-        completionRate: null,
-        completionStatus: "Недостаточно данных",
-        growthPercent: null,
-      };
-      current.opens += numberValue(item.opens) || 0;
-      current.completions += numberValue(item.completes, item.completions) || 0;
-      content.set(key, current);
-    }
-  }
-  return Array.from(content.values())
-    .map((row) => ({
-      ...row,
-      completionRate: row.completions > 0 ? percent(row.completions, row.opens) : null,
-      completionStatus: row.completions > 0 ? `${percent(row.completions, row.opens)}%` : "Недостаточно данных",
-    }))
-    .sort((a, b) => b.opens - a.opens || (b.completionRate ?? -1) - (a.completionRate ?? -1));
-}
-
 async function loadRows(supabase: SupabaseClient, start: Date, end: Date): Promise<NormalizedEvent[]> {
   const { data, error } = await supabase
     .from("analytics_events")
@@ -1170,50 +1069,32 @@ async function loadRows(supabase: SupabaseClient, start: Date, end: Date): Promi
 }
 
 export function normalizeAnalyticsPeriod(value: unknown): AnalyticsPeriodKey {
-  return value === "14d" || value === "30d" || value === "90d" ? value : "7d";
+  return value === "14d" ? value : "7d";
 }
 
 export async function buildAdminAnalytics(supabase: SupabaseClient, period: AnalyticsPeriodKey = "7d", now = new Date()): Promise<AnalyticsAdminPayload> {
   const todayStart = startOfUtcDay(now);
   const tomorrowStart = addDays(todayStart, 1);
-  const summaryAvailability = await loadSummaryAvailability(supabase, addDays(tomorrowStart, -90), tomorrowStart);
-  const availablePeriods: AnalyticsPeriodKey[] = summaryAvailability.available ? ["7d", "14d", "30d", "90d"] : ["7d", "14d"];
+  const availablePeriods: AnalyticsPeriodKey[] = ["7d", "14d"];
   const effectivePeriod: AnalyticsPeriodKey = availablePeriods.includes(period) ? period : "14d";
   const days = PERIOD_DAYS[effectivePeriod];
   const periodStart = addDays(tomorrowStart, -days);
   const previousStart = addDays(periodStart, -days);
-  const rawStart = effectivePeriod === "7d" || effectivePeriod === "14d" ? previousStart : addDays(tomorrowStart, -15);
-  const rows = await loadRows(supabase, rawStart, tomorrowStart);
-  const summary = effectivePeriod === "30d" || effectivePeriod === "90d" ? await loadDailySummary(supabase, previousStart, tomorrowStart) : { rows: [] as DailySummaryRow[], warning: null };
-  const summaryCurrentRows = summary.rows.filter((row) => row.summary_date >= formatDay(periodStart) && row.summary_date < formatDay(tomorrowStart));
-  const summaryPreviousRows = summary.rows.filter((row) => row.summary_date >= formatDay(previousStart) && row.summary_date < formatDay(periodStart));
+  const rows = await loadRows(supabase, previousStart, tomorrowStart);
   const currentRows = rowsInRange(rows, periodStart, tomorrowStart);
   const previousRows = rowsInRange(rows, previousStart, periodStart);
-  let contentRows = buildContentRows(currentRows, previousRows);
+  const contentRows = buildContentRows(currentRows, previousRows);
   const languages = buildLanguages(currentRows, previousRows);
   const pages = buildPages(currentRows);
   const studio = buildStudio(currentRows);
-  const usesSummary = effectivePeriod === "30d" || effectivePeriod === "90d";
   const summaryWarnings = [
-    ...(!summaryAvailability.available ? [{
+    {
       title: "30/90 дней скрыты",
-      description: summaryAvailability.reason || "analytics_daily_summary не заполнена, поэтому доступны только raw periods 7/14 дней.",
+      description: "analytics_events очищается примерно через 15 дней. До реально заполняемой analytics_daily_summary доступны только 7 и 14 дней.",
       severity: "warning" as const,
-    }] : []),
-    ...(summary.warning ? [summary.warning] : []),
-    ...(usesSummary && summary.rows.length > 0 ? [{
-      title: "Длинный период считается по daily summary",
-      description: "Raw events хранятся около 15 дней, поэтому 30/90 дней показывают overview/growth по агрегатам. Подробные Content/Pages/Funnels основаны на последних raw events и менее полные.",
-      severity: "info" as const,
-    }] : []),
+    },
   ];
-  const growth = usesSummary && summary.rows.length > 0 ? buildSummaryGrowth(summaryCurrentRows) : buildGrowth(currentRows, periodStart, days);
-  if (usesSummary && summaryCurrentRows.length > 0) {
-    const summaryContentRows = buildSummaryContentRows(summaryCurrentRows);
-    if (summaryContentRows.length > 0) {
-      contentRows = summaryContentRows;
-    }
-  }
+  const growth = buildGrowth(currentRows, periodStart, days);
 
   const basePayload = {
     generatedAt: now.toISOString(),
@@ -1225,8 +1106,6 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
     periods: {
       "7d": buildMetricCards(rowsInRange(rows, addDays(tomorrowStart, -7), tomorrowStart), rowsInRange(rows, addDays(tomorrowStart, -14), addDays(tomorrowStart, -7))),
       "14d": buildMetricCards(rowsInRange(rows, addDays(tomorrowStart, -14), tomorrowStart), rowsInRange(rows, addDays(tomorrowStart, -28), addDays(tomorrowStart, -14))),
-      "30d": summaryAvailability.available && summary.rows.length > 0 ? summaryMetricCards(summaryCurrentRows, summaryPreviousRows) : buildMetricCards([], []),
-      "90d": summaryAvailability.available && summary.rows.length > 0 ? summaryMetricCards(summaryCurrentRows, summaryPreviousRows) : buildMetricCards([], []),
     },
     growth,
     content: {
@@ -1244,7 +1123,7 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
     opportunities: buildOpportunities(currentRows, contentRows, pages, languages, studio),
     dataQuality: buildDataQuality(currentRows, rows, growth, formatDay(todayStart), summaryWarnings, studio),
     availablePeriods,
-    unavailablePeriodReasons: summaryAvailability.available ? {} : { "30d": summaryAvailability.reason, "90d": summaryAvailability.reason },
+    unavailablePeriodReasons: { "30d": "analytics_daily_summary пока не используется как источник правды.", "90d": "analytics_daily_summary пока не используется как источник правды." },
   };
 
   return {

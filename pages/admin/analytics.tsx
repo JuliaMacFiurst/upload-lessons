@@ -32,8 +32,6 @@ const tabLabels: Array<{ key: AnalyticsTab; label: string }> = [
 const periodLabels: Record<AnalyticsPeriodKey, string> = {
   "7d": "7 дней",
   "14d": "14 дней",
-  "30d": "30 дней",
-  "90d": "90 дней",
 };
 
 const metricColors = {
@@ -101,7 +99,7 @@ function buildCsv(payload: AnalyticsAdminPayload, tab: AnalyticsTab) {
     );
   }
   if (tab === "languages") {
-    return tableToCsv(["lang", "events", "opens", "completions", "exits", "completion_rate"], payload.languages.map((row) => [row.lang, row.events, row.opens, row.completions, row.exits, row.completionRate]));
+    return tableToCsv(["lang", "events", "opens", "completions", "exits", "completion_rate"], payload.languages.map((row) => [row.lang, row.events, row.opens, row.completions, row.exits, row.completionStatus]));
   }
   if (tab === "pages") {
     return tableToCsv(["title", "page", "views", "visitors", "exits", "exit_rate", "avg_duration", "duration_status", "avg_events"], payload.pages.topPages.map((row) => [row.title, row.page, row.views, row.visitors, row.exits, row.exitRate, row.averageDurationSeconds, row.durationStatus, row.averageEvents]));
@@ -163,7 +161,7 @@ function MetricCard({ card }: { card: AnalyticsMetricCard }) {
   return (
     <article className="analytics-metric">
       <div className="analytics-metric__label">{card.label}</div>
-      <div className="analytics-metric__value">{numberText(card.value, card.suffix)}</div>
+      <div className="analytics-metric__value">{card.valueText || numberText(card.value, card.suffix)}</div>
       <div className={`analytics-metric__change ${positive ? "analytics-metric__change--up" : "analytics-metric__change--down"}`}>{formatChange(card.changePercent)}</div>
       <p>{card.explanation}</p>
       <p><strong>Как считается:</strong> {card.formula}</p>
@@ -239,6 +237,8 @@ function OverviewTab({ payload }: { payload: AnalyticsAdminPayload }) {
 function ContentTable({ rows }: { rows: AnalyticsContentRow[] }) {
   const [sortKey, setSortKey] = useState<SortKey>("opens");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
+  const showProgress = rows.some((row) => row.hasProgressData);
+  const showShare = rows.some((row) => row.hasShareData);
   const sorted = useMemo(() => [...rows].sort((a, b) => {
     const left = a[sortKey];
     const right = b[sortKey];
@@ -266,9 +266,9 @@ function ContentTable({ rows }: { rows: AnalyticsContentRow[] }) {
             {header("type", "Раздел")}
             {header("opens", "Открытия")}
             {header("completions", "Завершения")}
-            {header("progress", "Progress")}
+            {showProgress ? header("progress", "Progress") : null}
             {header("exits", "Exits")}
-            {header("shares", "Share")}
+            {showShare ? header("shares", "Share") : null}
             {header("errors", "Ошибки")}
             {header("completionRate", "Completion")}
           </tr>
@@ -280,9 +280,9 @@ function ContentTable({ rows }: { rows: AnalyticsContentRow[] }) {
               <td>{row.type}</td>
               <td>{row.opens}</td>
               <td>{row.completions}</td>
-              <td>{row.progress}</td>
+              {showProgress ? <td>{row.progress}</td> : null}
               <td>{row.exits}</td>
-              <td>{row.shares}</td>
+              {showShare ? <td>{row.shares}</td> : null}
               <td>{row.errors}</td>
               <td>{row.completionStatus}</td>
             </tr>
@@ -387,7 +387,7 @@ function LanguagesTab({ payload }: { payload: AnalyticsAdminPayload }) {
           { label: "Открытия", render: (row) => row.opens },
           { label: "Завершения", render: (row) => row.completions },
           { label: "Уходы", render: (row) => row.exits },
-          { label: "Completion", render: (row) => `${row.completionRate}%` },
+          { label: "Completion", render: (row) => row.completionStatus },
           { label: "Рост", render: (row) => formatChange(row.growthPercent) },
         ]}
       />
@@ -500,19 +500,28 @@ function StudioTab({ payload }: { payload: AnalyticsAdminPayload }) {
 }
 
 function OpportunitiesTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  const technical = payload.opportunities.filter((item) => item.category === "technical");
+  const product = payload.opportunities.filter((item) => item.category === "product");
+  const renderItems = (items: typeof payload.opportunities) => (
+    <div className="analytics-opportunities">
+      {items.map((item) => (
+        <article key={item.title} className={`analytics-opportunity analytics-opportunity--${item.tone}`}>
+          <h3>{item.title}</h3>
+          <strong>Уверенность: {item.confidence}</strong>
+          <p>{item.description}</p>
+        </article>
+      ))}
+    </div>
+  );
+
   return (
     <section className="analytics-panel">
       <h2>Что делать дальше</h2>
       <p className="analytics-help">Это rule-based блок без LLM. Он смотрит на открытия, completion, exits, export funnel и языки.</p>
-      <div className="analytics-opportunities">
-        {payload.opportunities.map((item) => (
-          <article key={item.title} className={`analytics-opportunity analytics-opportunity--${item.tone}`}>
-            <h3>{item.title}</h3>
-            <strong>Уверенность: {item.confidence}</strong>
-            <p>{item.description}</p>
-          </article>
-        ))}
-      </div>
+      <h3>Технические проблемы</h3>
+      {technical.length === 0 ? <EmptyState text="Явных технических проблем в данных не найдено." /> : renderItems(technical)}
+      <h3>Продуктовые наблюдения</h3>
+      {product.length === 0 ? <EmptyState text="Нет достаточно достоверных продуктовых выводов." /> : renderItems(product)}
     </section>
   );
 }
@@ -542,6 +551,7 @@ function DataQualityTab({ payload }: { payload: AnalyticsAdminPayload }) {
       <QualityList title="Summary / длинные периоды" rows={payload.dataQuality.summaryWarnings} empty="Для выбранного периода нет предупреждений по summary." />
       <QualityList title="События не встречались вообще" rows={payload.dataQuality.missingEverEvents} empty="Все ожидаемые события встречались в загруженном окне." />
       <QualityList title="События не пришли за период" rows={missingRows} empty="Все ожидаемые события встретились за период." />
+      <QualityList title="Необязательные события" rows={payload.dataQuality.optionalEventNotes} empty="Нет optional-событий для проверки." />
       <QualityList title="Проблемы с properties" rows={payload.dataQuality.propertyIssues} empty="Критичные поля выглядят заполненными." />
       <QualityList title="Подозрительные дубликаты" rows={payload.dataQuality.duplicateIssues} empty="Быстрых повторов не найдено." />
       <QualityList title="Провалы по дням" rows={payload.dataQuality.dailyDrops} empty="Резких дневных провалов не видно." />
