@@ -5,6 +5,7 @@ import {
   loadRecipe,
   saveRecipeMediaUrl,
 } from "../../../../../lib/server/recipes-admin";
+import { removeEdgeWhiteBackground } from "../../../../../lib/server/media/removeWhiteBackground";
 import { hasR2Config, uploadPublicR2Object } from "../../../../../lib/server/r2-storage";
 
 export const config = {
@@ -44,66 +45,21 @@ function decodeImageBase64(value: string): Buffer {
   return Buffer.from(payload, "base64");
 }
 
-async function removeWhiteBackground(input: Buffer): Promise<Buffer> {
-  const base = sharp(input, { limitInputPixels: 80_000_000 })
+async function imageToWebp(input: Buffer, removeWhite: boolean, whiteRemovalIntensity?: number): Promise<Buffer> {
+  const image = sharp(input, { limitInputPixels: 80_000_000 })
     .rotate()
     .resize({
       width: 2600,
       height: 2600,
       fit: "inside",
       withoutEnlargement: true,
-    })
-    .ensureAlpha();
+    });
 
-  const { data, info } = await base.raw().toBuffer({ resolveWithObject: true });
-  const transparentAt = 248;
-  const featherAt = 228;
-  const spreadLimit = 28;
-
-  for (let index = 0; index < data.length; index += 4) {
-    const red = data[index] ?? 0;
-    const green = data[index + 1] ?? 0;
-    const blue = data[index + 2] ?? 0;
-    const alpha = data[index + 3] ?? 255;
-    const min = Math.min(red, green, blue);
-    const max = Math.max(red, green, blue);
-    const spread = max - min;
-
-    if (min >= transparentAt && spread <= spreadLimit) {
-      data[index + 3] = 0;
-      continue;
-    }
-
-    if (min >= featherAt && spread <= spreadLimit) {
-      const opacity = Math.max(0, Math.min(1, (transparentAt - min) / (transparentAt - featherAt)));
-      data[index + 3] = Math.round(alpha * opacity);
-    }
-  }
-
-  return sharp(data, {
-    raw: {
-      width: info.width,
-      height: info.height,
-      channels: 4,
-    },
-  })
-    .webp({ quality: 92, alphaQuality: 95 })
-    .toBuffer();
-}
-
-async function imageToWebp(input: Buffer, removeWhite: boolean): Promise<Buffer> {
   if (removeWhite) {
-    return removeWhiteBackground(input);
+    return removeEdgeWhiteBackground(image.ensureAlpha(), whiteRemovalIntensity);
   }
 
-  return sharp(input, { limitInputPixels: 80_000_000 })
-    .rotate()
-    .resize({
-      width: 2600,
-      height: 2600,
-      fit: "inside",
-      withoutEnlargement: true,
-    })
+  return image
     .webp({ quality: 92, alphaQuality: 95 })
     .toBuffer();
 }
@@ -170,7 +126,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const fallbackSetName = normalizeStorageSegment(body.fileName?.replace(/\.[^/.]+$/, "") || slug);
     const setKey = normalizeStorageSegment(body.setName || fallbackSetName) || slug;
     const input = decodeImageBase64(body.imageBase64);
-    const webp = await imageToWebp(input, body.removeWhite === true);
+    const webp = await imageToWebp(input, kind === "dish" || body.removeWhite === true);
 
     let path: string;
     let updatedRecipe = recipe;

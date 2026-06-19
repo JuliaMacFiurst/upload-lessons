@@ -1023,6 +1023,7 @@ export default function RecipeEditorPage() {
   const [cropLassoDrawing, setCropLassoDrawing] = useState(false);
   const [assetCropIndex, setAssetCropIndex] = useState(1);
   const [stickerCropIndex, setStickerCropIndex] = useState(1);
+  const [cropWhiteRemovalIntensity, setCropWhiteRemovalIntensity] = useState(65);
   const [cropAssetName, setCropAssetName] = useState("");
   const [cropAssetTag, setCropAssetTag] = useState("asset");
   const [cropSearchTags, setCropSearchTags] = useState("");
@@ -2284,7 +2285,7 @@ export default function RecipeEditorPage() {
           imageBase64,
           fileName: file.name,
           setName: kind === "recipe_asset_sheet" ? assetSetName : kind === "raccoon_sticker_sheet" ? stickerSetName : undefined,
-          removeWhite: false,
+          removeWhite: kind === "dish",
         }),
       });
 
@@ -2391,6 +2392,8 @@ export default function RecipeEditorPage() {
           searchTags: cropSearchTags,
           crop,
           mask: cropSelectionMode === "lasso" ? { points: cropLassoPoints } : undefined,
+          removeWhiteBackground: cropWhiteRemovalIntensity > 0,
+          whiteRemovalIntensity: cropWhiteRemovalIntensity,
         }),
       });
 
@@ -2852,6 +2855,22 @@ export default function RecipeEditorPage() {
                     Очистить лассо
                   </button>
                 ) : null}
+                <label className="books-field">
+                  <span className="books-field__label">Интенсивность удаления белого фона</span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={100}
+                    step={5}
+                    value={cropWhiteRemovalIntensity}
+                    onChange={(event) => setCropWhiteRemovalIntensity(Number(event.target.value))}
+                  />
+                  <span className="books-field__help">
+                    {cropWhiteRemovalIntensity === 0
+                      ? "0%: фон не удаляется."
+                      : `${cropWhiteRemovalIntensity}%: при сохранении crop удаляется белый, связанный с краями; белые детали внутри сохраняются.`}
+                  </span>
+                </label>
                 <label className="books-field">
                   <span className="books-field__label">Набор</span>
                   <input
