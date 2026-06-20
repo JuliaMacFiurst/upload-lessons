@@ -32,6 +32,11 @@ type NormalizedEvent = {
   createdMs: number;
 };
 
+type LoadedAnalyticsRows = {
+  rows: NormalizedEvent[];
+  source: "analytics_events_normalized" | "analytics_events";
+};
+
 export type AnalyticsPeriodKey = "7d" | "14d";
 
 export type AnalyticsMetricCard = {
@@ -148,6 +153,9 @@ export type AnalyticsAdminPayload = {
     recordingStarted: number;
     recordingCompleted: number;
     recordingFailed: number;
+    realOpened: number;
+    approximateOpened: number;
+    openedIsApproximate: boolean;
     successfulExports: number;
     funnelBlockedReason: string | null;
     exportMethods: Array<{ method: string; started: number; completed: number; failed: number }>;
@@ -222,31 +230,9 @@ const OPTIONAL_EVENTS = [
 
 const LEGACY_EVENT_MAP: Record<string, string> = {
   page_viewed: "page_view",
-  story_opened: "content_open",
-  story_completed: "content_complete",
-  map_opened: "content_open",
-  video_exported: "studio_export_completed",
+  recipe_opened: "content_open",
   project_created: "studio_project_created",
-  story_downloaded: "share_clicked",
-  short_opened: "content_open",
-  recipe_opened: "recipe_opened",
 };
-
-const SPECIFIC_CONTENT_OPEN_EVENTS = new Set([
-  "cat_question_opened",
-  "raccoon_map_opened",
-  "country_opened",
-  "recipe_opened",
-  "dog_lesson_opened",
-  "parrot_music_opened",
-  "bedtime_story_opened",
-]);
-
-const SPECIFIC_CONTENT_COMPLETE_EVENTS = new Set([
-  "cat_question_completed",
-  "dog_lesson_completed",
-  "bedtime_story_completed",
-]);
 
 function startOfUtcDay(date: Date) {
   return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
@@ -335,35 +321,35 @@ function normalizeLanguage(value: string | null) {
 function normalizeEvent(row: AnalyticsRawRow): NormalizedEvent {
   const metadata = asObject(row.metadata);
   const properties = asObject(row.properties);
-  const originalEventName = stringValue(row.event_name) || "unknown";
-  const eventName = canonicalEventName(originalEventName);
+  const originalEventName = stringValue(row.raw_event_name, row.event_name) || "unknown";
+  const eventName = stringValue(row.canonical_event_name) || canonicalEventName(originalEventName);
   const createdAt = stringValue(row.created_at) || new Date(0).toISOString();
-  const section = inferSection(row, properties, metadata, originalEventName);
-  const currentPage = stringValue(row.current_page, properties.current_page, properties.page, metadata.current_page, metadata.page, row.page);
+  const section = normalizeSection(stringValue(row.canonical_section)) || inferSection(row, properties, metadata, originalEventName);
+  const currentPage = stringValue(row.canonical_current_page, row.current_page, properties.current_page, properties.page, metadata.current_page, metadata.page, row.page);
 
   return {
     id: stringValue(row.id) || `${originalEventName}-${createdAt}-${Math.random()}`,
     eventName,
     originalEventName,
     section,
-    contentId: stringValue(row.content_id, properties.content_id, metadata.content_id, row.entity_id),
-    contentSlug: stringValue(row.content_slug, properties.content_slug, metadata.content_slug, properties.slug, metadata.slug),
-    contentTitle: stringValue(row.content_title, properties.content_title, properties.readable_title, properties.page_title, metadata.content_title, metadata.readable_title, metadata.page_title, row.entity_title, properties.title, metadata.title),
+    contentId: stringValue(row.canonical_content_id, row.content_id, properties.content_id, metadata.content_id, row.entity_id),
+    contentSlug: stringValue(row.canonical_content_slug, row.content_slug, properties.content_slug, metadata.content_slug, properties.slug, metadata.slug),
+    contentTitle: stringValue(row.canonical_content_title, row.content_title, properties.content_title, properties.readable_title, properties.page_title, metadata.content_title, metadata.readable_title, metadata.page_title, row.entity_title, properties.title, metadata.title),
     pageTitle: stringValue(row.page_title, properties.page_title, properties.readable_title, metadata.page_title, metadata.readable_title, row.entity_title),
-    language: normalizeLanguage(stringValue(row.language, properties.language, metadata.language, row.lang, properties.lang, metadata.lang)),
-    sessionId: stringValue(row.session_id, properties.session_id, metadata.session_id),
-    userId: stringValue(row.anonymous_user_id, properties.anonymous_user_id, metadata.anonymous_user_id, row.visitor_id, properties.visitor_id, metadata.visitor_id),
+    language: normalizeLanguage(stringValue(row.canonical_language, row.language, properties.language, metadata.language, row.lang, properties.lang, metadata.lang)),
+    sessionId: stringValue(row.canonical_session_id, row.session_id, properties.session_id, metadata.session_id),
+    userId: stringValue(row.canonical_anonymous_user_id, row.anonymous_user_id, properties.anonymous_user_id, metadata.anonymous_user_id, row.visitor_id, properties.visitor_id, metadata.visitor_id),
     currentPage,
     sourcePage: stringValue(row.source_page, properties.source_page, metadata.source_page),
     referrer: stringValue(row.referrer, properties.referrer, metadata.referrer),
-    durationSeconds: numberValue(row.duration_seconds, properties.duration_seconds, metadata.duration_seconds, metadata.durationSeconds, properties.duration),
-    completionPercent: numberValue(row.completion_percent, properties.completion_percent, metadata.completion_percent, metadata.completionPercent),
+    durationSeconds: numberValue(row.canonical_duration_seconds, row.duration_seconds, properties.duration_seconds, metadata.duration_seconds, metadata.durationSeconds, properties.duration),
+    completionPercent: numberValue(row.canonical_completion_percent, row.completion_percent, properties.completion_percent, metadata.completion_percent, metadata.completionPercent),
     stepIndex: numberValue(row.step_index, properties.step_index, metadata.step_index, metadata.stepIndex),
     totalSteps: numberValue(row.total_steps, properties.total_steps, metadata.total_steps, metadata.totalSteps),
     errorMessage: stringValue(row.error_message, properties.error_message, metadata.error_message, metadata.errorMessage),
-    exportFormat: stringValue(row.export_format, properties.export_format, metadata.export_format, metadata.exportFormat, metadata.format),
-    exportMethod: stringValue(properties.export_method, metadata.export_method, metadata.exportMethod),
-    deviceType: stringValue(row.device_type, properties.device_type, metadata.device_type, metadata.deviceType),
+    exportFormat: stringValue(row.canonical_export_format, row.export_format, properties.export_format, metadata.export_format, metadata.exportFormat, metadata.format),
+    exportMethod: stringValue(row.canonical_export_method, properties.export_method, metadata.export_method, metadata.exportMethod),
+    deviceType: stringValue(row.canonical_device_type, row.device_type, properties.device_type, metadata.device_type, metadata.deviceType),
     viewportWidth: numberValue(row.viewport_width, properties.viewport_width, metadata.viewport_width, metadata.viewportWidth),
     properties,
     metadata,
@@ -409,11 +395,11 @@ function uniqueCount(rows: NormalizedEvent[], key: "userId" | "sessionId") {
 }
 
 function isContentOpen(row: NormalizedEvent) {
-  return row.eventName === "content_open" || SPECIFIC_CONTENT_OPEN_EVENTS.has(row.eventName);
+  return row.eventName === "content_open";
 }
 
 function isContentComplete(row: NormalizedEvent) {
-  return row.eventName === "content_complete" || SPECIFIC_CONTENT_COMPLETE_EVENTS.has(row.eventName);
+  return row.eventName === "content_complete";
 }
 
 function isStudioExportCompleted(row: NormalizedEvent) {
@@ -426,6 +412,15 @@ function isStudioRecordingCompleted(row: NormalizedEvent) {
 
 function isSuccessfulStudioOutput(row: NormalizedEvent) {
   return isStudioExportCompleted(row) || isStudioRecordingCompleted(row);
+}
+
+function isStudioPageView(row: NormalizedEvent) {
+  const page = normalizePage(row.currentPage).toLowerCase();
+  return row.eventName === "page_view" && page.includes("/studio");
+}
+
+function isStudioOpenSignal(row: NormalizedEvent) {
+  return row.eventName === "studio_open" || isStudioPageView(row);
 }
 
 function isPageOrContentEvent(row: NormalizedEvent) {
@@ -442,7 +437,7 @@ function contentTitle(row: NormalizedEvent) {
 
 function contentType(row: NormalizedEvent) {
   if (row.section) return row.section;
-  if (row.eventName === "recipe_opened") return "recipes";
+  if (row.originalEventName === "recipe_opened") return "recipes";
   return "content";
 }
 
@@ -515,11 +510,12 @@ function buildMetricCards(rows: NormalizedEvent[], previousRows: NormalizedEvent
   const hasSessionIds = rows.some((row) => row.sessionId);
   const hasCompletionEvents = rows.some(isContentComplete) || previousRows.some(isContentComplete);
   const hasStudioOpen = rows.some((row) => row.eventName === "studio_open") || previousRows.some((row) => row.eventName === "studio_open");
+  const hasStudioOpenSignal = rows.some(isStudioOpenSignal) || previousRows.some(isStudioOpenSignal);
   const hasExportEvents = rows.some(isSuccessfulStudioOutput) || previousRows.some(isSuccessfulStudioOutput);
   const hasDurationSignals = rows.some((row) => row.durationSeconds != null) || hasSessionIds;
   const successfulExports = rows.filter(isSuccessfulStudioOutput).length;
   const previousSuccessfulExports = previousRows.filter(isSuccessfulStudioOutput).length;
-  const exportConfidence: AnalyticsMetricCard["confidence"] = hasExportEvents && hasStudioOpen && hasCompletionEvents ? "высокая" : hasExportEvents ? "средняя" : "низкая";
+  const exportConfidence: AnalyticsMetricCard["confidence"] = hasExportEvents && hasStudioOpen && hasCompletionEvents ? "высокая" : hasExportEvents && hasStudioOpenSignal ? "средняя" : "низкая";
   const values = [
     ["visitors", "Посетители", uniqueCount(rows, "userId"), uniqueCount(previousRows, "userId"), undefined, "Сколько разных людей было за период.", "count distinct anonymous_user_id, fallback visitor_id", ["anonymous_user_id", "visitor_id"], hasUserIds ? "высокая" : "низкая", hasUserIds ? "Можно доверять: есть идентификатор пользователя." : "Низкая точность: нет anonymous_user_id/visitor_id."],
     ["sessions", "Сессии", uniqueCount(rows, "sessionId"), uniqueCount(previousRows, "sessionId"), undefined, "Сколько визитов было за период.", "count distinct session_id", ["session_id"], hasSessionIds ? "высокая" : "низкая", hasSessionIds ? "Можно доверять: есть session_id." : "Низкая точность: session_id отсутствует."],
@@ -529,7 +525,7 @@ function buildMetricCards(rows: NormalizedEvent[], previousRows: NormalizedEvent
     ["returningUsers", "Возвращающиеся пользователи", returningUsers(rows), returningUsers(previousRows), undefined, "Пользователи с событиями в разные дни или несколькими сессиями.", "user_id with >1 day or >1 session", ["anonymous_user_id", "session_id"], hasUserIds && hasSessionIds ? "средняя" : "низкая", hasUserIds ? "Можно оценивать как приблизительный сигнал возврата." : "Низкая точность без user id."],
     ["bounceRate", "Bounce rate", sessionStats.bounceRate, previousSessionStats.bounceRate, "%", "Доля коротких или одношаговых визитов.", "sessions with <=1 page/content event or duration < 10 sec", ["session_id", "page_view", "content_open", "content_exit"], hasSessionIds ? "средняя" : "низкая", hasSessionIds ? "Можно использовать как приблизительный сигнал." : "Нельзя точно считать без session_id."],
     ["createdProjects", "Созданные проекты", rows.filter((row) => row.eventName === "studio_project_created").length, previousRows.filter((row) => row.eventName === "studio_project_created").length, undefined, "Сколько проектов создали в студии.", "studio_project_created + project_created", ["studio_project_created", "project_created"], "высокая", "Можно доверять, если событие отправляется во всех studio flows."],
-    ["successfulExports", "Успешные экспорты", successfulExports, previousSuccessfulExports, undefined, hasExportEvents ? "Сколько экспортов или записей успешно завершилось." : "Недостаточно данных: export/recording событий нет.", "studio_export_completed + studio_recording_completed + legacy video_exported", ["studio_export_completed", "studio_recording_completed", "video_exported"], exportConfidence, hasExportEvents ? (exportConfidence === "высокая" ? "Можно доверять: есть studio_open, completion и успешные studio output events." : "Счётчик есть, но доверие не высокое без полного studio_open/completion контекста.") : "Нельзя делать выводы об экспорте без export/recording events.", hasExportEvents ? undefined : "N/A"],
+    ["successfulExports", "Успешные экспорты", successfulExports, previousSuccessfulExports, undefined, hasExportEvents ? "Сколько экспортов или записей успешно завершилось." : "Недостаточно данных: export/recording событий нет.", "studio_export_completed + studio_recording_completed", ["studio_export_completed", "studio_recording_completed"], exportConfidence, hasExportEvents ? (exportConfidence === "высокая" ? "Можно доверять: есть настоящий studio_open, completion и successful studio output events." : "Счётчик есть, но доверие не высокое без настоящего studio_open/completion контекста.") : "Нельзя делать выводы об экспорте без export/recording events.", hasExportEvents ? undefined : "N/A"],
   ] as const;
 
   return values.map(([key, label, value, previous, suffix, explanation, formula, events, confidence, reliability, valueText]) => ({
@@ -653,15 +649,16 @@ function buildFunnel(rows: NormalizedEvent[], key: string, title: string, explan
 
 function buildFunnels(rows: NormalizedEvent[]) {
   const hasRecipeSteps = rows.some((row) => row.eventName === "recipe_steps_viewed");
-  const hasRecipeComplete = rows.some((row) => row.eventName === "content_complete" && (row.section === "recipes" || row.originalEventName === "recipe_opened" || normalizePage(row.currentPage).includes("recipe")));
+  const isRecipeContent = (row: NormalizedEvent) => row.section === "recipes" || row.originalEventName === "recipe_opened" || normalizePage(row.currentPage).includes("recipe");
+  const hasRecipeComplete = rows.some((row) => row.eventName === "content_complete" && isRecipeContent(row));
   const recipeSteps: Array<[string, (row: NormalizedEvent) => boolean]> = [
-    ["Recipe opened", (row) => row.eventName === "recipe_opened"],
+    ["Recipe opened", (row) => row.eventName === "content_open" && isRecipeContent(row)],
   ];
   if (hasRecipeSteps) {
     recipeSteps.push(["Steps viewed", (row) => row.eventName === "recipe_steps_viewed"]);
   }
   if (hasRecipeComplete) {
-    recipeSteps.push(["Recipe completed", (row) => row.eventName === "content_complete" && (row.section === "recipes" || normalizePage(row.currentPage).includes("recipe"))]);
+    recipeSteps.push(["Recipe completed", (row) => row.eventName === "content_complete" && isRecipeContent(row)]);
   }
 
   return [
@@ -671,11 +668,11 @@ function buildFunnels(rows: NormalizedEvent[]) {
       ["Контент открыт", isContentOpen],
       ["Контент завершён", isContentComplete],
     ], rows.some(isContentComplete) ? "средняя" : "низкая"),
-    buildFunnel(rows, "cats-studio", "Cats -> studio -> project created -> export completed", "Путь от cat-вовлечения к созданию и успешному экспорту.", [
-      ["Cats opened", (row) => row.eventName === "cat_question_opened" || row.section === "cats"],
-      ["Studio opened", (row) => row.eventName === "studio_open"],
+    buildFunnel(rows, "cats-studio", "Cats -> studio -> project created -> successful output", "Путь от cat-вовлечения к созданию проекта и успешному export/recording.", [
+      ["Cats opened", (row) => row.eventName === "cat_question_opened"],
+      ["Studio opened", isStudioOpenSignal],
       ["Project created", (row) => row.eventName === "studio_project_created"],
-      ["Export completed", (row) => row.eventName === "studio_export_completed"],
+      ["Successful output", isSuccessfulStudioOutput],
     ]),
     buildFunnel(rows, "recipes", "Recipes -> steps viewed -> complete", "Реальная воронка рецептов. Steps и complete показываются только если эти события есть.", recipeSteps, hasRecipeSteps || hasRecipeComplete ? "средняя" : "низкая"),
     buildFunnel(rows, "dog-lessons", "Dog lessons -> completed", "Показывает удержание в уроках с собакой.", [
@@ -806,22 +803,25 @@ function buildStudio(rows: NormalizedEvent[]) {
     return false;
   };
   const recordingFlow = (key: string, title: string, predicate: (row: NormalizedEvent) => boolean) => buildFunnel(rows, key, title, "Recording и export считаются отдельно. Conversion нельзя считать надёжной, если нет studio_open.", [
-    ["Studio opened", (row) => row.eventName === "studio_open" && (predicate(row) || !row.exportMethod)],
+    ["Studio opened", (row) => isStudioOpenSignal(row) && (predicate(row) || !row.exportMethod)],
     ["Project created", (row) => row.eventName === "studio_project_created" && (predicate(row) || !row.exportMethod)],
     ["Recording started", (row) => row.eventName === "studio_recording_started" && predicate(row)],
     ["Recording completed", (row) => row.eventName === "studio_recording_completed" && predicate(row)],
     ["Recording failed", (row) => row.eventName === "studio_recording_failed" && predicate(row)],
   ], rows.some((row) => row.eventName === "studio_recording_started" && predicate(row)) ? "средняя" : "низкая");
   const exportFlow = (key: string, title: string, predicate: (row: NormalizedEvent) => boolean) => buildFunnel(rows, key, title, "Реальный экспортный путь. Media/sticker не считаются обязательными шагами.", [
-    ["Studio opened", (row) => row.eventName === "studio_open" && (predicate(row) || !row.exportMethod)],
+    ["Studio opened", (row) => isStudioOpenSignal(row) && (predicate(row) || !row.exportMethod)],
     ["Project created", (row) => row.eventName === "studio_project_created" && (predicate(row) || !row.exportMethod)],
     ["Export started", (row) => row.eventName === "studio_export_started" && predicate(row)],
     ["Export completed", (row) => row.eventName === "studio_export_completed" && predicate(row)],
     ["Export failed", (row) => row.eventName === "studio_export_failed" && predicate(row)],
   ], rows.some((row) => row.eventName === "studio_export_started" && predicate(row)) ? "средняя" : "низкая");
 
+  const realStudioOpened = rows.filter((row) => row.eventName === "studio_open").length;
+  const approximateStudioOpened = realStudioOpened > 0 ? 0 : rows.filter(isStudioPageView).length;
+  const opened = realStudioOpened || approximateStudioOpened;
   const steps = [
-    ["Studio opened", rows.filter((row) => row.eventName === "studio_open").length],
+    ["Studio opened", opened],
     ["Project created", rows.filter((row) => row.eventName === "studio_project_created").length],
     ["Media added", rows.filter((row) => row.eventName === "studio_media_added").length],
     ["Sticker added", rows.filter((row) => row.eventName === "studio_sticker_added").length],
@@ -854,7 +854,6 @@ function buildStudio(rows: NormalizedEvent[]) {
     exportMethodMap.set(method, current);
   }
   const exportMethods = Array.from(exportMethodMap.values()).sort((a, b) => b.started - a.started || b.completed - a.completed || a.method.localeCompare(b.method));
-  const opened = steps[0][1];
   const studioActivity = rows.filter((row) => row.eventName.startsWith("studio_")).length;
   return {
     opened,
@@ -867,6 +866,9 @@ function buildStudio(rows: NormalizedEvent[]) {
     recordingStarted: rows.filter((row) => row.eventName === "studio_recording_started").length,
     recordingCompleted: rows.filter((row) => row.eventName === "studio_recording_completed").length,
     recordingFailed: rows.filter((row) => row.eventName === "studio_recording_failed").length,
+    realOpened: realStudioOpened,
+    approximateOpened: approximateStudioOpened,
+    openedIsApproximate: realStudioOpened === 0 && approximateStudioOpened > 0,
     successfulExports: steps[5][1],
     funnelBlockedReason: opened === 0 && studioActivity > 0 ? "Сначала подключить `studio_open`: есть studio-события, но нет стартового шага, поэтому conversion в Studio считать нельзя." : null,
     exportMethods,
@@ -942,10 +944,10 @@ function buildDataQuality(rows: NormalizedEvent[], allRows: NormalizedEvent[], g
   const requiredChecks: Array<{ key: string; expectation: string; affects: string; predicate: (row: NormalizedEvent) => boolean }> = [
     { key: "page_view", expectation: EVENT_EXPECTATIONS.page_view, affects: "посещения страниц, переходы, bounce rate", predicate: (row) => row.eventName === "page_view" },
     { key: "session_start", expectation: EVENT_EXPECTATIONS.session_start, affects: "качество session tracking", predicate: (row) => row.eventName === "session_start" },
-    { key: "content_open", expectation: "Любое открытие контента: content_open или конкретные события recipe/cats/dog/bedtime/map.", affects: "Content, Funnels, completion denominator", predicate: isContentOpen },
-    { key: "content_complete", expectation: "Завершение контента: content_complete или конкретные *_completed события.", affects: "Completion rate, Languages, Content conclusions", predicate: isContentComplete },
+    { key: "content_open", expectation: "Canonical content_open из normalized view. Specific события вроде cat_question_opened не суммируются, чтобы не было дублей.", affects: "Content, Funnels, completion denominator", predicate: isContentOpen },
+    { key: "content_complete", expectation: "Canonical content_complete из normalized view.", affects: "Completion rate, Languages, Content conclusions", predicate: isContentComplete },
     { key: "content_exit", expectation: EVENT_EXPECTATIONS.content_exit, affects: "exit rate, duration diagnostics, bounce hints", predicate: (row) => row.eventName === "content_exit" },
-    { key: "studio_open", expectation: EVENT_EXPECTATIONS.studio_open, affects: "Studio funnels and conversion", predicate: (row) => row.eventName === "studio_open" },
+    { key: "studio_open", expectation: `${EVENT_EXPECTATIONS.studio_open} Для старых данных допустим approximate signal: page_view на /studio.`, affects: "Studio funnels and conversion", predicate: isStudioOpenSignal },
     { key: "studio_export_started", expectation: EVENT_EXPECTATIONS.studio_export_started, affects: "export funnel start", predicate: (row) => row.eventName === "studio_export_started" },
     { key: "studio_export_completed", expectation: EVENT_EXPECTATIONS.studio_export_completed, affects: "successful export count", predicate: isStudioExportCompleted },
     { key: "studio_export_failed", expectation: EVENT_EXPECTATIONS.studio_export_failed, affects: "export failure diagnostics", predicate: (row) => row.eventName === "studio_export_failed" },
@@ -981,6 +983,27 @@ function buildDataQuality(rows: NormalizedEvent[], allRows: NormalizedEvent[], g
   const propertyIssues: AnalyticsQualityIssue[] = propertyChecks
     .map(([title, predicate]) => ({ title, count: countMissing(rows, predicate), description: "Такие строки ухудшают точность продуктовых метрик. Проверка сгруппирована по типам событий.", severity: "warning" as const }))
     .filter((issue) => issue.count > 0);
+  const legacyAliases = Object.entries(LEGACY_EVENT_MAP);
+  for (const [legacyName, canonicalName] of legacyAliases) {
+    const legacyCount = rows.filter((row) => row.originalEventName === legacyName).length;
+    const canonicalRawCount = rows.filter((row) => row.originalEventName === canonicalName).length;
+    if (legacyCount > 0 && canonicalRawCount === 0) {
+      propertyIssues.push({
+        title: `${canonicalName} есть только как legacy alias`,
+        description: `${legacyName} нормализуется в ${canonicalName}. Метрики считаются, но источник старый; проверь, что новый сайт уже отправляет canonical event.`,
+        count: legacyCount,
+        severity: "info",
+      });
+    }
+  }
+  if (studio.openedIsApproximate) {
+    propertyIssues.push({
+      title: "studio_open есть только как approximate signal",
+      description: "Исторически studio_open не собирался. Для старых данных открытия студии приблизительно считаются по page_view на /studio. Conversion ненадежна.",
+      count: studio.approximateOpened,
+      severity: "warning",
+    });
+  }
   if (studio.projectsCreated > studio.opened) {
     propertyIssues.push({
       title: "Project Created > Studio Opened",
@@ -989,12 +1012,28 @@ function buildDataQuality(rows: NormalizedEvent[], allRows: NormalizedEvent[], g
       severity: "warning",
     });
   }
-  if (studio.opened === 0 && (studio.projectsCreated > 0 || studio.exportStarted > 0 || studio.recordingStarted > 0)) {
+  if (studio.realOpened === 0 && studio.approximateOpened === 0 && (studio.projectsCreated > 0 || studio.exportStarted > 0 || studio.recordingStarted > 0)) {
     propertyIssues.push({
       title: "Studio activity без studio_open",
-      description: "За период есть studio project/export/recording события, но нет studio_open. Conversion в studio funnels нельзя считать надёжной.",
+      description: "За период есть studio project/export/recording события, но нет studio_open и нет page_view на /studio. Conversion в studio funnels нельзя считать.",
       count: studio.projectsCreated + studio.exportStarted + studio.recordingStarted,
       severity: "critical",
+    });
+  }
+  if (studio.recordingStarted > 0 && studio.recordingCompleted === 0) {
+    propertyIssues.push({
+      title: "Recording started есть, completed нет",
+      description: "Возможно пользователь не завершил запись или событие studio_recording_completed не отправляется. Не делаем вывод о провале без проверки flow.",
+      count: studio.recordingStarted,
+      severity: "warning",
+    });
+  }
+  if (studio.exportStarted > 0 && studio.exportCompleted === 0) {
+    propertyIssues.push({
+      title: "Export started есть, completed нет",
+      description: "Возможно пользователь не завершил экспорт или событие studio_export_completed не отправляется. Не делаем вывод о провале без проверки flow.",
+      count: studio.exportStarted,
+      severity: "warning",
     });
   }
 
@@ -1093,20 +1132,34 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
   return lines.join("\n");
 }
 
-async function loadRows(supabase: SupabaseClient, start: Date, end: Date): Promise<NormalizedEvent[]> {
-  const { data, error } = await supabase
-    .from("analytics_events")
+async function queryAnalyticsRows(supabase: SupabaseClient, tableName: "analytics_events_normalized" | "analytics_events", start: Date, end: Date) {
+  return supabase
+    .from(tableName)
     .select("*")
     .gte("created_at", start.toISOString())
     .lt("created_at", end.toISOString())
     .order("created_at", { ascending: true })
     .limit(MAX_ROWS);
+}
 
-  if (error) {
-    throw error;
+async function loadRows(supabase: SupabaseClient, start: Date, end: Date): Promise<LoadedAnalyticsRows> {
+  const normalized = await queryAnalyticsRows(supabase, "analytics_events_normalized", start, end);
+  if (!normalized.error) {
+    return {
+      rows: ((normalized.data || []) as AnalyticsRawRow[]).map(normalizeEvent).filter((row) => Number.isFinite(row.createdMs)),
+      source: "analytics_events_normalized",
+    };
   }
 
-  return ((data || []) as AnalyticsRawRow[]).map(normalizeEvent).filter((row) => Number.isFinite(row.createdMs));
+  const raw = await queryAnalyticsRows(supabase, "analytics_events", start, end);
+  if (raw.error) {
+    throw raw.error;
+  }
+
+  return {
+    rows: ((raw.data || []) as AnalyticsRawRow[]).map(normalizeEvent).filter((row) => Number.isFinite(row.createdMs)),
+    source: "analytics_events",
+  };
 }
 
 export function normalizeAnalyticsPeriod(value: unknown): AnalyticsPeriodKey {
@@ -1121,7 +1174,8 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
   const days = PERIOD_DAYS[effectivePeriod];
   const periodStart = addDays(tomorrowStart, -days);
   const previousStart = addDays(periodStart, -days);
-  const rows = await loadRows(supabase, previousStart, tomorrowStart);
+  const loaded = await loadRows(supabase, previousStart, tomorrowStart);
+  const rows = loaded.rows;
   const currentRows = rowsInRange(rows, periodStart, tomorrowStart);
   const previousRows = rowsInRange(rows, previousStart, periodStart);
   const contentRows = buildContentRows(currentRows, previousRows);
@@ -1134,6 +1188,11 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
       description: "analytics_events очищается примерно через 15 дней. До реально заполняемой analytics_daily_summary доступны только 7 и 14 дней.",
       severity: "warning" as const,
     },
+    ...(loaded.source === "analytics_events" ? [{
+      title: "analytics_events_normalized недоступен",
+      description: "Админка использует fallback на raw analytics_events и кодовую нормализацию. Проверь materialized view public.analytics_events_normalized.",
+      severity: "warning" as const,
+    }] : []),
   ];
   const growth = buildGrowth(currentRows, periodStart, days);
 

@@ -56,6 +56,19 @@ const ALLOWED_TAGS = new Set([
   "sticker",
 ]);
 
+async function r2ObjectExists(path: string) {
+  try {
+    await fetchPublicR2Object(path);
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes("R2 fetch failed (404)")) {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   const recipeId = typeof req.query.recipeId === "string" ? req.query.recipeId : "";
   if (!recipeId) {
@@ -104,10 +117,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         ? `recipes/assets/${setKey}`
         : `stickers/raccoon-stickers/${setKey}`;
     const sourcePath = `${basePath}/source.webp`;
-    const outputName = assetName
-      ? [assetTag, assetName, String(index)].filter(Boolean).join("-")
-      : [setKey, assetTag, String(index)].filter(Boolean).join("-");
-    const outputPath = `${basePath}/${outputName}.webp`;
+    const outputNameForIndex = (assetIndex: number) => (
+      assetName
+        ? [assetTag, assetName, String(assetIndex)].filter(Boolean).join("-")
+        : [setKey, assetTag, String(assetIndex)].filter(Boolean).join("-")
+    );
+    let outputIndex = index;
+    let outputPath = `${basePath}/${outputNameForIndex(outputIndex)}.webp`;
+    while (await r2ObjectExists(outputPath)) {
+      outputIndex += 1;
+      outputPath = `${basePath}/${outputNameForIndex(outputIndex)}.webp`;
+    }
     const source = await fetchPublicR2Object(sourcePath);
     const metadata = await sharp(source).metadata();
 
@@ -150,31 +170,30 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       body: cropped,
       contentType: "image/webp",
     });
-    const stickerAsset = kind === "raccoon_sticker"
-      ? await upsertStickerAsset(supabase, {
-          title: body.assetName?.trim() || stickerTitleFromPath(outputPath),
-          tags: normalizeStickerTags(body.searchTags),
-          storagePath: outputPath,
-          publicUrl,
-          setKey,
-          sourcePath,
-          sourceKind: kind,
-          crop: {
-            x: safeLeft,
-            y: safeTop,
-            width: safeWidth,
-            height: safeHeight,
-          },
-          width: safeWidth,
-          height: safeHeight,
-        })
-      : null;
+    await fetchPublicR2Object(outputPath);
+    const stickerAsset = await upsertStickerAsset(supabase, {
+      title: body.assetName?.trim() || stickerTitleFromPath(outputPath),
+      tags: normalizeStickerTags(body.searchTags),
+      storagePath: outputPath,
+      publicUrl,
+      setKey,
+      sourcePath,
+      sourceKind: kind,
+      crop: {
+        x: safeLeft,
+        y: safeTop,
+        width: safeWidth,
+        height: safeHeight,
+      },
+      width: safeWidth,
+      height: safeHeight,
+    });
 
     return res.status(200).json({
       ok: true,
       kind,
       setKey,
-      index,
+      index: outputIndex,
       sourcePath,
       path: outputPath,
       publicUrl,

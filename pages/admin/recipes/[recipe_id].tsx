@@ -249,6 +249,14 @@ const KNOWN_MEDIA_FOLDERS_BY_PREFIX: Record<string, string[]> = {
   "recipes/": ["recipes/assets/", "recipes/exports/", "recipes/recipes-pics/"],
   "stickers/": ["stickers/capybara-stickers/", "stickers/raccoon-stickers/"],
 };
+const EXCLUDED_EDITOR_MEDIA_FOLDER_PATTERNS = [
+  /(^|\/)audio(s)?\//i,
+  /(^|\/)music\//i,
+  /(^|\/)mp3(s)?\//i,
+  /(^|\/)sound(s)?\//i,
+  /(^|\/)songs?\//i,
+  /parrot-music/i,
+];
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   const data = (await response.json()) as T & { error?: string };
@@ -565,7 +573,16 @@ function mediaFoldersForPrefix(prefix: string, folders: string[]) {
   const requiredFolders = prefix ? KNOWN_MEDIA_FOLDERS_BY_PREFIX[prefix] ?? [] : ROOT_MEDIA_FOLDERS;
   return Array.from(new Set([...requiredFolders, ...folders]))
     .filter((folder) => folder !== prefix)
+    .filter((folder) => !EXCLUDED_EDITOR_MEDIA_FOLDER_PATTERNS.some((pattern) => pattern.test(folder)))
     .sort((left, right) => left.localeCompare(right));
+}
+
+function mediaAncestorPrefixes(prefix: string) {
+  const parts = prefix.split("/").filter(Boolean);
+  return [
+    "",
+    ...parts.map((_, index) => `${parts.slice(0, index + 1).join("/")}/`),
+  ];
 }
 
 function mediaBreadcrumbs(prefix: string) {
@@ -1028,7 +1045,7 @@ export default function RecipeEditorPage() {
   const [cropAssetTag, setCropAssetTag] = useState("asset");
   const [cropSearchTags, setCropSearchTags] = useState("");
   const [savingCrop, setSavingCrop] = useState(false);
-  const [savedCropUrls, setSavedCropUrls] = useState<Array<{ label: string; url: string }>>([]);
+  const [savedCropAssets, setSavedCropAssets] = useState<RecipeSavedAsset[]>([]);
   const [mediaPrefix, setMediaPrefix] = useState("");
   const [mediaLibrary, setMediaLibrary] = useState<MediaLibraryResponse | null>(null);
   const [mediaLoading, setMediaLoading] = useState(false);
@@ -1036,6 +1053,7 @@ export default function RecipeEditorPage() {
   const [mediaTree, setMediaTree] = useState<MediaTreeNode>(fallbackMediaTree);
   const [mediaTreeLoading, setMediaTreeLoading] = useState(false);
   const [mediaRefreshKey, setMediaRefreshKey] = useState(0);
+  const [expandedMediaFolders, setExpandedMediaFolders] = useState<Set<string>>(() => new Set(["", "recipes/", "stickers/"]));
   const [selectedMediaObject, setSelectedMediaObject] = useState<MediaLibraryObject | null>(null);
   const [renameMediaName, setRenameMediaName] = useState("");
   const [renameMediaTag, setRenameMediaTag] = useState("asset");
@@ -1096,10 +1114,7 @@ export default function RecipeEditorPage() {
         setJsonValue(recipeToEditableJson(data.recipe));
         setAssetSetName(data.recipe.asset_set_key ?? "");
         setStickerSetName(data.recipe.sticker_set_key ?? "");
-        setSavedCropUrls((loadedLayout.assets ?? []).map((asset) => ({
-          label: asset.label,
-          url: withCacheBuster(asset.url, asset.createdAt),
-        })));
+        setSavedCropAssets(loadedLayout.assets ?? []);
         setSelectedId(loadedLayout.elements[0]?.id ?? "title");
       })
       .catch((fetchError) => setError(fetchError instanceof Error ? fetchError.message : String(fetchError)))
@@ -1118,6 +1133,16 @@ export default function RecipeEditorPage() {
       .catch((fetchError) => setMediaError(fetchError instanceof Error ? fetchError.message : String(fetchError)))
       .finally(() => setMediaLoading(false));
   }, [mediaPrefix, mediaRefreshKey, sessionChecked]);
+
+  useEffect(() => {
+    setExpandedMediaFolders((current) => {
+      const next = new Set(current);
+      for (const prefix of mediaAncestorPrefixes(mediaPrefix)) {
+        next.add(prefix);
+      }
+      return next;
+    });
+  }, [mediaPrefix]);
 
   useEffect(() => {
     if (!sessionChecked) {
@@ -1262,6 +1287,24 @@ export default function RecipeEditorPage() {
           recipe?.updated_at,
         )
       : "";
+  const activeCropFolderPrefix = activeCropSetKey.trim()
+    ? cropMode === "recipe_asset"
+      ? `recipes/assets/${activeCropSetKey.trim()}/`
+      : `stickers/raccoon-stickers/${activeCropSetKey.trim()}/`
+    : "";
+  const activeCropObjectKeys = useMemo(
+    () => mediaLibrary?.prefix === activeCropFolderPrefix
+      ? new Set(mediaLibrary.objects.map((object) => object.key))
+      : null,
+    [activeCropFolderPrefix, mediaLibrary],
+  );
+  const visibleSavedCropAssets = useMemo(
+    () => savedCropAssets
+      .filter((asset) => asset.kind === cropMode && asset.setKey === activeCropSetKey.trim())
+      .filter((asset) => !activeCropObjectKeys || activeCropObjectKeys.has(asset.path))
+      .sort((left, right) => Date.parse(right.createdAt) - Date.parse(left.createdAt)),
+    [activeCropObjectKeys, activeCropSetKey, cropMode, savedCropAssets],
+  );
 
   const pushLayoutHistory = (snapshot: RecipeLayout) => {
     historyPastRef.current = [...historyPastRef.current.slice(-79), snapshot];
@@ -1742,24 +1785,54 @@ export default function RecipeEditorPage() {
     }
   };
 
-  const renderMediaTreeNode = (node: MediaTreeNode, depth = 0) => (
-    <div key={node.prefix || "root"} className="recipe-media-tree-node">
-      <button
-        type="button"
-        className={mediaPrefix === node.prefix ? "recipe-media-tree-button recipe-media-tree-button--active" : "recipe-media-tree-button"}
-        style={{ paddingLeft: `${10 + depth * 14}px` }}
-        onClick={() => setMediaPrefix(node.prefix)}
-      >
-        <span>{node.children.length > 0 ? "v" : "-"}</span>
-        <strong>{node.label}</strong>
-      </button>
-      {node.children.length > 0 ? (
-        <div className="recipe-media-tree-children">
-          {node.children.map((child) => renderMediaTreeNode(child, depth + 1))}
+  const renderMediaTreeNode = (node: MediaTreeNode, depth = 0) => {
+    const hasChildren = node.children.length > 0;
+    const expanded = expandedMediaFolders.has(node.prefix);
+    return (
+      <div key={node.prefix || "root"} className="recipe-media-tree-node">
+        <div
+          className={mediaPrefix === node.prefix ? "recipe-media-tree-row recipe-media-tree-row--active" : "recipe-media-tree-row"}
+          style={{ paddingLeft: `${8 + depth * 14}px` }}
+        >
+          <button
+            type="button"
+            className="recipe-media-tree-toggle"
+            disabled={!hasChildren}
+            aria-label={expanded ? "Свернуть папку" : "Развернуть папку"}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (!hasChildren) {
+                return;
+              }
+              setExpandedMediaFolders((current) => {
+                const next = new Set(current);
+                if (next.has(node.prefix)) {
+                  next.delete(node.prefix);
+                } else {
+                  next.add(node.prefix);
+                }
+                return next;
+              });
+            }}
+          >
+            {hasChildren ? (expanded ? "v" : ">") : "-"}
+          </button>
+          <button
+            type="button"
+            className="recipe-media-tree-button"
+            onClick={() => setMediaPrefix(node.prefix)}
+          >
+            <strong>{node.label}</strong>
+          </button>
         </div>
-      ) : null}
-    </div>
-  );
+        {hasChildren && expanded ? (
+          <div className="recipe-media-tree-children">
+            {node.children.map((child) => renderMediaTreeNode(child, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  };
 
   const logTemplate = () => {
     const snapshot = {
@@ -2293,6 +2366,18 @@ export default function RecipeEditorPage() {
       setJsonValue(recipeToEditableJson(response.recipe));
       setAssetSetName(response.recipe.asset_set_key ?? "");
       setStickerSetName(response.recipe.sticker_set_key ?? "");
+      if (kind === "recipe_asset_sheet") {
+        setAssetCropIndex(1);
+        if (response.setKey) {
+          setMediaPrefix(`recipes/assets/${response.setKey}/`);
+        }
+      }
+      if (kind === "raccoon_sticker_sheet") {
+        setStickerCropIndex(1);
+        if (response.setKey) {
+          setMediaPrefix(`stickers/raccoon-stickers/${response.setKey}/`);
+        }
+      }
       setSuccess(`Медиа обработано и загружено: ${response.publicUrl}`);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
@@ -2409,11 +2494,25 @@ export default function RecipeEditorPage() {
         index: response.index,
         createdAt: new Date().toISOString(),
       };
+      const retainedAssets = (layout.assets ?? []).filter((asset) => {
+        if (asset.path === savedAsset.path) {
+          return false;
+        }
+        if (
+          activeCropObjectKeys &&
+          asset.kind === savedAsset.kind &&
+          asset.setKey === savedAsset.setKey &&
+          !activeCropObjectKeys.has(asset.path)
+        ) {
+          return false;
+        }
+        return true;
+      });
       const nextLayout: RecipeLayout = {
         ...layout,
         assets: [
           savedAsset,
-          ...(layout.assets ?? []).filter((asset) => asset.path !== savedAsset.path),
+          ...retainedAssets,
         ],
       };
       applyLayoutChange(() => nextLayout);
@@ -2429,15 +2528,13 @@ export default function RecipeEditorPage() {
       });
       setRecipe(savedRecipe.recipe);
       setJsonValue(recipeToEditableJson(savedRecipe.recipe));
-      setSavedCropUrls((current) => [
-        { label, url: withCacheBuster(response.publicUrl, Date.now()) },
-        ...current,
-      ]);
+      setSavedCropAssets(nextLayout.assets ?? []);
+      setMediaPrefix(activeCropFolderPrefix);
       setMediaRefreshKey((current) => current + 1);
       if (cropMode === "recipe_asset") {
-        setAssetCropIndex((current) => current + 1);
+        setAssetCropIndex(response.index + 1);
       } else {
-        setStickerCropIndex((current) => current + 1);
+        setStickerCropIndex(response.index + 1);
       }
       setSuccess(`Деталь сохранена: ${response.publicUrl}`);
     } catch (cropError) {
@@ -2943,6 +3040,31 @@ export default function RecipeEditorPage() {
                     <span className="books-field__help">Через запятую, точку с запятой или с новой строки. Сохраняются в sticker_assets.</span>
                   </label>
                 ) : null}
+                <button
+                  type="button"
+                  className="books-button books-button--success recipe-crop-save-button"
+                  disabled={savingCrop || !activeCropSourceUrl}
+                  onClick={() => {
+                    void saveCropDetail();
+                  }}
+                >
+                  {savingCrop ? "Сохранение..." : "Сохранить деталь"}
+                </button>
+                {visibleSavedCropAssets.length > 0 ? (
+                  <div className="recipe-crop-saved-assets">
+                    <div className="recipe-crop-saved-assets__head">
+                      <strong>Сохранено в текущем наборе</strong>
+                      <span>{visibleSavedCropAssets.length}</span>
+                    </div>
+                    <div className="recipe-export-links recipe-export-links--compact">
+                      {visibleSavedCropAssets.map((asset) => (
+                        <a key={asset.path} href={withCacheBuster(asset.url, asset.createdAt)} target="_blank" rel="noreferrer">
+                          {asset.label}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="books-grid books-grid--2">
                   <label className="books-field">
                     <span className="books-field__label">X %</span>
@@ -2961,25 +3083,6 @@ export default function RecipeEditorPage() {
                     <input className="books-input" type="number" value={Math.round(cropRect.height)} onChange={(event) => setCropRect((current) => ({ ...current, height: Number(event.target.value) }))} />
                   </label>
                 </div>
-                <button
-                  type="button"
-                  className="books-button books-button--success"
-                  disabled={savingCrop || !activeCropSourceUrl}
-                  onClick={() => {
-                    void saveCropDetail();
-                  }}
-                >
-                  {savingCrop ? "Сохранение..." : "Сохранить деталь"}
-                </button>
-                {savedCropUrls.length > 0 ? (
-                  <div className="recipe-export-links">
-                    {savedCropUrls.map((item) => (
-                      <a key={item.url} href={item.url} target="_blank" rel="noreferrer">
-                        {item.label}
-                      </a>
-                    ))}
-                  </div>
-                ) : null}
               </aside>
             </div>
             ) : null}

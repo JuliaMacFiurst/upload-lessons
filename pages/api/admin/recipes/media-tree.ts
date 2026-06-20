@@ -20,6 +20,14 @@ const KNOWN_FOLDERS_BY_PREFIX: Record<string, string[]> = {
     "stickers/raccoon-stickers/",
   ],
 };
+const EXCLUDED_FOLDER_PATTERNS = [
+  /(^|\/)audio(s)?\//i,
+  /(^|\/)music\//i,
+  /(^|\/)mp3(s)?\//i,
+  /(^|\/)sound(s)?\//i,
+  /(^|\/)songs?\//i,
+  /parrot-music/i,
+];
 
 function folderLabel(prefix: string) {
   return prefix.split("/").filter(Boolean).pop() ?? "laplapla-public-media";
@@ -28,6 +36,10 @@ function folderLabel(prefix: string) {
 function mergeFolders(prefix: string, folders: string[]) {
   const requiredFolders = prefix ? KNOWN_FOLDERS_BY_PREFIX[prefix] ?? [] : ROOT_FOLDERS;
   return Array.from(new Set([...requiredFolders, ...folders])).sort((left, right) => left.localeCompare(right));
+}
+
+function isEditorMediaFolder(prefix: string) {
+  return !EXCLUDED_FOLDER_PATTERNS.some((pattern) => pattern.test(prefix));
 }
 
 async function listAllFolderPrefixes(prefix: string) {
@@ -58,7 +70,8 @@ async function buildTree(prefix: string, depth: number, visited: Set<string>): P
     return { prefix, label: folderLabel(prefix), children: [] };
   }
 
-  const folders = mergeFolders(prefix, await listAllFolderPrefixes(prefix));
+  const folders = mergeFolders(prefix, await listAllFolderPrefixes(prefix))
+    .filter(isEditorMediaFolder);
   const children = await Promise.all(
     folders.map((folder) => buildTree(folder, depth - 1, visited)),
   );

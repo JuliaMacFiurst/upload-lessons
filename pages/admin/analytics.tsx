@@ -456,7 +456,7 @@ function StudioTab({ payload }: { payload: AnalyticsAdminPayload }) {
       <h2>Studio</h2>
       <p className="analytics-help">Путь студии показывает, где люди теряются: открытие, создание проекта, добавление медиа, экспорт и ошибки.</p>
       <div className="analytics-metric-grid analytics-metric-grid--compact">
-        <MetricCard card={studioCard({ key: "studio-open", label: "Открыли студию", value: payload.studio.opened, explanation: "Событие `studio_open`." }, ["studio_open"])} />
+        <MetricCard card={studioCard({ key: "studio-open", label: "Открыли студию", value: payload.studio.opened, explanation: payload.studio.openedIsApproximate ? "Approximate: page_view на /studio, потому что исторически `studio_open` не собирался." : "Событие `studio_open`." }, ["studio_open", "page_view /studio"])} />
         <MetricCard card={studioCard({ key: "project-created", label: "Создали проект", value: payload.studio.projectsCreated, explanation: "`studio_project_created` и старый `project_created`." }, ["studio_project_created", "project_created"])} />
         <MetricCard card={studioCard({ key: "export-completed", label: "Успешный output", value: payload.studio.successfulExports, explanation: "`studio_export_completed`, `studio_recording_completed` и старый `video_exported`." }, ["studio_export_completed", "studio_recording_completed", "video_exported"])} />
         <MetricCard card={studioCard({ key: "export-failed", label: "Export failed", value: payload.studio.exportFailed, explanation: "Ошибки экспорта из `studio_export_failed`." }, ["studio_export_failed"])} />
@@ -563,7 +563,7 @@ function DataQualityTab({ payload }: { payload: AnalyticsAdminPayload }) {
     content_open: "Влияет на Content, Funnels и denominator для completion.",
     content_complete: "Completion rate, Languages и продуктовые выводы будут N/A.",
     content_exit: "Влияет на exit rate, duration и bounce hints.",
-    studio_open: "Studio funnels заблокированы: сначала подключить стартовый шаг.",
+    studio_open: "Studio funnels используют canonical studio_open или approximate page_view на /studio для старых данных.",
     studio_export_started: "Нельзя понять, сколько людей начали экспорт.",
     studio_export_completed: "Нельзя доверять счётчику успешных экспортов.",
     studio_export_failed: "Не видно ошибок экспорта.",
@@ -666,7 +666,7 @@ export default function AnalyticsAdminPage() {
         <header className="analytics-header">
           <div>
             <h1>Analytics</h1>
-            <p>Админский dashboard LapLapLa: продуктовые метрики, контент, воронки, качество данных и экспорт из Supabase `analytics_events`.</p>
+            <p>Админский dashboard LapLapLa: продуктовые метрики, контент, воронки, качество данных и экспорт из Supabase `analytics_events_normalized` с fallback на `analytics_events`.</p>
           </div>
           <button className="analytics-button" type="button" onClick={() => void loadAnalytics(period)} disabled={loading}>
             Обновить

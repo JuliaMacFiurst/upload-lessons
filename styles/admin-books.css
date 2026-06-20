@@ -1143,29 +1143,64 @@
   display: grid;
 }
 
-.recipe-media-tree-button {
+.recipe-media-tree-row {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-columns: 22px minmax(0, 1fr);
   gap: 6px;
   align-items: center;
   width: 100%;
-  border: 0;
   padding: 8px 10px;
   background: transparent;
   color: #223044;
+}
+
+.recipe-media-tree-row--active {
+  background: #111827;
+  color: #ffffff;
+}
+
+.recipe-media-tree-toggle,
+.recipe-media-tree-button {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
   text-align: left;
   cursor: pointer;
 }
 
+.recipe-media-tree-toggle {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border-radius: 5px;
+  text-align: center;
+  font-weight: 900;
+}
+
+.recipe-media-tree-toggle:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.recipe-media-tree-toggle:not(:disabled):hover {
+  background: rgba(15, 23, 42, 0.08);
+}
+
+.recipe-media-tree-row--active .recipe-media-tree-toggle:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+
+.recipe-media-tree-button {
+  min-width: 0;
+  padding: 0;
+}
+
 .recipe-media-tree-button strong {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.recipe-media-tree-button--active {
-  background: #111827;
-  color: #ffffff;
 }
 
 .recipe-media-window {
@@ -1393,6 +1428,12 @@
   border: 1px solid #d8e0ea;
   border-radius: 8px;
   background: #f8fbfe;
+}
+
+.recipe-export-links--compact {
+  max-height: 220px;
+  overflow: auto;
+  align-content: flex-start;
 }
 
 .recipe-export-links a {
@@ -1733,6 +1774,37 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.recipe-crop-save-button {
+  position: sticky;
+  top: 12px;
+  z-index: 2;
+  justify-content: center;
+}
+
+.recipe-crop-saved-assets {
+  display: grid;
+  gap: 8px;
+}
+
+.recipe-crop-saved-assets__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #44546a;
+  font-size: 0.84rem;
+  font-weight: 800;
+}
+
+.recipe-crop-saved-assets__head span {
+  min-width: 28px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #e8eef6;
+  color: #263244;
+  text-align: center;
 }
 
 .recipe-studio-canvas-wrap {
