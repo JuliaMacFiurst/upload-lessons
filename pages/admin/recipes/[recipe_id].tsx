@@ -176,6 +176,18 @@ type LayerDragState = {
   type: "element" | "group";
 };
 
+type MediaAssetPointerDrag = {
+  label: string;
+  url: string;
+  path: string;
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  clientX: number;
+  clientY: number;
+  startedAt: number;
+};
+
 type LayoutUpdater = (current: RecipeLayout) => RecipeLayout;
 
 type TransformState = {
@@ -1017,6 +1029,7 @@ export default function RecipeEditorPage() {
   const cropStageRef = useRef<HTMLDivElement | null>(null);
   const cropBoxRef = useRef<HTMLDivElement | null>(null);
   const cropInteractionRef = useRef<CropInteraction | null>(null);
+  const mediaAssetPointerDragRef = useRef<MediaAssetPointerDrag | null>(null);
 
   const [sessionChecked, setSessionChecked] = useState(false);
   const [recipe, setRecipe] = useState<RecipeRecord | null>(null);
@@ -1073,6 +1086,7 @@ export default function RecipeEditorPage() {
   const [mediaPanelOpen, setMediaPanelOpen] = useState(true);
   const [cropPanelOpen, setCropPanelOpen] = useState(true);
   const [r2PanelOpen, setR2PanelOpen] = useState(true);
+  const [mediaAssetPointerDrag, setMediaAssetPointerDrag] = useState<MediaAssetPointerDrag | null>(null);
   const [freeTextValue, setFreeTextValue] = useState("");
   const [countryTargetQuery, setCountryTargetQuery] = useState("");
   const [countryTargets, setCountryTargets] = useState<CountryTarget[]>([]);
@@ -1644,6 +1658,102 @@ export default function RecipeEditorPage() {
       elements: [...current.elements, nextElement],
     }));
     setSelectedId(id);
+  };
+
+  const addMediaAssetToCanvasPoint = (
+    item: { label: string; url: string; path?: string },
+    clientX: number,
+    clientY: number,
+  ) => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return false;
+    }
+    const rect = canvas.getBoundingClientRect();
+    const isInsideCanvas = (
+      clientX >= rect.left
+      && clientX <= rect.right
+      && clientY >= rect.top
+      && clientY <= rect.bottom
+    );
+    if (!isInsideCanvas) {
+      return false;
+    }
+    addImageElement(
+      item,
+      "asset",
+      {
+        x: Math.max(0, Math.min(88, ((clientX - rect.left) / rect.width) * 100 - 10)),
+        y: Math.max(0, Math.min(92, ((clientY - rect.top) / rect.height) * 100 - 6)),
+      },
+    );
+    return true;
+  };
+
+  const startMediaAssetPointerDrag = (
+    event: React.PointerEvent<HTMLButtonElement>,
+    item: { label: string; url: string; path: string },
+  ) => {
+    if (event.pointerType === "mouse") {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const drag: MediaAssetPointerDrag = {
+      ...item,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      startedAt: Date.now(),
+    };
+    mediaAssetPointerDragRef.current = drag;
+    setMediaAssetPointerDrag(drag);
+  };
+
+  const moveMediaAssetPointerDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = mediaAssetPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    const moved = Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY) > 6;
+    if (moved) {
+      event.preventDefault();
+    }
+    const nextDrag = {
+      ...drag,
+      clientX: event.clientX,
+      clientY: event.clientY,
+    };
+    mediaAssetPointerDragRef.current = nextDrag;
+    setMediaAssetPointerDrag(nextDrag);
+  };
+
+  const endMediaAssetPointerDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = mediaAssetPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    mediaAssetPointerDragRef.current = null;
+    setMediaAssetPointerDrag(null);
+    const moved = Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY) > 6;
+    const dropped = addMediaAssetToCanvasPoint(
+      { label: drag.label, url: drag.url, path: drag.path },
+      event.clientX,
+      event.clientY,
+    );
+    if (moved || dropped) {
+      event.preventDefault();
+    }
+  };
+
+  const cancelMediaAssetPointerDrag = (event: React.PointerEvent<HTMLButtonElement>) => {
+    const drag = mediaAssetPointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) {
+      return;
+    }
+    mediaAssetPointerDragRef.current = null;
+    setMediaAssetPointerDrag(null);
   };
 
   const addFreeTextElement = () => {
@@ -3451,11 +3561,15 @@ export default function RecipeEditorPage() {
                         event.dataTransfer.setData("application/x-laplapla-media-path", object.key);
                         event.dataTransfer.setData("application/x-laplapla-media-label", label);
                       }}
+                      onPointerDown={(event) => startMediaAssetPointerDrag(event, { label, url: object.publicUrl, path: object.key })}
+                      onPointerMove={moveMediaAssetPointerDrag}
+                      onPointerUp={endMediaAssetPointerDrag}
+                      onPointerCancel={cancelMediaAssetPointerDrag}
                       onClick={() => selectMediaForRename(object)}
                       onDoubleClick={() => addImageElement({ label, url: object.publicUrl, path: object.key }, "asset")}
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={object.publicUrl} alt="" />
+                      <img src={object.publicUrl} alt="" draggable={false} />
                       <span>{label}</span>
                     </button>
                       );
@@ -3506,6 +3620,19 @@ export default function RecipeEditorPage() {
                 ))}
               </div>
             ) : null}
+            {mediaAssetPointerDrag ? (
+              <div
+                className="recipe-asset-drag-preview"
+                style={{
+                  left: `${mediaAssetPointerDrag.clientX}px`,
+                  top: `${mediaAssetPointerDrag.clientY}px`,
+                }}
+              >
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={mediaAssetPointerDrag.url} alt="" draggable={false} />
+                <span>{mediaAssetPointerDrag.label}</span>
+              </div>
+            ) : null}
             <div className="recipe-studio-shell">
               <div className="recipe-studio-canvas-wrap">
                 <div
@@ -3522,17 +3649,13 @@ export default function RecipeEditorPage() {
                     const url = event.dataTransfer.getData("application/x-laplapla-media-url");
                     const path = event.dataTransfer.getData("application/x-laplapla-media-path");
                     const label = event.dataTransfer.getData("application/x-laplapla-media-label") || mediaLabelFromKey(path);
-                    if (!url || !canvasRef.current) {
+                    if (!url) {
                       return;
                     }
-                    const rect = canvasRef.current.getBoundingClientRect();
-                    addImageElement(
+                    addMediaAssetToCanvasPoint(
                       { label, url, path },
-                      "asset",
-                      {
-                        x: Math.max(0, Math.min(88, ((event.clientX - rect.left) / rect.width) * 100 - 10)),
-                        y: Math.max(0, Math.min(92, ((event.clientY - rect.top) / rect.height) * 100 - 6)),
-                      },
+                      event.clientX,
+                      event.clientY,
                     );
                   }}
                   onPointerMove={(event) => {

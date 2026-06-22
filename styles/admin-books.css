@@ -1397,6 +1397,10 @@
   font-weight: 800;
   text-align: center;
   cursor: grab;
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-user-drag: none;
 }
 
 .recipe-asset-thumb img {
@@ -1412,6 +1416,8 @@
     linear-gradient(-45deg, transparent 75%, #e4e9f0 75%);
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   background-size: 16px 16px;
+  pointer-events: none;
+  -webkit-user-drag: none;
 }
 
 .recipe-asset-thumb span {
@@ -1465,6 +1471,39 @@
   border: 1px solid #d8e0ea;
   border-radius: 8px;
   background: #ffffff;
+}
+
+.recipe-asset-drag-preview {
+  position: fixed;
+  z-index: 9999;
+  width: 96px;
+  padding: 8px;
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+  border: 1px solid #2563eb;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  color: #223044;
+  font-size: 0.7rem;
+  font-weight: 900;
+  text-align: center;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 14px 34px rgba(15, 23, 42, 0.22);
+}
+
+.recipe-asset-drag-preview img {
+  width: 76px;
+  height: 58px;
+  object-fit: contain;
+}
+
+.recipe-asset-drag-preview span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .recipe-export-link-pair a:last-child {
