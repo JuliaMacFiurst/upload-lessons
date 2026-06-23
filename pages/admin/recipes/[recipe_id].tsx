@@ -1013,6 +1013,68 @@ function countryTargetLabel(target: CountryTarget) {
   return title ? `${title} (${target.target_id})` : target.target_id;
 }
 
+type NumberStepperInputProps = {
+  value: number;
+  onValueChange: (value: number) => void;
+  min?: number;
+  max?: number;
+  step?: number;
+  ariaLabel: string;
+};
+
+function NumberStepperInput({
+  value,
+  onValueChange,
+  min,
+  max,
+  step = 1,
+  ariaLabel,
+}: NumberStepperInputProps) {
+  const clampValue = (nextValue: number) => {
+    if (!Number.isFinite(nextValue)) {
+      return min ?? 0;
+    }
+    return Math.max(min ?? -Infinity, Math.min(max ?? Infinity, nextValue));
+  };
+  const updateBy = (delta: number) => {
+    onValueChange(clampValue(value + delta));
+  };
+
+  return (
+    <span className="number-stepper-input">
+      <input
+        className="books-input number-stepper-input__field"
+        type="number"
+        inputMode="decimal"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        aria-label={ariaLabel}
+        onChange={(event) => onValueChange(clampValue(Number(event.target.value)))}
+      />
+      <span className="number-stepper-input__buttons">
+        <button
+          type="button"
+          className="number-stepper-input__button"
+          aria-label={`${ariaLabel}: увеличить`}
+          onClick={() => updateBy(step)}
+        >
+          ▲
+        </button>
+        <button
+          type="button"
+          className="number-stepper-input__button"
+          aria-label={`${ariaLabel}: уменьшить`}
+          onClick={() => updateBy(-step)}
+        >
+          ▼
+        </button>
+      </span>
+    </span>
+  );
+}
+
 export default function RecipeEditorPage() {
   const router = useRouter();
   const supabase = createClientComponentClient();
@@ -3099,13 +3161,12 @@ export default function RecipeEditorPage() {
                 </label>
                 <label className="books-field">
                   <span className="books-field__label">Порядковый номер</span>
-                  <input
-                    className="books-input"
-                    type="number"
+                  <NumberStepperInput
+                    ariaLabel="Порядковый номер"
                     min={1}
                     value={activeCropIndex}
-                    onChange={(event) => {
-                      const next = Math.max(1, Number(event.target.value) || 1);
+                    onValueChange={(value) => {
+                      const next = Math.max(1, value || 1);
                       if (cropMode === "recipe_asset") {
                         setAssetCropIndex(next);
                       } else {
@@ -3178,19 +3239,19 @@ export default function RecipeEditorPage() {
                 <div className="books-grid books-grid--2">
                   <label className="books-field">
                     <span className="books-field__label">X %</span>
-                    <input className="books-input" type="number" value={Math.round(cropRect.x)} onChange={(event) => setCropRect((current) => ({ ...current, x: Number(event.target.value) }))} />
+                    <NumberStepperInput ariaLabel="X %" value={Math.round(cropRect.x)} onValueChange={(value) => setCropRect((current) => ({ ...current, x: value }))} />
                   </label>
                   <label className="books-field">
                     <span className="books-field__label">Y %</span>
-                    <input className="books-input" type="number" value={Math.round(cropRect.y)} onChange={(event) => setCropRect((current) => ({ ...current, y: Number(event.target.value) }))} />
+                    <NumberStepperInput ariaLabel="Y %" value={Math.round(cropRect.y)} onValueChange={(value) => setCropRect((current) => ({ ...current, y: value }))} />
                   </label>
                   <label className="books-field">
                     <span className="books-field__label">W %</span>
-                    <input className="books-input" type="number" value={Math.round(cropRect.width)} onChange={(event) => setCropRect((current) => ({ ...current, width: Number(event.target.value) }))} />
+                    <NumberStepperInput ariaLabel="W %" value={Math.round(cropRect.width)} onValueChange={(value) => setCropRect((current) => ({ ...current, width: value }))} />
                   </label>
                   <label className="books-field">
                     <span className="books-field__label">H %</span>
-                    <input className="books-input" type="number" value={Math.round(cropRect.height)} onChange={(event) => setCropRect((current) => ({ ...current, height: Number(event.target.value) }))} />
+                    <NumberStepperInput ariaLabel="H %" value={Math.round(cropRect.height)} onValueChange={(value) => setCropRect((current) => ({ ...current, height: value }))} />
                   </label>
                 </div>
               </aside>
@@ -4087,23 +4148,23 @@ export default function RecipeEditorPage() {
                     <div className="books-grid books-grid--2">
                       <label className="books-field">
                         <span className="books-field__label">X</span>
-                        <input className="books-input" type="number" value={Math.round(selectedElement.x)} onChange={(event) => updateElement(selectedElement.id, { x: Number(event.target.value) })} />
+                        <NumberStepperInput ariaLabel="X" value={Math.round(selectedElement.x)} onValueChange={(value) => updateElement(selectedElement.id, { x: value })} />
                       </label>
                       <label className="books-field">
                         <span className="books-field__label">Y</span>
-                        <input className="books-input" type="number" value={Math.round(selectedElement.y)} onChange={(event) => updateElement(selectedElement.id, { y: Number(event.target.value) })} />
+                        <NumberStepperInput ariaLabel="Y" value={Math.round(selectedElement.y)} onValueChange={(value) => updateElement(selectedElement.id, { y: value })} />
                       </label>
                       <label className="books-field">
                         <span className="books-field__label">Ширина</span>
-                        <input className="books-input" type="number" value={Math.round(selectedElement.width)} onChange={(event) => updateElement(selectedElement.id, { width: Number(event.target.value) })} />
+                        <NumberStepperInput ariaLabel="Ширина" value={Math.round(selectedElement.width)} onValueChange={(value) => updateElement(selectedElement.id, { width: value })} />
                       </label>
                       <label className="books-field">
                         <span className="books-field__label">Высота</span>
-                        <input className="books-input" type="number" value={Math.round(selectedElement.height ?? 0)} onChange={(event) => updateElement(selectedElement.id, { height: Number(event.target.value) || undefined })} />
+                        <NumberStepperInput ariaLabel="Высота" value={Math.round(selectedElement.height ?? 0)} onValueChange={(value) => updateElement(selectedElement.id, { height: value || undefined })} />
                       </label>
                       <label className="books-field">
                         <span className="books-field__label">Размер текста</span>
-                        <input className="books-input" type="number" value={Math.round(selectedElement.fontSize)} onChange={(event) => updateElement(selectedElement.id, { fontSize: Number(event.target.value) })} />
+                        <NumberStepperInput ariaLabel="Размер текста" min={1} value={Math.round(selectedElement.fontSize)} onValueChange={(value) => updateElement(selectedElement.id, { fontSize: value })} />
                       </label>
                       <label className="books-field">
                         <span className="books-field__label">Шрифт</span>
@@ -4119,7 +4180,7 @@ export default function RecipeEditorPage() {
                       </label>
                       <label className="books-field">
                         <span className="books-field__label">Поворот</span>
-                        <input className="books-input" type="number" value={Math.round(selectedElement.rotation)} onChange={(event) => updateElement(selectedElement.id, { rotation: Number(event.target.value) })} />
+                        <NumberStepperInput ariaLabel="Поворот" value={Math.round(selectedElement.rotation)} onValueChange={(value) => updateElement(selectedElement.id, { rotation: value })} />
                       </label>
                       <label className="books-field">
                         <span className="books-field__label">Выравнивание</span>
