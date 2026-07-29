@@ -41,10 +41,11 @@ const metricColors = {
 };
 
 async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { credentials: "include" });
-  const data = (await response.json()) as T & { error?: string };
+  const response = await fetch(url, { credentials: "include", cache: "no-store" });
+  const data = (await response.json()) as T & { error?: string; requestId?: string };
   if (!response.ok) {
-    throw new Error(data.error || "Request failed.");
+    const requestSuffix = data.requestId ? ` (ID: ${data.requestId})` : "";
+    throw new Error(`Не удалось загрузить аналитику${requestSuffix}`);
   }
   return data;
 }
@@ -635,6 +636,7 @@ export default function AnalyticsAdminPage() {
     try {
       setPayload(await fetchJson<AnalyticsAdminPayload>(`/api/admin/analytics/overview?period=${selectedPeriod}`));
     } catch (loadError) {
+      setPayload(null);
       setError(loadError instanceof Error ? loadError.message : "Не удалось загрузить аналитику.");
     } finally {
       setLoading(false);
@@ -666,18 +668,32 @@ export default function AnalyticsAdminPage() {
         <header className="analytics-header">
           <div>
             <h1>Analytics</h1>
-            <p>Админский dashboard LapLapLa: продуктовые метрики, контент, воронки, качество данных и экспорт из Supabase `analytics_events_normalized` с fallback на `analytics_events`.</p>
+            <p>Админский dashboard LapLapLa: продуктовые метрики, контент, воронки, качество данных и экспорт из Supabase `analytics_events`.</p>
           </div>
           <button className="analytics-button" type="button" onClick={() => void loadAnalytics(period)} disabled={loading}>
             Обновить
           </button>
         </header>
 
-        {error ? <div className="analytics-error">{error}</div> : null}
+        {error ? (
+          <div className="analytics-error" role="alert">
+            <div>{error}</div>
+            <button className="analytics-button" type="button" onClick={() => void loadAnalytics(period)} disabled={loading}>
+              Повторить загрузку
+            </button>
+          </div>
+        ) : null}
         {loading && !payload ? <EmptyState text="Загружаю аналитику..." /> : null}
 
         {payload ? (
           <>
+            <div className="analytics-loading-line">
+              Обновлено: {new Intl.DateTimeFormat("ru-RU", {
+                dateStyle: "medium",
+                timeStyle: "short",
+                timeZone: "Asia/Jerusalem",
+              }).format(new Date(payload.generatedAt))} (Израиль)
+            </div>
             <div className="analytics-mode-row">
               <div className="analytics-mode-stack">
                 <div className="analytics-tabs">

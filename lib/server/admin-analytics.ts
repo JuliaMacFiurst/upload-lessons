@@ -34,7 +34,7 @@ type NormalizedEvent = {
 
 type LoadedAnalyticsRows = {
   rows: NormalizedEvent[];
-  source: "analytics_events_normalized" | "analytics_events";
+  source: "analytics_events";
 };
 
 export type AnalyticsPeriodKey = "7d" | "14d";
@@ -318,7 +318,7 @@ function normalizeLanguage(value: string | null) {
   return lowered;
 }
 
-function normalizeEvent(row: AnalyticsRawRow): NormalizedEvent {
+export function normalizeEvent(row: AnalyticsRawRow): NormalizedEvent {
   const metadata = asObject(row.metadata);
   const properties = asObject(row.properties);
   const originalEventName = stringValue(row.raw_event_name, row.event_name) || "unknown";
@@ -358,7 +358,7 @@ function normalizeEvent(row: AnalyticsRawRow): NormalizedEvent {
   };
 }
 
-function rowsInRange(rows: NormalizedEvent[], start: Date, end: Date) {
+export function rowsInRange(rows: NormalizedEvent[], start: Date, end: Date) {
   const startMs = start.getTime();
   const endMs = end.getTime();
   return rows.filter((row) => row.createdMs >= startMs && row.createdMs < endMs);
@@ -1132,9 +1132,9 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
   return lines.join("\n");
 }
 
-async function queryAnalyticsRows(supabase: SupabaseClient, tableName: "analytics_events_normalized" | "analytics_events", start: Date, end: Date) {
+async function queryAnalyticsRows(supabase: SupabaseClient, start: Date, end: Date) {
   return supabase
-    .from(tableName)
+    .from("analytics_events")
     .select("*")
     .gte("created_at", start.toISOString())
     .lt("created_at", end.toISOString())
@@ -1143,21 +1143,30 @@ async function queryAnalyticsRows(supabase: SupabaseClient, tableName: "analytic
 }
 
 async function loadRows(supabase: SupabaseClient, start: Date, end: Date): Promise<LoadedAnalyticsRows> {
-  const normalized = await queryAnalyticsRows(supabase, "analytics_events_normalized", start, end);
-  if (!normalized.error) {
-    return {
-      rows: ((normalized.data || []) as AnalyticsRawRow[]).map(normalizeEvent).filter((row) => Number.isFinite(row.createdMs)),
-      source: "analytics_events_normalized",
-    };
-  }
-
-  const raw = await queryAnalyticsRows(supabase, "analytics_events", start, end);
+  const raw = await queryAnalyticsRows(supabase, start, end);
   if (raw.error) {
     throw raw.error;
   }
 
+  const rows = ((raw.data || []) as AnalyticsRawRow[])
+    .map(normalizeEvent)
+    .filter((row) => Number.isFinite(row.createdMs));
+  if (process.env.NODE_ENV === "development") {
+    console.info("[admin-analytics] safe query breakdown", {
+      source: "analytics_events",
+      rangeStart: start.toISOString(),
+      rangeEndExclusive: end.toISOString(),
+      rowsAfterDateFilter: raw.data?.length || 0,
+      rowsAfterHostnameFilter: raw.data?.length || 0,
+      rowsAfterBotAdminFilter: raw.data?.length || 0,
+      rowsAfterParsing: rows.length,
+      hostnameFilterApplied: false,
+      botAdminFilterApplied: false,
+    });
+  }
+
   return {
-    rows: ((raw.data || []) as AnalyticsRawRow[]).map(normalizeEvent).filter((row) => Number.isFinite(row.createdMs)),
+    rows,
     source: "analytics_events",
   };
 }
@@ -1188,11 +1197,6 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
       description: "analytics_events очищается примерно через 15 дней. До реально заполняемой analytics_daily_summary доступны только 7 и 14 дней.",
       severity: "warning" as const,
     },
-    ...(loaded.source === "analytics_events" ? [{
-      title: "analytics_events_normalized недоступен",
-      description: "Админка использует fallback на raw analytics_events и кодовую нормализацию. Проверь materialized view public.analytics_events_normalized.",
-      severity: "warning" as const,
-    }] : []),
   ];
   const growth = buildGrowth(currentRows, periodStart, days);
 
