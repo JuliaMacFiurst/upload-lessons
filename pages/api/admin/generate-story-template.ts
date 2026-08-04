@@ -383,7 +383,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     const message = error instanceof Error ? error.message : "Failed to generate story template.";
-    return res.status(message === "Unauthorized" ? 401 : 500).json({
+    return res.status(error instanceof Error && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500).json({
       error: message === "Unauthorized" ? message : "Story generation failed",
       ...(process.env.NODE_ENV === "development" && error instanceof Error
         ? { details: error.message }

@@ -22,6 +22,6 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: error.issues[0]?.message ?? "Validation failed." });
     }
     const message = error instanceof Error ? error.message : "Failed to save explanation.";
-    return res.status(message === "Unauthorized" ? 401 : 500).json({ error: message });
+    return res.status(error instanceof Error && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500).json({ error: message });
   }
 }

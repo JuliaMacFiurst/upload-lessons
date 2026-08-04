@@ -16,7 +16,9 @@ export class AdminSessionError extends Error {
 }
 
 function getAllowedAdminEmails(): string[] {
-  return (process.env.ADMIN_EMAIL ?? "")
+  const raw = process.env.ADMIN_EMAILS ?? process.env.ADMIN_EMAIL ?? "";
+
+  return raw
     .split(",")
     .map((email) => email.trim().toLowerCase())
     .filter(Boolean);
@@ -37,10 +39,33 @@ export function isAllowedAdminEmail(email: string | null | undefined): boolean {
 
 export function getServiceSupabaseClient(): SupabaseClient {
   if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-    throw new AdminSessionError("Analytics service is not configured.", 500);
+    throw new AdminSessionError("Server configuration error", 500);
   }
 
   return createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+}
+
+export function getAdminSessionErrorStatus(error: unknown): 401 | 403 | 500 {
+  return error instanceof AdminSessionError ? error.statusCode : 500;
+}
+
+export function getAdminSessionErrorMessage(error: unknown): string {
+  const status = getAdminSessionErrorStatus(error);
+  if (status === 401) return "Unauthorized";
+  if (status === 403) return "Forbidden";
+  return "Server configuration error";
+}
+
+export function assertAdminUser(
+  user: { email?: string | null } | null,
+  authError?: unknown,
+): void {
+  if (authError || !user) {
+    throw new AdminSessionError("Unauthorized", 401);
+  }
+  if (!isAllowedAdminEmail(user.email)) {
+    throw new AdminSessionError("Forbidden", 403);
+  }
 }
 
 export async function requireAdminSession(
@@ -53,12 +78,7 @@ export async function requireAdminSession(
     error,
   } = await sessionClient.auth.getUser();
 
-  if (error || !user) {
-    throw new AdminSessionError("Unauthorized", 401);
-  }
-  if (!isAllowedAdminEmail(user.email)) {
-    throw new AdminSessionError("Forbidden", 403);
-  }
+  assertAdminUser(user, error);
 
   return getServiceSupabaseClient();
 }

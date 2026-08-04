@@ -1,5 +1,9 @@
 import type { NextApiRequest, NextApiResponse } from "next";
-import { requireAdminSession } from "../../../lib/server/admin-session";
+import {
+  getAdminSessionErrorMessage,
+  getAdminSessionErrorStatus,
+  requireAdminSession,
+} from "../../../lib/server/admin-session";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== "GET") {
@@ -9,9 +13,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     await requireAdminSession(req, res);
-    return res.status(200).json({ ok: true });
+    return res.status(200).json({ authenticated: true, authorized: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unauthorized";
-    return res.status(message === "Unauthorized" ? 401 : 500).json({ error: message });
+    const status = getAdminSessionErrorStatus(error);
+    return res.status(status).json({
+      authenticated: status !== 401,
+      authorized: false,
+      error: getAdminSessionErrorMessage(error),
+    });
   }
 }

@@ -334,7 +334,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     supabase = await requireAdminSession(req, res);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unauthorized";
-    return res.status(message === "Unauthorized" ? 401 : 500).json({ error: message });
+    return res.status(error instanceof Error && "statusCode" in error && typeof error.statusCode === "number" ? error.statusCode : 500).json({ error: message });
   }
 
   if (req.method === "GET") {
