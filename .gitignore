@@ -60,3 +60,6 @@ logs
 
 # VSCode
 .vscode/
+
+# Local pilot reports
+.pilot-reports/
