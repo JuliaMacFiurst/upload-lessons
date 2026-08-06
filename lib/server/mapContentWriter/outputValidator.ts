@@ -1,3 +1,13 @@
+import {
+  validateRussianLanguagePurity,
+  DEFAULT_LATIN_ALLOWLIST,
+  type PreWriteValidationResult,
+} from "../ai/languageGuard.ts";
+import {
+  mapStoryCandidateBuilder,
+  validateMapStoryCandidateSchema,
+} from "./candidateBuilder.ts";
+
 export type ValidationResult = {
   isValid: boolean;
   isContractTestReport: boolean;
@@ -7,6 +17,7 @@ export type ValidationResult = {
   errors: string[];
   warnings: string[];
   parsedData: unknown | null;
+  languageViolations?: LanguageViolation[];
 };
 
 export type CandidateItem = {
@@ -15,19 +26,46 @@ export type CandidateItem = {
   content: string;
 };
 
+export type LanguageViolation = {
+  stopId: "STOP-LANG-01";
+  offendingTokens: string[];
+  excerpts: string[];
+  message: string;
+};
+
+export {
+  validateRussianLanguagePurity,
+  DEFAULT_LATIN_ALLOWLIST,
+  type PreWriteValidationResult,
+};
+
+/**
+ * Standalone Pre-Write Validator for future Admin API write endpoints.
+ * Blocks saves to Supabase map_stories table if STOP-LANG-01 occurs.
+ */
+export function validatePreWriteStoryContent(
+  content: string,
+  customAllowlist: string[] = []
+): PreWriteValidationResult {
+  return validateRussianLanguagePurity(content, customAllowlist);
+}
+
 /**
  * Validates the raw model output against the Output Contract rules:
  * - Valid JSON array or Contract Test Report
  * - Exactly 3 keys per object: map_type, target_id, content
  * - Hard word range 80–140
  * - Emoji limit (max 1 in 1st sentence)
+ * - Language Purity check (STOP-LANG-01)
  */
 export function validatePilotOutput(
   rawOutput: string,
-  inputTargets: Array<{ target_id: string; map_type: string }>
+  inputTargets: Array<{ target_id: string; map_type: string }>,
+  customAllowlist: string[] = []
 ): ValidationResult {
   const errors: string[] = [];
   const warnings: string[] = [];
+  const languageViolations: LanguageViolation[] = [];
   let isContractTestReport = false;
   let isCandidateJson = false;
   let parsedData: unknown = null;
@@ -113,21 +151,15 @@ export function validatePilotOutput(
       return;
     }
 
-    const actualKeys = Object.keys(item).sort();
-
-    // Check exactly 3 keys
-    if (
-      actualKeys.length !== 3 ||
-      actualKeys.join(",") !== expectedKeys.join(",")
-    ) {
-      itemErrors.push(
-        `Item [${index}] does not have exactly 3 keys (map_type, target_id, content). Actual keys: [${actualKeys.join(", ")}].`
-      );
+    // 1. Build and validate candidate against verified Importer contract (STOP-SCHEMA-01)
+    const schemaValidation = validateMapStoryCandidateSchema(item);
+    if (!schemaValidation.isValid && schemaValidation.message) {
+      itemErrors.push(schemaValidation.message);
     }
 
-    const mapType = item.map_type;
-    const targetId = item.target_id;
-    const content = item.content;
+    const mapType = String(item.map_type ?? "");
+    const targetId = String(item.target_id ?? "");
+    const content = String(item.content ?? "");
 
     // Check target_id character-for-character
     const expectedTarget = inputTargets[index]?.target_id;
@@ -137,10 +169,22 @@ export function validatePilotOutput(
       );
     }
 
-    // Check content text properties
+    // Check content text properties & STOP-LANG-01
     if (typeof content !== "string" || content.trim().length === 0) {
       itemErrors.push(`Item [${index}] content is empty or missing.`);
     } else {
+      // STOP-LANG-01 Language Purity Validation
+      const purityResult = validateRussianLanguagePurity(content, customAllowlist);
+      if (!purityResult.isValid && purityResult.message) {
+        itemErrors.push(purityResult.message);
+        languageViolations.push({
+          stopId: "STOP-LANG-01",
+          offendingTokens: purityResult.offendingTokens,
+          excerpts: purityResult.excerpts,
+          message: purityResult.message,
+        });
+      }
+
       // Word count check
       const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
       if (wordCount < 80 || wordCount > 140) {
@@ -184,5 +228,6 @@ export function validatePilotOutput(
     errors,
     warnings,
     parsedData,
+    languageViolations,
   };
 }

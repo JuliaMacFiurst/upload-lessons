@@ -9,6 +9,10 @@
 
 Манифест является **маршрутизатором**. Подробные описания вынесены в специализированные документы:
 
+- 🤖 **Единый Диспетчер AI-ОС**: [`.agents/AGENTS.md`](.agents/AGENTS.md) — единственный входной роутер для любого нового AI-агента (`POLICY`).
+- 🧭 **Реестр Навыков AI-ОС**: [`.agents/registry.json`](.agents/registry.json) — центральный реестр зарегистрированных AI-навыков (`POLICY`).
+- 🏗️ **Архитектура AI OS v2.0.0**: [`architecture/ai-operating-system.md`](architecture/ai-operating-system.md) — универсальная платформа AI-фабрик (`DESIGN`).
+- 📦 **Каталог Общих AI Модулей**: [`architecture/shared-modules.md`](architecture/shared-modules.md) — общие сервисы безопасности и качества (`DESIGN`).
 - 📖 **Глоссарий терминов**: [`glossary.md`](glossary.md) — точные определения базовых понятий (`POLICY`).
 - ⚖️ **Стандарт доказательности**: [`evidence-levels.md`](evidence-levels.md) — категории `STATE`, `IMPLEMENTATION`, `POLICY`, `DESIGN`, `OPEN`.
 - ⚙️ **Приложения и Потоки**: [`architecture/applications.md`](architecture/applications.md) — границы `upload-lessons` и `capybara_tales`.

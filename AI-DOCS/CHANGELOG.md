@@ -4,6 +4,39 @@
 
 ---
 
+## [2.1.0] — 2026-08-06
+
+### Добавлено (Universal Schema Layer & STOP-SCHEMA-01)
+- Добавлен универсальный Слой Схем (`lib/server/ai/schemaLayer.ts`) с реестром канонических таблиц СУБД (`map_stories`, `content_translations`, `books`). [`IMPLEMENTATION`]
+- Введено новое стоп-условие **`STOP-SCHEMA-01`** для блокировки кандидатов, не соответствующих обязательным колонкам, типам данных и non-null ограничениям целевой таблицы СУБД. [`POLICY`]
+- Добавлены `CandidateBuilder` и `validateCandidateSchema()` для детерминированного построения кандидатов и разделения ролей (Skill генерирует данные, Candidate Builder сериализует, Schema Validator гарантирует точность). [`IMPLEMENTATION`]
+- Проведён аудит `Map Content Writer`: кандидат приведён к канонической схеме таблицы `map_stories` (`type`, `target_id`, `language`, `content`), устранив любую зависимость от поведения LLM-промптов. [`IMPLEMENTATION`]
+
+---
+
+## [2.0.0] — 2026-08-06
+
+### Создано (LapLapLa AI Operating System v2.0.0)
+- Создан единый Реестр Навыков [`.agents/registry.json`](file:///Users/julia_mac/AI-Workspace/dev/upload-lessons/.agents/registry.json) для декларативной регистрации всех навыков репозитория (`map-content-writer`, `multi-language-translator`, `book-database-builder`, `map-slide-curator`, `voice-generator`). [`POLICY`]
+- Создан единый Роутер AI Operating System в [`.agents/AGENTS.md`](file:///Users/julia_mac/AI-Workspace/dev/upload-lessons/.agents/AGENTS.md) и [`AGENTS.md`](file:///Users/julia_mac/AI-Workspace/dev/upload-lessons/AGENTS.md) для автономной маршрутизации коротких команд пользователя в новых сессиях Antigravity IDE. [`POLICY`]
+- Создан Каталог Общих AI Модулей в [`lib/server/ai/`](file:///Users/julia_mac/AI-Workspace/dev/upload-lessons/lib/server/ai/): `languageGuard.ts`, `stopConditions.ts`, `confidenceScorer.ts`, `router.ts`, `queueEngine.ts`, `pipeline/index.ts`. [`IMPLEMENTATION`]
+- Спроектирован универсальный Queue Engine в `lib/server/ai/queue/queueEngine.ts` с поддержкой Jobs, Batches, Checkpoints, Resume, Retry и локального сохранения состояния в `.agents/jobs/`. [`DESIGN`]
+- Добавлена детерминированная модель оценки уверенности Production Confidence Score Engine ($CS = S_{\text{fact}} \times S_{\text{lang}} \times S_{\text{dod}} \times S_{\text{retry}}$). [`DESIGN`]
+- Создана архитектурная спецификация [`AI-DOCS/architecture/ai-operating-system.md`](file:///Users/julia_mac/AI-Workspace/dev/upload-lessons/AI-DOCS/architecture/ai-operating-system.md) и [`AI-DOCS/architecture/shared-modules.md`](file:///Users/julia_mac/AI-Workspace/dev/upload-lessons/AI-DOCS/architecture/shared-modules.md). [`DESIGN`]
+
+---
+
+## [1.6.0] — 2026-08-06
+
+### Добавлено (Russian Language Purity Guard — STOP-LANG-01)
+- Добавлено нормативное стоп-условие **`STOP-LANG-01`** для защиты русского контента от неавторизованных латинских слов и недопереводов (например: «rockie пороги», «beautiful остров», «flows»). [`POLICY`]
+- Зафиксировано правило однократного автоматического исправления (Self-Correction Retry) до Quality Gate. Если после ретрая неавторизованный Latin-токен сохраняется ➔ `STOP-LANG-01`, Candidate JSON не создается, а запись в СУБД блокируется. [`POLICY`]
+- Добавлена политика явных исключений (Allowlist Policy) для стандартных аббревиатур (`GPS`, `UNESCO`) и научных латинских названий. [`POLICY`]
+- В техническом валидаторе [`lib/server/mapContentWriter/outputValidator.ts`](file:///Users/julia_mac/AI-Workspace/dev/upload-lessons/lib/server/mapContentWriter/outputValidator.ts) реализована пословная токенизация и латинский валидатор `validateRussianLanguagePurity()` с двухуровневой защитой (Candidate validation + Pre-write validation). [`IMPLEMENTATION`]
+- Добавлены приёмочные тесты `TEST-ACC-11` (PASS) и состязательные тесты `TEST-ADV-07` (FAIL / Retry). [`POLICY`]
+
+---
+
 ## [1.5.0] — 2026-08-05
 
 ### Изменено (Official Skill Release: Map Content Writer v1.0.0 Promoted to PILOT)

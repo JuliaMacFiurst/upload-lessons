@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "version": "2.0.0",
+  "updatedAt": "2026-08-06T14:25:00Z",
+  "skills": {
+    "map-content-writer": {
+      "id": "map-content-writer",
+      "displayName": "Map Content Writer",
+      "version": "1.0.0",
+      "status": "PILOT",
+      "lifecycle": "PILOT",
+      "entry": ".agents/skills/map-content-writer/SKILL.md",
+      "contract": "AI-DOCS/skills/map-content-writer/skill-contract.md",
+      "validationRecord": "AI-DOCS/skills/map-content-writer/validation-record.md",
+      "ownerDecision": "AI-DOCS/skills/map-content-writer/owner-decision.md",
+      "owner": "Project Owner",
+      "mutation": "NO_WRITE",
+      "content": "PILOT_APPROVED",
+      "supportedLanguages": ["ru"],
+      "supportedCommands": [
+        "заполни карты",
+        "заполни сегодня карты",
+        "продолжи реки",
+        "напиши истории для карт",
+        "fill maps",
+        "generate map stories"
+      ]
+    },
+    "multi-language-translator": {
+      "id": "multi-language-translator",
+      "displayName": "Multi-Language Translator",
+      "version": "0.1.0",
+      "status": "SPECIFICATION",
+      "lifecycle": "SPECIFICATION",
+      "entry": ".agents/skills/multi-language-translator/SKILL.md",
+      "contract": "AI-DOCS/skills/multi-language-translator/skill-contract.md",
+      "validationRecord": "AI-DOCS/skills/multi-language-translator/validation-record.md",
+      "owner": "Project Owner",
+      "mutation": "NO_WRITE",
+      "content": "DRY_RUN_ONLY",
+      "supportedLanguages": ["en", "he"],
+      "supportedCommands": [
+        "переведи всё новое",
+        "переведи истории",
+        "translate stories"
+      ]
+    },
+    "book-database-builder": {
+      "id": "book-database-builder",
+      "displayName": "Book Database Builder",
+      "version": "0.1.0",
+      "status": "RESEARCH",
+      "lifecycle": "RESEARCH",
+      "entry": ".agents/skills/book-database-builder/SKILL.md",
+      "contract": "AI-DOCS/skills/book-database-builder/skill-contract.md",
+      "validationRecord": "AI-DOCS/skills/book-database-builder/validation-record.md",
+      "owner": "Project Owner",
+      "mutation": "NO_WRITE",
+      "content": "DRY_RUN_ONLY",
+      "supportedLanguages": ["ru"],
+      "supportedCommands": [
+        "добавь книги",
+        "создай базу книг",
+        "add books"
+      ]
+    },
+    "map-slide-curator": {
+      "id": "map-slide-curator",
+      "displayName": "Map Slide Image Curator",
+      "version": "0.1.0",
+      "status": "SPECIFICATION",
+      "lifecycle": "SPECIFICATION",
+      "entry": ".agents/skills/map-slide-curator/SKILL.md",
+      "contract": "AI-DOCS/skills/map-slide-curator/skill-contract.md",
+      "validationRecord": "AI-DOCS/skills/map-slide-curator/validation-record.md",
+      "owner": "Project Owner",
+      "mutation": "NO_WRITE",
+      "content": "DRY_RUN_ONLY",
+      "supportedLanguages": ["ru", "en"],
+      "supportedCommands": [
+        "подбери картинки",
+        "найди изображения для слайдов",
+        "curate slide images"
+      ]
+    },
+    "voice-generator": {
+      "id": "voice-generator",
+      "displayName": "Voice Generation Pipeline",
+      "version": "0.1.0",
+      "status": "SPECIFICATION",
+      "lifecycle": "SPECIFICATION",
+      "entry": ".agents/skills/voice-generator/SKILL.md",
+      "contract": "AI-DOCS/skills/voice-generator/skill-contract.md",
+      "validationRecord": "AI-DOCS/skills/voice-generator/validation-record.md",
+      "owner": "Project Owner",
+      "mutation": "NO_WRITE",
+      "content": "DRY_RUN_ONLY",
+      "supportedLanguages": ["ru", "en", "he"],
+      "supportedCommands": [
+        "создай озвучку",
+        "сгенерируй аудио",
+        "generate voice audio"
+      ]
+    }
+  }
+}

@@ -63,3 +63,6 @@ logs
 
 # Local pilot reports
 .pilot-reports/
+
+# Local AI scratch files
+scratch/
