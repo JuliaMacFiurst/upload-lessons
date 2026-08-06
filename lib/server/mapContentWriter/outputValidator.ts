@@ -7,6 +7,7 @@ import {
   mapStoryCandidateBuilder,
   validateMapStoryCandidateSchema,
 } from "./candidateBuilder.ts";
+import { validateOpenCTA } from "./ctaValidator.ts";
 
 export type ValidationResult = {
   isValid: boolean;
@@ -183,6 +184,12 @@ export function validatePilotOutput(
           excerpts: purityResult.excerpts,
           message: purityResult.message,
         });
+      }
+
+      // Open CTA Validation
+      const ctaRes = validateOpenCTA(content);
+      if (!ctaRes.isValid && ctaRes.message) {
+        itemErrors.push(`Item [${index}] ${ctaRes.message}`);
       }
 
       // Word count check

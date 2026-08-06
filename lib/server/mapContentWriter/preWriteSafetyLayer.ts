@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { validateCandidateSchema, DB_TABLE_SCHEMAS } from "../ai/schemaLayer.ts";
 import { validateRussianLanguagePurity } from "../ai/languageGuard.ts";
+import { validateOpenCTA } from "./ctaValidator.ts";
 import {
   mapStoryCandidateBuilder,
   type MapStoryCandidate,
@@ -100,6 +101,12 @@ export async function validateMapStoryBeforeWrite(
   }
 
   // 6. Quality Guard & DoD checks (STOP-DOD-01)
+  const ctaRes = validateOpenCTA(content);
+  if (!ctaRes.isValid) {
+    stopConditions.push("STOP-DOD-01");
+    if (ctaRes.message) errors.push(ctaRes.message);
+  }
+
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   if (wordCount < 80 || wordCount > 140) {
     stopConditions.push("STOP-DOD-01");
