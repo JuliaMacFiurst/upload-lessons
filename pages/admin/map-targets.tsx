@@ -7,6 +7,7 @@ import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../components/AdminLogout";
 import { AdminTabs } from "../../components/AdminTabs";
 import { estimateMapTargetBatchCost } from "../../lib/ai/mapTargetGenerationProfile";
+import { AiDraftsReviewTable } from "../../components/AiDraftsReviewTable";
 
 type MapTargetStatusItem = {
   map_type: string;
@@ -27,7 +28,7 @@ type BulkMapStoryJsonItem = {
   content: string;
 };
 
-type FilterMode = "all" | "missing-story" | "missing-slides" | "ready";
+type FilterMode = "all" | "missing-story" | "missing-slides" | "ready" | "ai-drafts";
 const PAGE_SIZE = 100;
 
 function getResponseErrorMessage(raw: string, status: number): string {
@@ -680,11 +681,25 @@ export default function AdminMapTargetsPage() {
               >
                 Только готовые
               </button>
+              <button
+                type="button"
+                className={`map-targets-filter ${filter === "ai-drafts" ? "is-active" : ""}`}
+                style={filter === "ai-drafts" ? { backgroundColor: "#fff8e6", borderColor: "#f5a623", color: "#8a5700", fontWeight: 600 } : { backgroundColor: "#fffdf5", borderColor: "#ffe5b4" }}
+                onClick={() => setFilter("ai-drafts")}
+              >
+                🤖 AI-черновики
+              </button>
             </div>
           </div>
         </div>
 
-        <div className="map-targets-batch-bar">
+        {filter === "ai-drafts" ? (
+          <div style={{ padding: 20 }}>
+            <AiDraftsReviewTable onDraftApproved={() => void loadItems()} />
+          </div>
+        ) : (
+          <>
+            <div className="map-targets-batch-bar">
           <div className="map-targets-batch-bar__meta">
             <strong>Выбрано:</strong> {selectedItems.length}
             {batchEstimate ? (
@@ -940,6 +955,8 @@ export default function AdminMapTargetsPage() {
             </table>
           </div>
         ) : null}
+          </>
+        )}
       </section>
 
       <style jsx>{`

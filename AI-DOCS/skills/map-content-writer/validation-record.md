@@ -12,17 +12,17 @@
 - **Contract Version**: `1.0.0`
 - **Lifecycle Status**: `PILOT`
 - **Content Capability**: `PILOT_APPROVED`
-- **Mutation Capability (Mutation Grant)**: `NO_WRITE`
-- **Mutation Grant State**: `NO_WRITE`
-- **Mutation Grant Scope**: `Not applicable`
-- **Approved Write Endpoints**: `Not applicable`
+- **Mutation Capability (Mutation Grant)**: `NO_WRITE` (Restored after executing 1 limited batch of 5 items)
+- **First Limited Write Batch Execution**: 2026-08-06 (5 items created: IDs 1393, 1394, 1395, 1396, 1397, `is_approved = false`)
+- **Mutation Grant State**: `CONSUMED`
+- **Approved Write Endpoints**: `/api/admin/map-story` (INSERT_NEW_AI_DRAFT_ONLY mode)
 - **Environment**: Antigravity Workspace Skill (`.agents/skills/map-content-writer/SKILL.md`)
 - **Implementation Date**: 2026-08-05
 - **Promotion to PILOT Date**: 2026-08-05
 - **Implementer**: Antigravity AI (Pair Programming Assistant)
 - **Owner**: Julia / Project Owner
 - **Owner Release Decision**: [`owner-decision.md`](owner-decision.md) (Status: `APPROVED`)
-- **Next Review**: После завершения расширенного пилотирования Pilot B/C
+- **Next Review**: После проверки человеком созданных 5 черновиков в Admin UI
 
 ---
 

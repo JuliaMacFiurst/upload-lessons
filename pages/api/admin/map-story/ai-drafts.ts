@@ -1,0 +1,270 @@
+import type { NextApiRequest, NextApiResponse } from "next";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { requireAdminSession } from "@/lib/server/admin-session";
+import { sanitizeMapStoryContent } from "@/lib/server/mapTargets/sanitizeMapStoryContent";
+
+export type AiDraftItem = {
+  id: number | string;
+  type: string;
+  target_id: string;
+  title_ru?: string | null;
+  content: string;
+  created_at: string;
+  auto_generation_model: string | null;
+  is_approved: boolean;
+  auto_generated: boolean;
+  wordCount: number;
+};
+
+export type AiDraftsResponse = {
+  drafts: AiDraftItem[];
+  count: number;
+};
+
+export type ApproveBatchResponse = {
+  approved: number;
+  failed: number;
+  failures: Array<{ id: number | string; error: string }>;
+};
+
+async function loadAiDrafts(supabase: SupabaseClient): Promise<AiDraftItem[]> {
+  const { data: stories, error: storyError } = await supabase
+    .from("map_stories")
+    .select("id,type,target_id,content,created_at,auto_generation_model,is_approved,auto_generated")
+    .eq("language", "ru")
+    .eq("is_approved", false)
+    .eq("auto_generated", true)
+    .order("created_at", { ascending: false });
+
+  if (storyError) {
+    throw new Error(`Failed to load AI drafts: ${storyError.message}`);
+  }
+
+  const draftStories = stories ?? [];
+  if (draftStories.length === 0) {
+    return [];
+  }
+
+  const { data: targets, error: targetError } = await supabase
+    .from("map_targets")
+    .select("map_type,target_id,title_ru");
+
+  if (targetError) {
+    throw new Error(`Failed to load map targets: ${targetError.message}`);
+  }
+
+  const titleMap = new Map<string, string>();
+  (targets ?? []).forEach((t) => {
+    if (t.title_ru) {
+      titleMap.set(`${t.map_type}::${t.target_id}`, t.title_ru);
+    }
+  });
+
+  return draftStories.map((s) => {
+    const mapType = s.type ?? "";
+    const targetId = s.target_id ?? "";
+    const content = s.content ?? "";
+    const titleRu = titleMap.get(`${mapType}::${targetId}`) || null;
+    const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
+
+    return {
+      id: s.id,
+      type: mapType,
+      target_id: targetId,
+      title_ru: titleRu,
+      content,
+      created_at: s.created_at ?? new Date().toISOString(),
+      auto_generation_model: s.auto_generation_model ?? "antigravity-ide",
+      is_approved: false,
+      auto_generated: true,
+      wordCount,
+    };
+  });
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  let supabase: SupabaseClient;
+
+  try {
+    supabase = await requireAdminSession(req, res);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unauthorized";
+    return res
+      .status(
+        error instanceof Error && "statusCode" in error && typeof error.statusCode === "number"
+          ? error.statusCode
+          : 500
+      )
+      .json({ error: message });
+  }
+
+  if (req.method === "GET") {
+    try {
+      const drafts = await loadAiDrafts(supabase);
+      return res.status(200).json({ drafts, count: drafts.length } satisfies AiDraftsResponse);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to load AI drafts.";
+      return res.status(500).json({ error: message });
+    }
+  }
+
+  if (req.method === "POST") {
+    const action = typeof req.body?.action === "string" ? req.body.action : "";
+
+    // 1. APPROVE_AI_DRAFT
+    if (action === "APPROVE_AI_DRAFT") {
+      const id = req.body?.id;
+      if (id === undefined || id === null) {
+        return res.status(400).json({ error: "Draft id is required." });
+      }
+
+      const { data, error } = await supabase
+        .from("map_stories")
+        .update({ is_approved: true })
+        .eq("id", id)
+        .eq("is_approved", false)
+        .eq("auto_generated", true)
+        .select("id")
+        .maybeSingle();
+
+      if (error) {
+        return res.status(500).json({ error: `Failed to approve draft: ${error.message}` });
+      }
+
+      if (!data) {
+        const { data: existing } = await supabase
+          .from("map_stories")
+          .select("id, is_approved")
+          .eq("id", id)
+          .maybeSingle();
+
+        if (existing && existing.is_approved === true) {
+          return res.status(200).json({ success: true, approvedId: id, alreadyApproved: true });
+        }
+
+        return res.status(404).json({ error: "Draft story not found or already deleted." });
+      }
+
+      return res.status(200).json({ success: true, approvedId: id });
+    }
+
+    // 2. APPROVE_AI_DRAFT_BATCH
+    if (action === "APPROVE_AI_DRAFT_BATCH") {
+      const ids = req.body?.ids;
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({ error: "Draft ids array is required." });
+      }
+
+      const failures: Array<{ id: number | string; error: string }> = [];
+      let approved = 0;
+
+      for (const id of ids) {
+        try {
+          const { data, error } = await supabase
+            .from("map_stories")
+            .update({ is_approved: true })
+            .eq("id", id)
+            .eq("is_approved", false)
+            .eq("auto_generated", true)
+            .select("id")
+            .maybeSingle();
+
+          if (error) {
+            failures.push({ id, error: error.message });
+          } else if (!data) {
+            const { data: existing } = await supabase
+              .from("map_stories")
+              .select("id, is_approved")
+              .eq("id", id)
+              .maybeSingle();
+
+            if (existing && existing.is_approved === true) {
+              approved += 1;
+            } else {
+              failures.push({ id, error: "Draft not found or deleted" });
+            }
+          } else {
+            approved += 1;
+          }
+        } catch (err) {
+          failures.push({
+            id,
+            error: err instanceof Error ? err.message : "Failed to approve draft",
+          });
+        }
+      }
+
+      return res.status(200).json({
+        approved,
+        failed: failures.length,
+        failures,
+      } satisfies ApproveBatchResponse);
+    }
+
+    // 3. UPDATE_AI_DRAFT_CONTENT
+    if (action === "UPDATE_AI_DRAFT_CONTENT") {
+      const id = req.body?.id;
+      const rawContent = typeof req.body?.content === "string" ? req.body.content : "";
+
+      if (id === undefined || id === null) {
+        return res.status(400).json({ error: "Draft id is required." });
+      }
+
+      const content = sanitizeMapStoryContent(rawContent);
+      if (!content.trim()) {
+        return res.status(400).json({ error: "Draft content cannot be empty." });
+      }
+
+      const { data, error } = await supabase
+        .from("map_stories")
+        .update({ content })
+        .eq("id", id)
+        .eq("is_approved", false)
+        .eq("auto_generated", true)
+        .select("id,content")
+        .maybeSingle();
+
+      if (error) {
+        return res.status(500).json({ error: `Failed to update draft: ${error.message}` });
+      }
+
+      if (!data) {
+        return res.status(404).json({ error: "Draft story not found or already approved." });
+      }
+
+      return res.status(200).json({ success: true, id, content });
+    }
+
+    // 4. DELETE_AI_DRAFT
+    if (action === "DELETE_AI_DRAFT") {
+      const id = req.body?.id;
+      if (id === undefined || id === null) {
+        return res.status(400).json({ error: "Draft id is required." });
+      }
+
+      const { data, error } = await supabase
+        .from("map_stories")
+        .delete()
+        .eq("id", id)
+        .eq("is_approved", false)
+        .eq("auto_generated", true)
+        .select("id")
+        .maybeSingle();
+
+      if (error) {
+        return res.status(500).json({ error: `Failed to delete draft: ${error.message}` });
+      }
+
+      if (!data) {
+        return res.status(404).json({ error: "Draft story not found or already approved." });
+      }
+
+      return res.status(200).json({ success: true, deletedId: id });
+    }
+
+    return res.status(400).json({ error: "Unknown action." });
+  }
+
+  res.setHeader("Allow", "GET, POST");
+  return res.status(405).json({ error: "Method not allowed" });
+}

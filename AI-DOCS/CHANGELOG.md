@@ -4,6 +4,17 @@
 
 ---
 
+## [2.2.0] — 2026-08-06
+
+### Выполнено (First Limited Write Batch Execution)
+- На основании официального разрешения Владельца Проекта выдан одноразовый **Mutation Grant** (`USER_CONFIRMED_WRITE`, scope: 5 items max). [`POLICY`]
+- Реализована серверная заслонка **`INSERT_NEW_AI_DRAFT_ONLY`** в `pages/api/admin/map-story.ts`, гарантирующая отсутствие `.update()`, принудительный черновой статус `is_approved = false` и авто-метаданные `auto_generated = true`, `auto_generation_model = "antigravity-ide"`. [`IMPLEMENTATION`]
+- Выполнена первая реальная пакетная запись 5 подготовленных историй (`sea/Bransfield Strait`, `physic/Island Mafia I.`, `weather/Godavari–Krishna mangroves`, `sea/Golfo de Panamá`, `sea/Monterey Bay`). Созданы записи с ID `1393`, `1394`, `1395`, `1396`, `1397`. [`IMPLEMENTATION`]
+- Проведена **Read-After-Write Verification** (100% сопоставление полей, посимвольное равенство `target_id`, отсутствие дубликатов, подтверждены черновиковые метаданные). [`VERIFICATION`]
+- Одноразовый Mutation Grant переведён в статус **`CONSUMED`**, операционный режим навыка возвращен в статус **`NO_WRITE`**. [`POLICY`]
+
+---
+
 ## [2.1.0] — 2026-08-06
 
 ### Добавлено (Universal Schema Layer & STOP-SCHEMA-01)
