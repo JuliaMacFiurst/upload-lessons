@@ -4,6 +4,19 @@
 
 ---
 
+## [2.3.0] — 2026-08-07
+
+### Внедрено (Database-First Content Queue & Hard Unique Constraint)
+- Создана миграция СУБД `supabase/migrations/20260807000100_map_story_database_first_queue.sql`:
+  - Вычисляемая колонка `story_status text GENERATED ALWAYS AS (CASE WHEN is_approved = true THEN 'ready' ELSE 'draft' END) STORED` в `map_stories`. [`IMPLEMENTATION`]
+  - Аппаратная защита `UNIQUE INDEX/CONSTRAINT` на `(type, target_id, language)` в `map_stories`. [`IMPLEMENTATION`]
+  - СУБД VIEW `map_story_generation_queue` с анти-джойном `NOT EXISTS`, полностью устранившая зависимость от клиентской пагинации и лимита 1000 строк. [`IMPLEMENTATION`]
+- Обновлен конвейер `Map Content Writer` (`lib/server/mapContentWriter/pilotRunner.ts`), переведенный на работу с `map_story_generation_queue`. [`IMPLEMENTATION`]
+- Добавлен интеграционный и регрессионный тест-сюит `tests/map-story-queue.test.ts` (61 тест PASS). [`VERIFICATION`]
+- Закреплен инвариант **`Database-First Work Selection`** в `AGENTS.md`, `.agents/AGENTS.md` и `SKILL.md`. [`POLICY`]
+
+---
+
 ## [2.2.0] — 2026-08-06
 
 ### Выполнено (First Limited Write Batch Execution)

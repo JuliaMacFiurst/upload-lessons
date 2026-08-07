@@ -58,7 +58,7 @@ All Workspace Skills are registered in [`.agents/registry.json`](registry.json).
 
 | Skill ID | Display Name | Lifecycle Status | Entry File | Mutation Capability | Content Capability | Supported Commands |
 |---|---|:---:|---|:---:|:---:|---|
-| `map-content-writer` | Map Content Writer | **`PILOT`** | [`.agents/skills/map-content-writer/SKILL.md`](skills/map-content-writer/SKILL.md) | `NO_WRITE` | `PILOT_APPROVED` | *"Заполни 50 карт"*, *"Продолжи реки"*, *"Fill maps"* |
+| `map-content-writer` | Map Content Writer | **`PRODUCTION_READY`** | [`.agents/skills/map-content-writer/SKILL.md`](skills/map-content-writer/SKILL.md) | `ADMIN_API_ONLY` | `FACTORY_AUTOMATED_WRITE` | *"Заполни 50 карт"*, *"Продолжи реки"*, *"Fill maps"* |
 | `multi-language-translator` | Multi-Language Translator | `SPECIFICATION` | `.agents/skills/multi-language-translator/SKILL.md` | `NO_WRITE` | `DRY_RUN_ONLY` | *"Переведи всё новое"*, *"Translate stories"* |
 | `book-database-builder` | Book Database Builder | `RESEARCH` | `.agents/skills/book-database-builder/SKILL.md` | `NO_WRITE` | `DRY_RUN_ONLY` | *"Добавь 20 книг"*, *"Add books"* |
 | `map-slide-curator` | Map Slide Image Curator | `SPECIFICATION` | `.agents/skills/map-slide-curator/SKILL.md` | `NO_WRITE` | `DRY_RUN_ONLY` | *"Подбери картинки"*, *"Curate slide images"* |
@@ -106,3 +106,4 @@ When a user provides a short command prompt, the AI OS Router matches the prompt
 2. 🛡️ **No Paid External LLM APIs**: All skill executions MUST run natively inside the Antigravity IDE session using the built-in subscription model. No API keys from `.env.local` or external API calls (Gemini, OpenAI, OpenRouter, Anthropic) are permitted. [`POLICY`]
 3. 🛡️ **Immutable Target Contract**: `target_id` values MUST be preserved character-for-character without trim, lowercase, slugify, or transliteration. [`POLICY`]
 4. 🛡️ **Discrepancy Rule**: If code, database, or documentation conflict, the agent MUST immediately stop (`STOP-DOCS-01`) and inform the user. [`POLICY`]
+5. 🛡️ **Database-First Work Selection**: The database generation queue (`map_story_generation_queue`) is the sole source of truth for pending work. AI agents MUST NOT reconstruct pending work by downloading `map_stories` and filtering targets client-side. [`POLICY`]

@@ -16,9 +16,43 @@ export type AiDraftItem = {
   wordCount: number;
 };
 
+export type RejectedItemDiagnostic = {
+  target_id: string;
+  map_type: string;
+  validator: string;
+  reason: string;
+  description: string;
+};
+
+export type BatchDiagnostics = {
+  batchId: string;
+  requested: number;
+  inserted: number;
+  rejected: number;
+  duplicate: number;
+  dbErrors: number;
+  durationMs: number;
+  rejectionBreakdown: Record<string, number>;
+  rejectedItems: RejectedItemDiagnostic[];
+  createdAt: string;
+};
+
+export type ContentFactoryStats = {
+  pendingStories: number;
+  pendingByMapType: Record<string, number>;
+  draftsWaitingReview: number;
+  readyStories: number;
+  createdToday: number;
+  completedStories: number;
+  totalStories: number;
+  progressPercent: number;
+  latestBatch?: BatchDiagnostics | null;
+};
+
 export type AiDraftsResponse = {
   drafts: AiDraftItem[];
   count: number;
+  stats?: ContentFactoryStats;
 };
 
 export type ApproveBatchResponse = {
@@ -26,6 +60,93 @@ export type ApproveBatchResponse = {
   failed: number;
   failures: Array<{ id: number | string; error: string }>;
 };
+
+async function loadContentFactoryStats(supabase: SupabaseClient): Promise<ContentFactoryStats> {
+  const { data: queueItems, count: pendingCount } = await supabase
+    .from("map_story_generation_queue")
+    .select("map_type", { count: "exact" });
+
+  const pendingByMapType: Record<string, number> = {};
+  (queueItems ?? []).forEach((item) => {
+    const type = item.map_type || "other";
+    pendingByMapType[type] = (pendingByMapType[type] || 0) + 1;
+  });
+
+  const { count: draftsCount } = await supabase
+    .from("map_stories")
+    .select("id", { count: "exact", head: true })
+    .eq("language", "ru")
+    .eq("is_approved", false)
+    .eq("auto_generated", true);
+
+  const { count: readyCount } = await supabase
+    .from("map_stories")
+    .select("id", { count: "exact", head: true })
+    .eq("language", "ru")
+    .eq("is_approved", true);
+
+  const { count: totalRuStories } = await supabase
+    .from("map_stories")
+    .select("id", { count: "exact", head: true })
+    .eq("language", "ru");
+
+  const startOfDay = new Date();
+  startOfDay.setUTCHours(0, 0, 0, 0);
+
+  const { count: createdTodayCount } = await supabase
+    .from("map_stories")
+    .select("id", { count: "exact", head: true })
+    .eq("language", "ru")
+    .eq("auto_generated", true)
+    .gte("created_at", startOfDay.toISOString());
+
+  const pending = pendingCount ?? 0;
+  const completed = totalRuStories ?? 0;
+  const total = completed + pending;
+  const progressPercent = total > 0 ? Math.round((completed / total) * 100) : 0;
+
+  let latestBatch: BatchDiagnostics | null = null;
+  try {
+    // 1. Fetch strictly the latest completed production generation batch log
+    const { data: batchRow } = await supabase
+      .from("map_story_batch_logs")
+      .select("batch_id, requested, inserted, rejected, duplicate, db_errors, duration_ms, rejection_breakdown, rejected_items, created_at, operation, status")
+      .eq("operation", "generation")
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (batchRow) {
+      latestBatch = {
+        batchId: batchRow.batch_id ?? "",
+        requested: batchRow.requested ?? 0,
+        inserted: batchRow.inserted ?? 0,
+        rejected: batchRow.rejected ?? 0,
+        duplicate: batchRow.duplicate ?? 0,
+        dbErrors: batchRow.db_errors ?? 0,
+        durationMs: batchRow.duration_ms ?? 0,
+        rejectionBreakdown: (batchRow.rejection_breakdown as Record<string, number>) || {},
+        rejectedItems: (batchRow.rejected_items as RejectedItemDiagnostic[]) || [],
+        createdAt: batchRow.created_at ?? "",
+      };
+    }
+  } catch (err) {
+    latestBatch = null;
+  }
+
+  return {
+    pendingStories: pending,
+    pendingByMapType,
+    draftsWaitingReview: draftsCount ?? 0,
+    readyStories: readyCount ?? 0,
+    createdToday: createdTodayCount ?? 0,
+    completedStories: completed,
+    totalStories: total,
+    progressPercent,
+    latestBatch,
+  };
+}
 
 async function loadAiDrafts(supabase: SupabaseClient): Promise<AiDraftItem[]> {
   const { data: stories, error: storyError } = await supabase
@@ -100,8 +221,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === "GET") {
     try {
-      const drafts = await loadAiDrafts(supabase);
-      return res.status(200).json({ drafts, count: drafts.length } satisfies AiDraftsResponse);
+      const [drafts, stats] = await Promise.all([
+        loadAiDrafts(supabase),
+        loadContentFactoryStats(supabase),
+      ]);
+      return res.status(200).json({ drafts, count: drafts.length, stats } satisfies AiDraftsResponse);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load AI drafts.";
       return res.status(500).json({ error: message });

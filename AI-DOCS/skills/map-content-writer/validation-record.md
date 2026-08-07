@@ -10,15 +10,14 @@
 - **Skill Name**: `Map Content Writer`
 - **Skill Version**: `1.0.0`
 - **Contract Version**: `1.0.0`
-- **Lifecycle Status**: `PILOT`
-- **Content Capability**: `PILOT_APPROVED`
-- **Mutation Capability (Mutation Grant)**: `NO_WRITE` (Restored after executing 1 limited batch of 5 items)
-- **First Limited Write Batch Execution**: 2026-08-06 (5 items created: IDs 1393, 1394, 1395, 1396, 1397, `is_approved = false`)
-- **Mutation Grant State**: `CONSUMED`
-- **Approved Write Endpoints**: `/api/admin/map-story` (INSERT_NEW_AI_DRAFT_ONLY mode)
+- **Lifecycle Status**: `PRODUCTION_READY`
+- **Content Capability**: `FACTORY_AUTOMATED_WRITE`
+- **Mutation Capability (Mutation Grant)**: `ADMIN_API_ONLY` (Automated Database-First Queue Factory)
+- **Database-First Queue Production Test**: 2026-08-07 (100 items requested, 96 AI Drafts created: IDs 1398–1493, `story_status = 'draft'`, `is_approved = false`, Queue updated: 2365 ➔ 2269)
+- **Approved Write Endpoints**: `/api/admin/map-story` (staged_ai_draft mode, INSERT_NEW_AI_DRAFT_ONLY operation)
 - **Environment**: Antigravity Workspace Skill (`.agents/skills/map-content-writer/SKILL.md`)
 - **Implementation Date**: 2026-08-05
-- **Promotion to PILOT Date**: 2026-08-05
+- **Promotion to PRODUCTION_READY Date**: 2026-08-07
 - **Implementer**: Antigravity AI (Pair Programming Assistant)
 - **Owner**: Julia / Project Owner
 - **Owner Release Decision**: [`owner-decision.md`](owner-decision.md) (Status: `APPROVED`)

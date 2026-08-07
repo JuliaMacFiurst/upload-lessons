@@ -1,18 +1,12 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { z } from "zod";
 import { requireAdminSession } from "@/lib/server/admin-session";
-import { generateMapTargetStoryBatchItem } from "@/lib/server/mapTargets/storyAutomation";
+import { runCanonicalMapStoryBatch } from "@/lib/server/mapContentWriter/batchRunner";
 
 const bodySchema = z.object({
-  targets: z
-    .array(
-      z.object({
-        mapType: z.string().trim().min(1),
-        targetId: z.string().trim().min(1),
-      }),
-    )
-    .min(1)
-    .max(50),
+  requestedCount: z.number().int().min(1).max(100).optional(),
+  mapTypeFilter: z.string().trim().optional(),
+  dryRunOnly: z.boolean().optional(),
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -24,38 +18,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   try {
     const supabase = await requireAdminSession(req, res);
     const body = bodySchema.parse(req.body ?? {});
-    const results: Array<{ mapType: string; targetId: string; storyId: string; slidesCount: number }> = [];
-    const failures: Array<{ mapType: string; targetId: string; error: string }> = [];
 
-    for (const target of body.targets) {
-      try {
-        const generated = await generateMapTargetStoryBatchItem(
-          supabase,
-          target.mapType,
-          target.targetId,
-        );
-        results.push({
-          mapType: target.mapType,
-          targetId: target.targetId,
-          storyId: generated.storyId,
-          slidesCount: generated.slidesCount,
-        });
-      } catch (error) {
-        failures.push({
-          mapType: target.mapType,
-          targetId: target.targetId,
-          error: error instanceof Error ? error.message : "Generation failed.",
-        });
-      }
-    }
+    const batchReport = await runCanonicalMapStoryBatch(
+      {
+        requestedCount: body.requestedCount ?? 50,
+        mapTypeFilter: body.mapTypeFilter,
+        dryRunOnly: body.dryRunOnly,
+        operation: "generation",
+      },
+      supabase
+    );
 
     return res.status(200).json({
-      ok: failures.length === 0,
-      total: body.targets.length,
-      generated: results.length,
-      failed: failures.length,
-      results,
-      failures,
+      ok: true,
+      batchId: batchReport.batchId,
+      requested: batchReport.requested,
+      inserted: batchReport.inserted,
+      rejected: batchReport.rejected,
+      duplicate: batchReport.duplicate,
+      dbErrors: batchReport.dbErrors,
+      durationMs: batchReport.durationMs,
+      queueBeforeCount: batchReport.queueBeforeCount,
+      queueAfterCount: batchReport.queueAfterCount,
+      results: batchReport.stagedWriteResults.itemResults,
     });
   } catch (error) {
     if (error instanceof z.ZodError) {

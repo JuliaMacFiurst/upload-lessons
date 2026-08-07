@@ -53,31 +53,46 @@ export async function fetchPilotTargets(
 
   const supabase: SupabaseClient = createClient(url, key);
 
-  // Exact read-only SELECT query for unwritten map_targets
-  const { data, error } = await supabase
-    .from("map_targets")
-    .select("map_type, target_id, title_ru, title_en, title_he")
-    .eq("map_type", mapType)
-    .limit(30);
+  // DATABASE-FIRST WORK SELECTION:
+  // Query map_story_generation_queue VIEW directly (sole source of truth for pending work)
+  let query = supabase
+    .from("map_story_generation_queue")
+    .select("map_type, target_id, title_ru, title_en, title_he");
+
+  if (mapType && mapType !== "all") {
+    query = query.eq("map_type", mapType);
+  }
+
+  let { data, error } = await query.order("target_id", { ascending: true }).limit(limit);
+
+  // Fallback if VIEW is missing in dev/test environment: execute anti-join directly
+  if (error && error.message.includes('relation "public.map_story_generation_queue" does not exist')) {
+    console.warn(`[PilotRunner] map_story_generation_queue VIEW missing: ${error.message}. Executing direct anti-join query.`);
+    const { data: rawTargets } = await supabase
+      .from("map_targets")
+      .select("map_type, target_id, title_ru, title_en, title_he")
+      .eq("map_type", mapType)
+      .limit(100);
+
+    const { data: existingStories } = await supabase
+      .from("map_stories")
+      .select("target_id")
+      .eq("type", mapType)
+      .eq("language", "ru");
+
+    const existingSet = new Set((existingStories || []).map((s) => s.target_id));
+    data = (rawTargets || []).filter((t) => !existingSet.has(t.target_id));
+    error = null;
+  }
 
   if (error || !data || data.length === 0) {
     console.warn(`[PilotRunner] DB query error or empty result: ${error?.message}. Using fallback verified targets.`);
     return getFallbackRiverTargets(limit);
   }
 
-  // Filter out targets that already have a language='ru' story in map_stories
-  const { data: existingStories } = await supabase
-    .from("map_stories")
-    .select("target_id")
-    .eq("type", mapType)
-    .eq("language", "ru");
-
-  const existingSet = new Set((existingStories || []).map((s) => s.target_id));
-
-  const unwrittenTargets = data
-    .filter((t) => !existingSet.has(t.target_id))
+  const unwrittenTargets: PilotInputObject[] = data
     .slice(0, limit)
-    .map((t) => ({
+    .map((t: any) => ({
       map_type: t.map_type,
       target_id: t.target_id,
       title_ru: t.title_ru || t.target_id,

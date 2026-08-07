@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AiDraftItem, AiDraftsResponse, ApproveBatchResponse } from "../pages/api/admin/map-story/ai-drafts";
+import type { AiDraftItem, AiDraftsResponse, ApproveBatchResponse, ContentFactoryStats } from "../pages/api/admin/map-story/ai-drafts";
 
 type MapTypeLabel = {
   label: string;
@@ -7,15 +7,15 @@ type MapTypeLabel = {
 };
 
 const MAP_TYPE_META: Record<string, MapTypeLabel> = {
-  sea: { label: "Море / Залив", icon: "🌊" },
-  river: { label: "Река", icon: "🏞️" },
-  physic: { label: "Физический объект", icon: "🏔️" },
-  weather: { label: "Климат / Экорегион", icon: "🌿" },
-  country: { label: "Страна", icon: "🗺️" },
-  flag: { label: "Флаг", icon: "🚩" },
-  culture: { label: "Культура", icon: "🏰" },
-  food: { label: "Еда", icon: "🍏" },
-  animal: { label: "Животное", icon: "🦁" },
+  sea: { label: "sea", icon: "🌊" },
+  river: { label: "river", icon: "🏞️" },
+  physic: { label: "physic", icon: "🏔️" },
+  weather: { label: "weather", icon: "🌿" },
+  country: { label: "country", icon: "🗺️" },
+  flag: { label: "flag", icon: "🚩" },
+  culture: { label: "culture", icon: "🏰" },
+  food: { label: "food", icon: "🍏" },
+  animal: { label: "animal", icon: "🦁" },
 };
 
 function getMapTypeDisplay(mapType: string): { label: string; icon: string } {
@@ -59,6 +59,7 @@ export function AiDraftsReviewTable({
   onDraftApproved?: () => void;
 }) {
   const [drafts, setDrafts] = useState<AiDraftItem[]>([]);
+  const [stats, setStats] = useState<ContentFactoryStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -72,7 +73,7 @@ export function AiDraftsReviewTable({
   const [selectedIds, setSelectedIds] = useState<Array<number | string>>([]);
   const [expandedIds, setExpandedIds] = useState<Set<number | string>>(new Set());
 
-  // Modals & Action States
+  const [showDiagnosticsDetails, setShowDiagnosticsDetails] = useState(false);
   const [viewingDraft, setViewingDraft] = useState<AiDraftItem | null>(null);
   const [editingDraft, setEditingDraft] = useState<AiDraftItem | null>(null);
   const [editedContent, setEditedContent] = useState("");
@@ -87,6 +88,9 @@ export function AiDraftsReviewTable({
     try {
       const data = await fetchJson<AiDraftsResponse>("/api/admin/map-story/ai-drafts");
       setDrafts(data.drafts);
+      if (data.stats) {
+        setStats(data.stats);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -179,6 +183,7 @@ export function AiDraftsReviewTable({
       setDrafts((prev) => prev.filter((d) => d.id !== draft.id));
       setSelectedIds((prev) => prev.filter((i) => i !== draft.id));
       onDraftApproved?.();
+      void loadDrafts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to approve draft.");
     } finally {
@@ -211,6 +216,7 @@ export function AiDraftsReviewTable({
         setSuccess(`Успешно утверждено ${res.approved} черновиков.`);
       }
       onDraftApproved?.();
+      void loadDrafts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to approve batch.");
     } finally {
@@ -279,6 +285,7 @@ export function AiDraftsReviewTable({
       setSuccess(`Черновик для "${draft.target_id}" удалён.`);
       setDrafts((prev) => prev.filter((d) => d.id !== draft.id));
       setSelectedIds((prev) => prev.filter((i) => i !== draft.id));
+      void loadDrafts();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to delete draft.");
     } finally {
@@ -288,6 +295,352 @@ export function AiDraftsReviewTable({
 
   return (
     <div className="ai-drafts-review-container">
+      {/* Content Factory Production Statistics Block */}
+      {stats ? (
+        <div
+          className="content-factory-stats-block"
+          style={{
+            marginBottom: 20,
+            padding: 18,
+            backgroundColor: "#ffffff",
+            borderRadius: 12,
+            border: "1px solid #e1e6eb",
+            boxShadow: "0 1px 3px rgba(0, 0, 0, 0.05)",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: 14,
+              flexWrap: "wrap",
+              gap: 10,
+            }}
+          >
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 20 }}>🏭</span>
+              <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#1d2939" }}>
+                Content Factory Status
+              </h3>
+              <span
+                style={{
+                  fontSize: 11,
+                  backgroundColor: "#ecfdf3",
+                  color: "#027a48",
+                  padding: "2px 8px",
+                  borderRadius: 12,
+                  fontWeight: 600,
+                }}
+              >
+                DATABASE-FIRST QUEUE
+              </span>
+            </div>
+            <div style={{ fontSize: 13, color: "#667085" }}>
+              Всего объектов в системе: <strong>{stats.totalStories.toLocaleString("ru-RU")}</strong>
+            </div>
+          </div>
+
+          {/* Metric Cards Grid */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(140px, 1fr))",
+              gap: 12,
+              marginBottom: 16,
+            }}
+          >
+            {/* 1. Remaining in Queue */}
+            <div
+              style={{
+                padding: 12,
+                backgroundColor: "#fffbfa",
+                borderRadius: 8,
+                border: "1px solid #fee4e2",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#b42318", marginBottom: 4 }}>Осталось написать</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#d92d20" }}>
+                {stats.pendingStories.toLocaleString("ru-RU")}
+              </div>
+            </div>
+
+            {/* 2. AI Drafts Waiting Review */}
+            <div
+              style={{
+                padding: 12,
+                backgroundColor: "#fff8f0",
+                borderRadius: 8,
+                border: "1px solid #feefc3",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#b54708", marginBottom: 4 }}>🤖 Черновиков</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#b54708" }}>
+                {stats.draftsWaitingReview.toLocaleString("ru-RU")}
+              </div>
+            </div>
+
+            {/* 3. Ready Stories */}
+            <div
+              style={{
+                padding: 12,
+                backgroundColor: "#ecfdf3",
+                borderRadius: 8,
+                border: "1px solid #abefc6",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#067647", marginBottom: 4 }}>✅ Готовых историй</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#067647" }}>
+                {stats.readyStories.toLocaleString("ru-RU")}
+              </div>
+            </div>
+
+            {/* 4. Created Today */}
+            <div
+              style={{
+                padding: 12,
+                backgroundColor: "#f0f9ff",
+                borderRadius: 8,
+                border: "1px solid #b9e6fe",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#026aa2", marginBottom: 4 }}>⚡ Создано сегодня</div>
+              <div style={{ fontSize: 22, fontWeight: 700, color: "#026aa2" }}>
+                {stats.createdToday.toLocaleString("ru-RU")}
+              </div>
+            </div>
+
+            {/* 5. Progress % */}
+            <div
+              style={{
+                padding: 12,
+                backgroundColor: "#f8f9fc",
+                borderRadius: 8,
+                border: "1px solid #d5d9eb",
+                display: "flex",
+                flexDirection: "column",
+                justifyContent: "space-between",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#363f72", marginBottom: 4 }}>📊 Общий прогресс</div>
+              <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                <span style={{ fontSize: 22, fontWeight: 700, color: "#363f72" }}>
+                  {stats.progressPercent}%
+                </span>
+                <span style={{ fontSize: 11, color: "#667085" }}>
+                  ({stats.completedStories} / {stats.totalStories})
+                </span>
+              </div>
+              <div
+                style={{
+                  height: 6,
+                  backgroundColor: "#eaecf0",
+                  borderRadius: 3,
+                  overflow: "hidden",
+                  marginTop: 6,
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${stats.progressPercent}%`,
+                    backgroundColor: "#444ce7",
+                    borderRadius: 3,
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Pending by Map Type Sub-block (No Translation - Raw map_type codes) */}
+          {Object.keys(stats.pendingByMapType).length > 0 ? (
+            <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px dashed #eaecf0" }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#475467", marginBottom: 8 }}>
+                📍 Осталось по типам карт (map_type):
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                {(Object.entries(stats.pendingByMapType) as Array<[string, number]>)
+                  .sort((a, b) => b[1] - a[1])
+                  .map(([typeKey, count]) => {
+                    const meta = getMapTypeDisplay(typeKey);
+                    return (
+                      <span
+                        key={typeKey}
+                        style={{
+                          fontSize: 12,
+                          padding: "4px 10px",
+                          borderRadius: 16,
+                          backgroundColor: "#f2f4f7",
+                          color: "#344054",
+                          border: "1px solid #e4e7ec",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                          fontFamily: "monospace",
+                        }}
+                      >
+                        <span>{meta.icon}</span>
+                        <strong style={{ color: "#1d2939" }}>{typeKey}</strong>
+                        <span style={{ color: "#d92d20", fontWeight: 700 }}>({count})</span>
+                      </span>
+                    );
+                  })}
+              </div>
+            </div>
+          ) : null}
+
+          {/* Factory Diagnostics Sub-panel */}
+          {stats.latestBatch ? (
+            <div
+              style={{
+                marginTop: 14,
+                paddingTop: 12,
+                borderTop: "1px solid #eaecf0",
+                backgroundColor: "#fafcfd",
+                padding: 12,
+                borderRadius: 8,
+                border: "1px solid #e0e8f0",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  gap: 8,
+                  marginBottom: 10,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 14 }}>🛠️</span>
+                  <strong style={{ fontSize: 13, color: "#101828" }}>Factory Diagnostics</strong>
+                  <span style={{ fontSize: 11, color: "#667085" }}>
+                    (Партия: {new Date(stats.latestBatch.createdAt).toLocaleTimeString("ru-RU")})
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowDiagnosticsDetails((prev) => !prev)}
+                  style={{
+                    background: "none",
+                    border: "none",
+                    color: "#026aa2",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    padding: 0,
+                    textDecoration: "underline",
+                  }}
+                >
+                  {showDiagnosticsDetails
+                    ? "Скрыть детали очерёдности"
+                    : `Показать список (${stats.latestBatch.rejected})`}
+                </button>
+              </div>
+
+              {/* Metrics Summary Row */}
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 16,
+                  fontSize: 12,
+                  color: "#344054",
+                  marginBottom: 10,
+                }}
+              >
+                <div>Requested: <strong>{stats.latestBatch.requested}</strong></div>
+                <div>Inserted: <strong style={{ color: "#027a48" }}>{stats.latestBatch.inserted}</strong></div>
+                <div>
+                  ⚠️ Требуют внимания:{" "}
+                  <strong style={{ color: stats.latestBatch.rejected > 0 ? "#b42318" : "#027a48" }}>
+                    {stats.latestBatch.rejected}
+                  </strong>
+                </div>
+                <div>Duplicate: <strong>{stats.latestBatch.duplicate}</strong></div>
+                <div>DB Errors: <strong>{stats.latestBatch.dbErrors}</strong></div>
+              </div>
+
+              {/* Category Breakdown Pills */}
+              {Object.keys(stats.latestBatch.rejectionBreakdown).length > 0 ? (
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 6 }}>
+                  {(Object.entries(stats.latestBatch.rejectionBreakdown) as Array<[string, number]>).map(
+                    ([stopId, count]) => {
+                      let label = stopId;
+                      if (stopId === "STOP-LANG-01") label = "STOP-LANG (римские цифры/язык)";
+                      if (stopId === "STOP-DOD-01") label = "Word Count / CTA";
+                      if (stopId === "STOP-META-03") label = "Дубликат в СУБД";
+
+                      return (
+                        <span
+                          key={stopId}
+                          style={{
+                            fontSize: 11,
+                            padding: "2px 8px",
+                            borderRadius: 12,
+                            backgroundColor: "#fef3f2",
+                            color: "#b42318",
+                            border: "1px solid #fecdca",
+                            fontWeight: 600,
+                          }}
+                        >
+                          {count} × {label}
+                        </span>
+                      );
+                    }
+                  )}
+                </div>
+              ) : (
+                <div style={{ fontSize: 11, color: "#027a48", fontWeight: 600 }}>
+                  ✨ Замечаний к качеству генерации нет. Фабрика отработала со 100% точностью.
+                </div>
+              )}
+
+              {/* Expandable Rejection Details Drawer */}
+              {showDiagnosticsDetails && stats.latestBatch.rejectedItems.length > 0 ? (
+                <div
+                  style={{
+                    marginTop: 10,
+                    paddingTop: 10,
+                    borderTop: "1px solid #eaecf0",
+                    maxHeight: 220,
+                    overflowY: "auto",
+                  }}
+                >
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#b42318", marginBottom: 6 }}>
+                    ⚠️ Очередь улучшений фабрики (Требуют внимания):
+                  </div>
+                  <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse" }}>
+                    <thead>
+                      <tr style={{ textAlign: "left", color: "#475467", borderBottom: "1px solid #eaecf0" }}>
+                        <th style={{ padding: "4px 6px" }}>Target ID</th>
+                        <th style={{ padding: "4px 6px" }}>Тип</th>
+                        <th style={{ padding: "4px 6px" }}>Валидатор</th>
+                        <th style={{ padding: "4px 6px" }}>Причина / Описание</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {stats.latestBatch.rejectedItems.map((item, idx) => (
+                        <tr key={idx} style={{ borderBottom: "1px solid #f2f4f7" }}>
+                          <td style={{ padding: "4px 6px", fontWeight: 600 }}>{item.target_id}</td>
+                          <td style={{ padding: "4px 6px", fontFamily: "monospace" }}>{item.map_type}</td>
+                          <td style={{ padding: "4px 6px", color: "#b42318", fontWeight: 600 }}>
+                            {item.validator}
+                          </td>
+                          <td style={{ padding: "4px 6px", color: "#475467" }}>{item.description}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       {/* Header & Controls */}
       <div className="ai-drafts-header">
         <div className="ai-drafts-title-group">

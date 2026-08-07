@@ -28,7 +28,8 @@ export async function validateMapStoryBeforeWrite(
   candidateInput: Record<string, unknown>,
   expectedTarget: { target_id: string; map_type: string },
   supabase: SupabaseClient,
-  customAllowlist: string[] = []
+  customAllowlist: string[] = [],
+  options: { allowOverwrite?: boolean } = {}
 ): Promise<PreWriteSafetyResult> {
   const stopConditions: string[] = [];
   const errors: string[] = [];
@@ -71,25 +72,27 @@ export async function validateMapStoryBeforeWrite(
   }
 
   // 4. Duplicate Guard in map_stories (STOP-META-03)
-  const { data: existingStory, error: storyError } = await supabase
-    .from("map_stories")
-    .select("id")
-    .eq("type", mapType)
-    .eq("target_id", targetId)
-    .eq("language", "ru")
-    .maybeSingle();
+  if (!options.allowOverwrite) {
+    const { data: existingStory, error: storyError } = await supabase
+      .from("map_stories")
+      .select("id")
+      .eq("type", mapType)
+      .eq("target_id", targetId)
+      .eq("language", "ru")
+      .maybeSingle();
 
-  if (storyError) {
-    errors.push(`Failed to check existing story: ${storyError.message}`);
-    return { isValid: false, stopConditions, errors };
-  }
+    if (storyError) {
+      errors.push(`Failed to check existing story: ${storyError.message}`);
+      return { isValid: false, stopConditions, errors };
+    }
 
-  if (existingStory?.id) {
-    stopConditions.push("STOP-META-03");
-    errors.push(
-      `[STOP-META-03] Story already exists in map_stories for (${mapType}, "${targetId}", language='ru'). Direct overwrite is FORBIDDEN.`
-    );
-    return { isValid: false, stopConditions, errors };
+    if (existingStory?.id) {
+      stopConditions.push("STOP-META-03");
+      errors.push(
+        `[STOP-META-03] Story already exists in map_stories for (${mapType}, "${targetId}", language='ru'). Direct overwrite is FORBIDDEN.`
+      );
+      return { isValid: false, stopConditions, errors };
+    }
   }
 
   // 5. Russian Language Guard (STOP-LANG-01)

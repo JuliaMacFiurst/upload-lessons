@@ -364,111 +364,29 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         });
       }
 
-      const { validateMapStoryBeforeWrite } = await import(
-        "@/lib/server/mapContentWriter/preWriteSafetyLayer"
+      const { insertStagedAiDrafts } = await import(
+        "@/lib/server/mapContentWriter/stagedAiDraftWriter"
       );
 
-      const itemResults: Array<{
-        mapType: string;
-        targetId: string;
-        status: "CREATED" | "SKIPPED_EXISTING" | "REJECTED_VALIDATION" | "FAILED_WRITE";
-        error?: string;
-      }> = [];
+      try {
+        const batchResult = await insertStagedAiDrafts(items, supabase, {
+          generationBatchId: typeof req.body?.generation_batch_id === "string" ? req.body.generation_batch_id : undefined,
+          dryRunOnly: req.body?.dryRunOnly === true,
+        });
 
-      let created = 0;
-      let skipped = 0;
-      let rejected = 0;
-      let failed = 0;
-
-      for (const item of items) {
-        const rawMapType = typeof item?.map_type === "string" ? item.map_type.trim() : "";
-        const rawTargetId = typeof item?.target_id === "string" ? item.target_id.trim() : "";
-
-        const valRes = await validateMapStoryBeforeWrite(
-          item,
-          { map_type: rawMapType, target_id: rawTargetId },
-          supabase
-        );
-
-        if (!valRes.isValid) {
-          if (valRes.stopConditions.includes("STOP-META-03")) {
-            skipped += 1;
-            itemResults.push({
-              mapType: rawMapType,
-              targetId: rawTargetId,
-              status: "SKIPPED_EXISTING",
-              error: valRes.errors.join("; "),
-            });
-          } else {
-            rejected += 1;
-            itemResults.push({
-              mapType: rawMapType,
-              targetId: rawTargetId,
-              status: "REJECTED_VALIDATION",
-              error: valRes.errors.join("; "),
-            });
-          }
-          continue;
-        }
-
-        // Server-Side INSERT_ONLY execution with server-forced draft metadata
-        if (req.body?.dryRunOnly === true) {
-          created += 1;
-          itemResults.push({
-            mapType: rawMapType,
-            targetId: rawTargetId,
-            status: "CREATED",
-            error: "DRY_RUN_SIMULATION",
-          });
-        } else {
-          try {
-            const { error: insertError } = await supabase.from("map_stories").insert({
-              type: rawMapType,
-              target_id: rawTargetId,
-              language: "ru",
-              content: valRes.candidate!.content,
-              is_approved: false, // Server-forced draft status
-              auto_generated: true, // Server-forced AI flag
-              auto_generation_model: "antigravity-ide", // Server-forced model metadata
-            });
-
-            if (insertError) {
-              failed += 1;
-              itemResults.push({
-                mapType: rawMapType,
-                targetId: rawTargetId,
-                status: "FAILED_WRITE",
-                error: insertError.message,
-              });
-            } else {
-              created += 1;
-              itemResults.push({
-                mapType: rawMapType,
-                targetId: rawTargetId,
-                status: "CREATED",
-              });
-            }
-          } catch (err) {
-            failed += 1;
-            itemResults.push({
-              mapType: rawMapType,
-              targetId: rawTargetId,
-              status: "FAILED_WRITE",
-              error: err instanceof Error ? err.message : "Failed to insert map story.",
-            });
-          }
-        }
+        return res.status(200).json({
+          mode: "staged_ai_draft",
+          requested: items.length,
+          created: batchResult.created,
+          skipped: batchResult.skipped,
+          rejected: batchResult.rejected,
+          failed: batchResult.failed,
+          items: batchResult.itemResults,
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return res.status(400).json({ error: message });
       }
-
-      return res.status(200).json({
-        mode: "staged_ai_draft",
-        requested: items.length,
-        created,
-        skipped,
-        rejected,
-        failed,
-        items: itemResults,
-      });
     }
 
     // LEGACY BULK IMPORT MODE (Admin UI)
