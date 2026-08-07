@@ -1,9 +1,9 @@
 import fs from "fs";
 import path from "path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { mapStoryCandidateBuilder } from "./candidateBuilder.ts";
-import { insertStagedAiDrafts, type StagedAiDraftBatchResult } from "./stagedAiDraftWriter.ts";
-import { generateCanonicalStoryText } from "./canonicalStoryGenerator.ts";
+import { mapStoryCandidateBuilder } from "./candidateBuilder";
+import { insertStagedAiDrafts, type StagedAiDraftBatchResult } from "./stagedAiDraftWriter";
+import { generateCanonicalStoryText } from "./canonicalStoryGenerator";
 
 export type BatchRunnerOptions = {
   requestedCount?: number;

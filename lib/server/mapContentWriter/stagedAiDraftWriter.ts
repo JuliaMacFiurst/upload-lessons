@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { validateMapStoryBeforeWrite } from "./preWriteSafetyLayer.ts";
+import { validateMapStoryBeforeWrite } from "./preWriteSafetyLayer";
 
 export type StagedAiDraftInsertOptions = {
   generationBatchId?: string | null;
