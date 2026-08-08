@@ -1,9 +1,8 @@
 import fs from "fs";
 import path from "path";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { mapStoryCandidateBuilder } from "./candidateBuilder";
-import { insertStagedAiDrafts, type StagedAiDraftBatchResult } from "./stagedAiDraftWriter";
-import { generateCanonicalStoryText } from "./canonicalStoryGenerator";
+import { insertStagedAiDrafts, type StagedAiDraftBatchResult } from "./stagedAiDraftWriter.ts";
+import { generateV2VerifiedCandidate, type V2GenerationResult } from "./v2StoryGenerator.ts";
 
 export type BatchRunnerOptions = {
   requestedCount?: number;
@@ -57,7 +56,7 @@ export function getAdminSupabaseClient(): SupabaseClient {
 }
 
 /**
- * Canonical Map Story Content Factory Batch Runner.
+ * Canonical Map Story Content Factory Batch Runner (v2).
  * Sole owner and generator of batch_id. Guaranteed lifecycle:
  * status='running' -> execution -> status='completed' (or status='failed').
  */
@@ -73,11 +72,9 @@ export async function runCanonicalMapStoryBatch(
   const mapTypeFilter = options?.mapTypeFilter?.trim();
   const dryRunOnly = options?.dryRunOnly ?? false;
 
-  // 1. GENERATE TRUSTED UNIQUE BATCH ID
   const randomSuffix = Math.random().toString(36).substring(2, 7);
   const batchId = `batch-${Date.now()}-${randomSuffix}`;
 
-  // 2. CREATE INITIAL BATCH LOG WITH STATUS = 'running'
   const { error: logInitErr } = await supabase.from("map_story_batch_logs").insert({
     batch_id: batchId,
     requested: requestedCount,
@@ -99,7 +96,6 @@ export async function runCanonicalMapStoryBatch(
   }
 
   try {
-    // 3. FETCH PENDING WORK EXCLUSIVELY FROM MAP_STORY_GENERATION_QUEUE
     let queueQuery = supabase
       .from("map_story_generation_queue")
       .select("map_type, target_id, title_ru, title_en", { count: "exact" });
@@ -151,27 +147,31 @@ export async function runCanonicalMapStoryBatch(
       };
     }
 
-    // 4. GENERATE MAP STORY CANDIDATES
-    const candidatesToInsert: Array<{ map_type: string; target_id: string; content: string }> = [];
+    // 4. GENERATE MAP STORY CANDIDATES USING V2 PIPELINE
+    const candidatesToInsert: Array<{
+      map_type: string;
+      target_id: string;
+      content?: string;
+      story_sources?: any;
+      stopConditions?: string[];
+      errors?: string[];
+    }> = [];
 
     for (let i = 0; i < targetsToProcess.length; i++) {
       const target = targetsToProcess[i];
       const name = target.title_ru || target.title_en || target.target_id;
-      const content = generateCanonicalStoryText(target.map_type, target.target_id, name, i);
 
-      const built = mapStoryCandidateBuilder.buildAndValidate({
+      // Run V2 Verified Candidate Generation Pipeline
+      const v2Res: V2GenerationResult = await generateV2VerifiedCandidate(target.map_type, target.target_id, name);
+
+      candidatesToInsert.push({
         map_type: target.map_type,
         target_id: target.target_id,
-        content: content,
+        content: v2Res.content,
+        story_sources: v2Res.story_sources,
+        stopConditions: v2Res.stopConditions,
+        errors: v2Res.errors,
       });
-
-      if (built.candidate) {
-        candidatesToInsert.push({
-          map_type: built.candidate.map_type,
-          target_id: built.candidate.target_id,
-          content: built.candidate.content,
-        });
-      }
     }
 
     // 5. STAGED AI DRAFT WRITE (CHUNKS OF 5 ITEMS MAX WITH VERIFIED GENERATION_BATCH_ID)
@@ -207,12 +207,10 @@ export async function runCanonicalMapStoryBatch(
 
     const durationMs = Date.now() - startTime;
 
-    // Check queue count after batch
     let afterQuery = supabase.from("map_story_generation_queue").select("*", { count: "exact", head: true });
     if (mapTypeFilter) afterQuery = afterQuery.eq("map_type", mapTypeFilter);
     const { count: queueAfterCount } = await afterQuery;
 
-    // 6. FINALIZE BATCH LOG RECORD (STATUS = 'completed')
     const { error: updateErr } = await supabase
       .from("map_story_batch_logs")
       .update({
@@ -231,7 +229,6 @@ export async function runCanonicalMapStoryBatch(
       console.warn(`[BatchRunner] Failed to finalize completed log for batch ${batchId}:`, updateErr.message);
     }
 
-    // Save report to .pilot-reports for persistent audit log
     const reportDir = path.join(process.cwd(), ".pilot-reports");
     if (!fs.existsSync(reportDir)) fs.mkdirSync(reportDir, { recursive: true });
     const reportPath = path.join(reportDir, `canonical-batch-${batchId}.json`);

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "version": "2.0.0",
-  "updatedAt": "2026-08-06T14:25:00Z",
+  "updatedAt": "2026-08-08T14:34:00Z",
   "skills": {
     "map-content-writer": {
       "id": "map-content-writer",
@@ -24,6 +24,25 @@
         "напиши истории для карт",
         "fill maps",
         "generate map stories"
+      ]
+    },
+    "map-source-validator": {
+      "id": "map-source-validator",
+      "displayName": "Map Source Validator",
+      "version": "0.1.0",
+      "status": "PILOT",
+      "lifecycle": "PILOT",
+      "entry": ".agents/skills/map-source-validator/SKILL.md",
+      "contract": "AI-DOCS/skills/map-source-validator/skill-contract.md",
+      "validationRecord": "AI-DOCS/skills/map-source-validator/validation-record.md",
+      "owner": "Project Owner",
+      "mutation": "NO_WRITE",
+      "content": "DRY_RUN_ONLY",
+      "supportedLanguages": ["ru", "en"],
+      "supportedCommands": [
+        "проверь источники",
+        "валидируй факты",
+        "validate story sources"
       ]
     },
     "multi-language-translator": {

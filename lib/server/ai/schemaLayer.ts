@@ -56,7 +56,14 @@ export const DB_TABLE_SCHEMAS: Record<string, TableSchemaDefinition> = {
       { name: "target_id", type: "string", required: true, allowEmptyString: false },
       { name: "content", type: "string", required: true, allowEmptyString: false },
     ],
-    optionalFields: [],
+    optionalFields: [
+      { name: "story_sources", type: "object", required: false },
+      { name: "source_validation_status", type: "string", required: false },
+      { name: "source_validated_at", type: "string", required: false },
+      { name: "source_validation_version", type: "number", required: false },
+      { name: "needs_rewrite", type: "boolean", required: false },
+      { name: "content_version", type: "number", required: false },
+    ],
   },
   content_translations: {
     tableName: "content_translations",

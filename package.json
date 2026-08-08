@@ -9,7 +9,10 @@
     "test": "node --experimental-strip-types --test tests/**/*.test.ts",
     "start": "next start",
     "convert:giphy-gifs": "node scripts/convert-gifs-for-giphy.mjs",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "factory:audit": "tsx scripts/audit_map_content_factory.ts",
+    "factory:generate": "tsx scripts/generate_batch.ts",
+    "factory:smoke": "tsx scripts/smoke_batch.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -34,10 +37,11 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "15.3.4",
     "postgres": "^3.4.9",
-    "ts-node": "^10.9.2",
+    "tsx": "^4.0.0",
     "typescript": "^5"
   }
 }

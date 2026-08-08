@@ -1,4 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  getDraftCategoryState,
+  filterDraftsByCategory,
+  computeDraftCategoryCounts,
+  type CategoryFilterType,
+} from "../lib/server/mapContentWriter/draftClassifier.ts";
 import type { AiDraftItem, AiDraftsResponse, ApproveBatchResponse, ContentFactoryStats } from "../pages/api/admin/map-story/ai-drafts";
 
 type MapTypeLabel = {
@@ -37,6 +43,88 @@ function formatDate(isoString: string): string {
   }
 }
 
+function SourceInspectionPanel({
+  storySources,
+  valStatus,
+  valDate,
+}: {
+  storySources?: any;
+  valStatus?: string | null;
+  valDate?: string | null;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!storySources || !storySources.sources || !Array.isArray(storySources.sources) || storySources.sources.length === 0) {
+    return (
+      <div style={{ fontSize: 11, color: "#98a2b3", marginTop: 4 }}>
+        📚 Источники: <span style={{ fontStyle: "italic" }}>Нет данных provenance</span>
+      </div>
+    );
+  }
+
+  const sourcesList = storySources.sources;
+  const totalClaims = sourcesList.reduce((sum: number, s: any) => sum + (s.claims ? s.claims.length : 0), 0);
+
+  return (
+    <div style={{ marginTop: 6, paddingTop: 6, borderTop: "1px dashed #eaecf0", fontSize: 12 }}>
+      <div
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", cursor: "pointer", userSelect: "none" }}
+        onClick={(e) => {
+          e.stopPropagation();
+          setExpanded(!expanded);
+        }}
+      >
+        <span style={{ fontWeight: 600, color: "#175cd3" }}>
+          📚 Источники ({sourcesList.length}) {valStatus === "verified" ? "✅ Verified" : valStatus ? `⚠️ ${valStatus}` : ""}
+        </span>
+        <span style={{ fontSize: 11, color: "#667085" }}>
+          {totalClaims} {totalClaims === 1 ? "факт" : "фактов"} {expanded ? "▲" : "▼"}
+        </span>
+      </div>
+
+      {expanded ? (
+        <div style={{ marginTop: 6, padding: 8, backgroundColor: "#f8f9fc", borderRadius: 6, border: "1px solid #e4e7ec" }}>
+          {sourcesList.map((src: any, sIdx: number) => (
+            <div key={sIdx} style={{ marginBottom: sIdx < sourcesList.length - 1 ? 8 : 0, borderBottom: sIdx < sourcesList.length - 1 ? "1px solid #eaecf0" : "none", paddingBottom: 6 }}>
+              <div style={{ fontWeight: 600, color: "#101828", fontSize: 12, display: "flex", justifyContent: "space-between" }}>
+                <span>{src.source_title || "Источник"}</span>
+                <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 4, backgroundColor: src.source_tier === "A" ? "#ecfdf3" : "#eff8ff", color: src.source_tier === "A" ? "#027a48" : "#175cd3", fontWeight: 700 }}>
+                  Tier {src.source_tier || "B"}
+                </span>
+              </div>
+              {src.source_url ? (
+                <a
+                  href={src.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{ color: "#2b579a", textDecoration: "underline", fontSize: 11, wordBreak: "break-all" }}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  🔗 {src.source_url}
+                </a>
+              ) : null}
+
+              {(src.claims || []).map((c: any, cIdx: number) => (
+                <div key={cIdx} style={{ marginTop: 4, paddingLeft: 8, fontSize: 11, color: "#344054" }}>
+                  <div>
+                    ✓ <strong style={{ color: "#027a48" }}>{c.claim}</strong>
+                  </div>
+                  {c.evidence_summary ? (
+                    <div style={{ color: "#667085", fontSize: 10, fontStyle: "italic", marginLeft: 12, marginTop: 2 }}>
+                      Цитата из источника: "{c.evidence_summary}"
+                    </div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          ))}
+          {valDate ? <div style={{ fontSize: 10, color: "#98a2b3", marginTop: 6, textAlign: "right" }}>Проверено: {formatDate(valDate)}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, options);
   const raw = await response.text();
@@ -68,6 +156,11 @@ export function AiDraftsReviewTable({
   const [search, setSearch] = useState("");
   const [selectedType, setSelectedType] = useState<string>("all");
   const [sortOrder, setSortOrder] = useState<"newest" | "oldest" | "type">("newest");
+  const [categoryFilter, setCategoryFilter] = useState<CategoryFilterType>("all");
+
+  const categoryCounts = useMemo(() => {
+    return computeDraftCategoryCounts(drafts);
+  }, [drafts]);
 
   // Selection & Selection state
   const [selectedIds, setSelectedIds] = useState<Array<number | string>>([]);
@@ -81,6 +174,26 @@ export function AiDraftsReviewTable({
   const [deletingDraft, setDeletingDraft] = useState<AiDraftItem | null>(null);
   const [approvingBatch, setApprovingBatch] = useState(false);
   const [processingAction, setProcessingAction] = useState(false);
+  const [showBacklogModal, setShowBacklogModal] = useState(false);
+  const [backlogItems, setBacklogItems] = useState<any[]>([]);
+  const [loadingBacklog, setLoadingBacklog] = useState(false);
+
+  const toggleBacklogModal = async () => {
+    if (!showBacklogModal && backlogItems.length === 0) {
+      setLoadingBacklog(true);
+      try {
+        const data = await fetchJson<AiDraftsResponse>("/api/admin/map-story/ai-drafts?view=backlog");
+        if (data.backlog) {
+          setBacklogItems(data.backlog);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setLoadingBacklog(false);
+      }
+    }
+    setShowBacklogModal(!showBacklogModal);
+  };
 
   const loadDrafts = useCallback(async () => {
     setLoading(true);
@@ -106,7 +219,11 @@ export function AiDraftsReviewTable({
   const filteredDrafts = useMemo(() => {
     const query = search.trim().toLowerCase();
 
-    const list = drafts.filter((item) => {
+    // 1. Filter by category state tab
+    const categoryList = filterDraftsByCategory(drafts, categoryFilter);
+
+    // 2. Filter by search & map_type
+    const list = categoryList.filter((item) => {
       if (selectedType !== "all" && item.type !== selectedType) {
         return false;
       }
@@ -122,7 +239,17 @@ export function AiDraftsReviewTable({
       return true;
     });
 
+    // 3. Useful sorting
     return list.sort((a, b) => {
+      if (categoryFilter === "needs_attention") {
+        if (a.needs_rewrite && !b.needs_rewrite) return -1;
+        if (!a.needs_rewrite && b.needs_rewrite) return 1;
+      }
+      if (categoryFilter === "v2_rewritten") {
+        if ((a.content_version ?? 1) > (b.content_version ?? 1)) return -1;
+        if ((a.content_version ?? 1) < (b.content_version ?? 1)) return 1;
+      }
+
       if (sortOrder === "oldest") {
         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       }
@@ -131,7 +258,7 @@ export function AiDraftsReviewTable({
       }
       return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     });
-  }, [drafts, search, selectedType, sortOrder]);
+  }, [drafts, categoryFilter, search, selectedType, sortOrder]);
 
   const uniqueTypes = useMemo(() => {
     return Array.from(new Set(drafts.map((d) => d.type))).sort();
@@ -489,6 +616,124 @@ export function AiDraftsReviewTable({
             </div>
           ) : null}
 
+          {/* 🧹 V2 Cleanup Remediation Backlog Sub-block */}
+          {stats.v2CleanupStats ? (
+            <div
+              style={{
+                marginTop: 12,
+                padding: 14,
+                backgroundColor: "#f9fafb",
+                borderRadius: 10,
+                border: "1px solid #eaecf0",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: 10,
+                  flexWrap: "wrap",
+                  gap: 8,
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontSize: 16 }}>🧹</span>
+                  <span style={{ fontWeight: 700, fontSize: 13, color: "#1d2939" }}>
+                    V2 Cleanup (Бэклог переписывания PHYSIC от 07.08)
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void toggleBacklogModal()}
+                  style={{
+                    padding: "4px 10px",
+                    backgroundColor: "#f2f4f7",
+                    border: "1px solid #d0d5dd",
+                    borderRadius: 6,
+                    fontSize: 12,
+                    fontWeight: 600,
+                    color: "#344054",
+                    cursor: "pointer",
+                  }}
+                >
+                  {showBacklogModal ? "Скрыть очередь" : "Показать очередь переписывания"}
+                </button>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))",
+                  gap: 10,
+                }}
+              >
+                <div style={{ padding: "8px 12px", backgroundColor: "#fff", borderRadius: 6, border: "1px solid #eaecf0" }}>
+                  <div style={{ fontSize: 11, color: "#667085" }}>Осталось переписать</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#b42318" }}>
+                    {stats.v2CleanupStats.remainingBacklogTotal.toLocaleString("ru-RU")}
+                  </div>
+                </div>
+
+                <div style={{ padding: "8px 12px", backgroundColor: "#fff", borderRadius: 6, border: "1px solid #eaecf0" }}>
+                  <div style={{ fontSize: 11, color: "#667085" }}>Готовы после V2</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#027a48" }}>
+                    {stats.v2CleanupStats.v2RewrittenTotal.toLocaleString("ru-RU")}
+                  </div>
+                </div>
+
+                <div style={{ padding: "8px 12px", backgroundColor: "#fff", borderRadius: 6, border: "1px solid #eaecf0" }}>
+                  <div style={{ fontSize: 11, color: "#667085" }}>Сейчас на проверке после V2</div>
+                  <div style={{ fontSize: 18, fontWeight: 700, color: "#175cd3" }}>
+                    {(stats.rewriteStats?.rewrittenV2Count ?? 0).toLocaleString("ru-RU")}
+                  </div>
+                </div>
+              </div>
+
+              {showBacklogModal && (
+                <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid #eaecf0" }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#344054", marginBottom: 8 }}>
+                    📋 Бэклог переписывания (первые 50 элементов, READ-ONLY):
+                  </div>
+                  {loadingBacklog ? (
+                    <div style={{ fontSize: 12, color: "#667085" }}>Загрузка очереди...</div>
+                  ) : backlogItems.length > 0 ? (
+                    <div style={{ maxHeight: 240, overflowY: "auto", border: "1px solid #eaecf0", borderRadius: 6 }}>
+                      <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", textAlign: "left" }}>
+                        <thead>
+                          <tr style={{ backgroundColor: "#f9fafb", borderBottom: "1px solid #eaecf0" }}>
+                            <th style={{ padding: "6px 10px" }}>ID</th>
+                            <th style={{ padding: "6px 10px" }}>Target ID</th>
+                            <th style={{ padding: "6px 10px" }}>Текущий статус</th>
+                            <th style={{ padding: "6px 10px" }}>Версия</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {backlogItems.map((item) => (
+                            <tr key={item.story_id} style={{ borderBottom: "1px solid #f2f4f7" }}>
+                              <td style={{ padding: "6px 10px", fontWeight: 600 }}>{item.story_id}</td>
+                              <td style={{ padding: "6px 10px", fontFamily: "monospace" }}>{item.target_id}</td>
+                              <td style={{ padding: "6px 10px" }}>
+                                {item.is_approved ? (
+                                  <span style={{ backgroundColor: "#ecfdf3", color: "#027a48", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>READY (В игре)</span>
+                                ) : (
+                                  <span style={{ backgroundColor: "#fffaeb", color: "#b54708", padding: "2px 6px", borderRadius: 4, fontSize: 10, fontWeight: 600 }}>DRAFT (Черновик)</span>
+                                )}
+                              </td>
+                              <td style={{ padding: "6px 10px" }}>v{item.content_version}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 12, color: "#667085" }}>Бэклог пуст 🎉</div>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : null}
+
           {/* Factory Diagnostics Sub-panel */}
           {stats.latestBatch ? (
             <div
@@ -789,6 +1034,7 @@ export function AiDraftsReviewTable({
                 const typeMeta = getMapTypeDisplay(draft.type);
                 const isExpanded = expandedIds.has(draft.id);
                 const isSelected = selectedIds.includes(draft.id);
+                const categoryState = getDraftCategoryState(draft);
 
                 return (
                   <tr key={draft.id} style={{ backgroundColor: isSelected ? "#fffdf5" : undefined, borderBottom: "1px solid #edf1f5" }}>
@@ -842,6 +1088,13 @@ export function AiDraftsReviewTable({
                       >
                         {isExpanded ? "▲ Свернуть" : "▼ Раскрыть полностью"}
                       </button>
+
+                      {/* V2 Compact Source Inspection Panel */}
+                      <SourceInspectionPanel
+                        storySources={draft.story_sources}
+                        valStatus={draft.source_validation_status}
+                        valDate={draft.source_validated_at}
+                      />
                     </td>
                     <td style={{ fontSize: 12, textAlign: "center", padding: 10 }}>{draft.wordCount}</td>
                     <td style={{ fontSize: 12, whiteSpace: "nowrap", padding: 10 }}>{formatDate(draft.created_at)}</td>
@@ -849,9 +1102,36 @@ export function AiDraftsReviewTable({
                       <span className="map-targets-model-tag">{draft.auto_generation_model}</span>
                     </td>
                     <td style={{ padding: 10 }}>
-                      <span className="map-targets-status-badge map-targets-status-badge--warning">
-                        🤖 Черновик
-                      </span>
+                      {categoryState === "REWRITTEN_V2" ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ padding: "4px 8px", borderRadius: 12, backgroundColor: "#e0e7ff", color: "#3730a3", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            🔄 Переписано V2
+                          </span>
+                          <span style={{ fontSize: 11, color: "#475467" }}>Версия: {draft.content_version || 2}</span>
+                          {draft.source_validation_status === "verified" ? (
+                            <span style={{ fontSize: 10, color: "#027a48", fontWeight: 600 }}>✅ Источники проверены</span>
+                          ) : draft.source_validation_status === "warning" ? (
+                            <span style={{ fontSize: 10, color: "#b54708", fontWeight: 600 }}>⚠️ Внимание по источникам</span>
+                          ) : (
+                            <span style={{ fontSize: 10, color: "#b42318", fontWeight: 600 }}>⚠️ Источники не проверены</span>
+                          )}
+                        </div>
+                      ) : categoryState === "NEEDS_REWRITE_ATTENTION" ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span style={{ padding: "4px 8px", borderRadius: 12, backgroundColor: "#fef3f2", color: "#b42318", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", gap: 4 }}>
+                            ⚠️ Требует доработки
+                          </span>
+                          <span style={{ fontSize: 11, color: "#475467" }}>Версия: {draft.content_version || 1}</span>
+                          <span style={{ fontSize: 10, color: "#b42318", fontStyle: "italic" }}>not_checked</span>
+                        </div>
+                      ) : (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                          <span className="map-targets-status-badge map-targets-status-badge--warning">
+                            🤖 Новый черновик
+                          </span>
+                          <span style={{ fontSize: 11, color: "#475467" }}>Версия: {draft.content_version || 1}</span>
+                        </div>
+                      )}
                     </td>
                     <td style={{ padding: 10 }}>
                       <div className="map-targets-actions-cell" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>

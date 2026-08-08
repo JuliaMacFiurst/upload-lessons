@@ -1,6 +1,6 @@
-# Реестр Стоп-Условий (Stop Conditions Registry)
+# Реестр Стоп-Условий (Stop Conditions Registry) — Map Content Writer v2
 
-> **СТАТУС ДОКУМЕНТА**: `POLICY`
+> **СТАТУС ДОКУМЕНТА**: `POLICY` / `V2_REGISTRY`
 
 Навык **ОБЯЗАН НЕМЕДЛЕННО ОСТАНОВИТЬСЯ (FAIL-FAST)** при наступлении любого из зарегистрированных стоп-условий: [`POLICY`]
 
@@ -17,7 +17,11 @@
 | **`STOP-RESEARCH-01`**| Ключевые факты не удается подтвердить по 2 независимым источникам | 3. Research | Отбраковка объекта (STOP) | `TEST-ACC-05` |
 | **`STOP-RESEARCH-02`**| Географическая или природная сущность объекта неоднозначна | 3. Research | Отбраковка объекта (STOP) | `TEST-ADV-04` |
 | **`STOP-TYPE-02`** | Текст не соответствует `Semantic Focus` данного `map_type` | 6. Map-Type Review | Отбраковка объекта без смены типа (STOP) | `TEST-ADV-03` |
+| **`STOP-DOMAIN-01`** | История нарушает семантический домен `map_type` (напр. рыба/туризм в `physic`) | 6. Map-Type Review | Отбраковка объекта (STOP) | `TEST-V2-DOM-01` |
+| **`STOP-SOURCE-01`** | Ошибка валидации источника: `SOURCE_DOMAIN_MISMATCH`, `SOURCE_NOT_FOUND`, `SOURCE_FETCH_FAILED`, `SOURCE_EVIDENCE_MISSING`, `SOURCE_LOW_AUTHORITY` | 3. Research & Source Gate | Отбраковка объекта (STOP) | `TEST-V2-SRC-01` |
 | **`STOP-FACT-01`** | Автор включил факт, отсутствующий в `confirmed_facts[]`, или гиперболу | 7. Fact Check | Отбраковка объекта (STOP) | `TEST-ACC-06` |
+| **`STOP-FACT-02`** | Неподтвержденное фактическое утверждение или неверное превосходное слово | 7. Fact Check | Отбраковка объекта (STOP) | `TEST-V2-FACT-02` |
+| **`STOP-GENERIC-01`** | Избыточный заполнитель (`уникальное место`, `чистейшая вода`) или мало фактов (<3) | 8. Kids / Generic Validator | Отбраковка объекта (STOP) | `TEST-V2-GEN-01` |
 | **`STOP-KIDS-01`** | Hook является абстрактным или CTA является закрытым вопросом | 8. Kids Editor | Отбраковка объекта (STOP) | `TEST-ACC-07` |
 | **`STOP-LANG-01`** | В русском `content` обнаружено неразрешенное латинское слово / недоперевод | 8. Kids Editor | Однократный ретрай ➔ При повторе STOP | `TEST-ADV-07` |
 | **`STOP-SCHEMA-01`** | Кандидат не соответствует канонической схеме целевой таблицы СУБД | 10. Candidate Assembly | Отбраковка и `NO_WRITE` | `TEST-ADV-08` |

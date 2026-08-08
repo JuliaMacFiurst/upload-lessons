@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireAdminSession } from "@/lib/server/admin-session";
 import { sanitizeMapStoryContent } from "@/lib/server/mapTargets/sanitizeMapStoryContent";
+import { getRemediationBacklogStats, selectNextRewriteBatch } from "@/lib/server/mapContentWriter/remediationBacklog";
 
 export type AiDraftItem = {
   id: number | string;
@@ -14,6 +15,11 @@ export type AiDraftItem = {
   is_approved: boolean;
   auto_generated: boolean;
   wordCount: number;
+  story_sources?: any;
+  source_validation_status?: string | null;
+  source_validated_at?: string | null;
+  content_version?: number;
+  needs_rewrite?: boolean;
 };
 
 export type RejectedItemDiagnostic = {
@@ -47,12 +53,24 @@ export type ContentFactoryStats = {
   totalStories: number;
   progressPercent: number;
   latestBatch?: BatchDiagnostics | null;
+  rewriteStats?: {
+    rewrittenV2Count: number;
+    needsRewriteCount: number;
+  };
+  v2CleanupStats?: {
+    originalDefectiveTotal: number;
+    v2RewrittenTotal: number;
+    remainingBacklogTotal: number;
+    remainingReadyCount: number;
+    remainingDraftCount: number;
+  };
 };
 
 export type AiDraftsResponse = {
   drafts: AiDraftItem[];
   count: number;
   stats?: ContentFactoryStats;
+  backlog?: any[];
 };
 
 export type ApproveBatchResponse = {
@@ -135,6 +153,21 @@ async function loadContentFactoryStats(supabase: SupabaseClient): Promise<Conten
     latestBatch = null;
   }
 
+  const { count: needsRewriteCount } = await supabase
+    .from("map_stories")
+    .select("id", { count: "exact", head: true })
+    .eq("needs_rewrite", true);
+
+  const { count: rewrittenV2Count } = await supabase
+    .from("map_stories")
+    .select("id", { count: "exact", head: true })
+    .gt("content_version", 1)
+    .eq("needs_rewrite", false)
+    .eq("source_validation_status", "verified")
+    .eq("is_approved", false);
+
+  const v2CleanupStats = await getRemediationBacklogStats();
+
   return {
     pendingStories: pending,
     pendingByMapType,
@@ -145,13 +178,18 @@ async function loadContentFactoryStats(supabase: SupabaseClient): Promise<Conten
     totalStories: total,
     progressPercent,
     latestBatch,
+    rewriteStats: {
+      rewrittenV2Count: rewrittenV2Count ?? 0,
+      needsRewriteCount: needsRewriteCount ?? 0,
+    },
+    v2CleanupStats,
   };
 }
 
 async function loadAiDrafts(supabase: SupabaseClient): Promise<AiDraftItem[]> {
   const { data: stories, error: storyError } = await supabase
     .from("map_stories")
-    .select("id,type,target_id,content,created_at,auto_generation_model,is_approved,auto_generated")
+    .select("id,type,target_id,content,created_at,auto_generation_model,is_approved,auto_generated,story_sources,source_validation_status,source_validated_at,content_version,needs_rewrite")
     .eq("language", "ru")
     .eq("is_approved", false)
     .eq("auto_generated", true)
@@ -199,6 +237,11 @@ async function loadAiDrafts(supabase: SupabaseClient): Promise<AiDraftItem[]> {
       is_approved: false,
       auto_generated: true,
       wordCount,
+      story_sources: s.story_sources ?? null,
+      source_validation_status: s.source_validation_status ?? null,
+      source_validated_at: s.source_validated_at ?? null,
+      content_version: s.content_version ?? 1,
+      needs_rewrite: s.needs_rewrite ?? false,
     };
   });
 }
@@ -221,11 +264,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   if (req.method === "GET") {
     try {
-      const [drafts, stats] = await Promise.all([
+      const [drafts, stats, backlog] = await Promise.all([
         loadAiDrafts(supabase),
         loadContentFactoryStats(supabase),
+        req.query.view === "backlog" ? selectNextRewriteBatch(50) : Promise.resolve(undefined),
       ]);
-      return res.status(200).json({ drafts, count: drafts.length, stats } satisfies AiDraftsResponse);
+      return res.status(200).json({ drafts, count: drafts.length, stats, backlog } satisfies AiDraftsResponse);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to load AI drafts.";
       return res.status(500).json({ error: message });

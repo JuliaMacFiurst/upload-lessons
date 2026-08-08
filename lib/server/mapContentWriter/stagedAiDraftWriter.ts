@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { validateMapStoryBeforeWrite } from "./preWriteSafetyLayer";
+import { validateMapStoryBeforeWrite } from "./preWriteSafetyLayer.ts";
 
 export type StagedAiDraftInsertOptions = {
   generationBatchId?: string | null;
@@ -29,18 +29,24 @@ export type StagedAiDraftBatchResult = {
   }>;
 };
 
-/**
- * Validates and inserts staged AI drafts into map_stories with strict server-side safeguards.
- * generationBatchId is verified against map_story_batch_logs (status='running') before being written.
- */
 export async function insertStagedAiDrafts(
-  items: Array<{ map_type?: string; mapType?: string; target_id?: string; targetId?: string; content?: string }>,
+  items: Array<{
+    type?: string;
+    map_type?: string;
+    mapType?: string;
+    target_id?: string;
+    targetId?: string;
+    content?: string;
+    story_sources?: any;
+    source_validation_status?: string;
+    stopConditions?: string[];
+    errors?: string[];
+  }>,
   supabase: SupabaseClient,
   options?: StagedAiDraftInsertOptions
 ): Promise<StagedAiDraftBatchResult> {
   let verifiedBatchId: string | null = null;
 
-  // If a generationBatchId is passed, strictly verify its existence, status='running', and valid operation
   if (options?.generationBatchId) {
     const rawBatchId = options.generationBatchId.trim();
     const { data: batchLog, error: batchErr } = await supabase
@@ -80,11 +86,62 @@ export async function insertStagedAiDrafts(
   let failed = 0;
 
   for (const item of items) {
-    const rawMapType = (typeof item?.map_type === "string" ? item.map_type : typeof item?.mapType === "string" ? item.mapType : "").trim();
+    const rawMapType = (typeof item?.type === "string" ? item.type : typeof item?.map_type === "string" ? item.map_type : typeof item?.mapType === "string" ? item.mapType : "").trim();
     const rawTargetId = (typeof item?.target_id === "string" ? item.target_id : typeof item?.targetId === "string" ? item.targetId : "").trim();
+    const normalizedItem: Record<string, unknown> = {
+      map_type: rawMapType,
+      target_id: rawTargetId,
+      content: item.content ?? "",
+    };
+    if (item.story_sources) normalizedItem.story_sources = item.story_sources;
+    if (item.source_validation_status) normalizedItem.source_validation_status = item.source_validation_status;
+
+    // Rejection check for item-level V2 stops passed in candidate
+    if (item.stopConditions && item.stopConditions.length > 0) {
+      const primaryStop = item.stopConditions[0];
+      rejectionBreakdown[primaryStop] = (rejectionBreakdown[primaryStop] || 0) + 1;
+
+      rejectedItems.push({
+        target_id: rawTargetId || "unknown",
+        map_type: rawMapType || "unknown",
+        validator: primaryStop,
+        reason: item.stopConditions.join(", "),
+        description: (item.errors || []).join("; ") || "V2 Validation Failed",
+      });
+
+      rejected += 1;
+      itemResults.push({
+        mapType: rawMapType,
+        targetId: rawTargetId,
+        status: "REJECTED_VALIDATION",
+        error: (item.errors || []).join("; "),
+      });
+      continue;
+    }
+
+    // Require non-empty story_sources and verified validation status before DB write
+    if (!item.story_sources || !item.story_sources.sources || item.story_sources.sources.length === 0) {
+      const stop = "STOP-SOURCE-01";
+      rejectionBreakdown[stop] = (rejectionBreakdown[stop] || 0) + 1;
+      rejectedItems.push({
+        target_id: rawTargetId,
+        map_type: rawMapType,
+        validator: stop,
+        reason: "MISSING_STORY_SOURCES",
+        description: "Candidate story lacks mandatory story_sources payload.",
+      });
+      rejected += 1;
+      itemResults.push({
+        mapType: rawMapType,
+        targetId: rawTargetId,
+        status: "REJECTED_VALIDATION",
+        error: "Missing mandatory story_sources payload.",
+      });
+      continue;
+    }
 
     const valRes = await validateMapStoryBeforeWrite(
-      item,
+      normalizedItem,
       { map_type: rawMapType, target_id: rawTargetId },
       supabase
     );
@@ -131,6 +188,7 @@ export async function insertStagedAiDrafts(
       });
     } else {
       try {
+        const nowIso = new Date().toISOString();
         const insertPayload: Record<string, unknown> = {
           type: rawMapType,
           target_id: rawTargetId,
@@ -139,6 +197,12 @@ export async function insertStagedAiDrafts(
           is_approved: false, // Server-forced draft status
           auto_generated: true, // Server-forced AI flag
           auto_generation_model: "antigravity-ide", // Server-forced model metadata
+          story_sources: item.story_sources,
+          source_validation_status: "verified",
+          source_validated_at: nowIso,
+          source_validation_version: 1,
+          needs_rewrite: false,
+          content_version: 1,
         };
 
         if (verifiedBatchId) {
