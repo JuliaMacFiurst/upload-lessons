@@ -52,3 +52,16 @@ Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/bui
 In Vercel Project Settings → Environment Variables, set `ADMIN_EMAILS` for Production and also for Preview and Development when those environments are used. Keep `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` server-only. After changing any environment variable, redeploy the affected environment; an existing deployment does not pick up the new value automatically.
 
 Apply pending Supabase migrations separately through the normal reviewed deployment workflow. The admin migration keeps RLS enabled and extends the existing `public.is_admin()` contract used by table and Storage policies.
+
+## Archived Map Content Writer experiment
+
+The abandoned IDE-assisted Map Content Factory experiment is preserved on the
+`codex/pre-pipeline-writer` branch. That branch contains the experimental
+research/review/writer pipeline, prompt and skill documentation, factory and
+remediation scripts, Admin AI Drafts tooling, safety validators, fixtures, and
+regression tests developed while evaluating IDE-generated Russian map stories.
+
+The branch is retained as an audit and research record; it is not the active
+production workflow and its generation commands should not be run. The main
+branch uses the human-in-the-loop Admin translation workflow and does not depend
+on the experimental writer runtime.

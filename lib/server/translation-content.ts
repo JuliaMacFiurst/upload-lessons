@@ -1,5 +1,3 @@
-import crypto from "crypto";
-import stringify from "json-stable-stringify";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   extractTranslatableLessonPayload,
@@ -7,6 +5,8 @@ import {
 } from "../lesson-translation";
 import { loadExplanationModes } from "./book-admin";
 import { normalizeAssembledStory } from "./story-submissions-admin";
+import { buildSourceHash, toCanonicalJson } from "./translation-hash";
+export { buildSourceHash, toCanonicalJson } from "./translation-hash";
 
 export type TranslationScope =
   | "all"
@@ -263,14 +263,6 @@ function normalizeQuietQuiz(value: unknown): QuietQuizQuestion[] {
     return normalizeQuietQuiz(record.quiz);
   }
   return [];
-}
-
-export function toCanonicalJson(value: unknown): string {
-  return stringify(value) ?? "null";
-}
-
-export function buildSourceHash(value: unknown): string {
-  return crypto.createHash("sha256").update(toCanonicalJson(value)).digest("hex");
 }
 
 function createLoadedTranslationItem(

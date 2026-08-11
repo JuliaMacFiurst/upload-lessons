@@ -20,6 +20,17 @@ type MapTargetStatusItem = {
   has_slide_images: boolean;
   is_approved: boolean;
   auto_generated: boolean;
+  en_translation_status: "missing" | "translated" | "stale" | null;
+  he_translation_status: "missing" | "translated" | "stale" | null;
+};
+
+type TranslationSummary = {
+  russian_stories: number;
+  approved_russian_stories: number;
+  en_translated: number;
+  he_translated: number;
+  both_complete: number;
+  still_requiring_translation: number;
 };
 
 type BulkMapStoryJsonItem = {
@@ -119,12 +130,19 @@ function getSlidesCountTone(count: number): "danger" | "warning" | "neutral" {
   return "neutral";
 }
 
+function getTranslationMark(status: MapTargetStatusItem["en_translation_status"]): { text: string; title: string; tone: "success" | "warning" | "neutral" } {
+  if (status === "translated") return { text: "✓", title: "Translated", tone: "success" };
+  if (status === "stale") return { text: "!", title: "Stale", tone: "warning" };
+  return { text: "—", title: "Missing", tone: "neutral" };
+}
+
 export default function AdminMapTargetsPage() {
   const router = useRouter();
   const supabase = createClientComponentClient();
 
   const [sessionChecked, setSessionChecked] = useState(false);
   const [items, setItems] = useState<MapTargetStatusItem[]>([]);
+  const [translationSummary, setTranslationSummary] = useState<TranslationSummary | null>(null);
   const [loading, setLoading] = useState(false);
   const [generatingBatch, setGeneratingBatch] = useState(false);
   const [parsingSelectedSlides, setParsingSelectedSlides] = useState(false);
@@ -154,8 +172,9 @@ export default function AdminMapTargetsPage() {
     setError(null);
 
     try {
-      const data = await fetchJson<{ items: MapTargetStatusItem[] }>("/api/admin/map-targets-status");
+      const data = await fetchJson<{ items: MapTargetStatusItem[]; translation_summary: TranslationSummary }>("/api/admin/map-targets-status");
       setItems(data.items);
+      setTranslationSummary(data.translation_summary);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : String(loadError));
     } finally {
@@ -170,6 +189,10 @@ export default function AdminMapTargetsPage() {
 
     void loadItems();
   }, [loadItems, sessionChecked]);
+
+  useEffect(() => {
+    if (router.query.workspace === "ai-drafts") setFilter("ai-drafts");
+  }, [router.query.workspace]);
 
   const filteredItems = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -614,6 +637,23 @@ export default function AdminMapTargetsPage() {
         </div>
       </header>
 
+      <nav className="maps-workspaces" aria-label="Maps workspaces">
+        <Link href="/admin/map-targets" className="is-active">Maps</Link>
+        <Link href="/admin/map-targets?workspace=ai-drafts">AI Drafts</Link>
+        <Link href="/admin/map-targets/ai-translations">AI Translations</Link>
+      </nav>
+
+      {translationSummary ? (
+        <section className="map-translation-overview">
+          <div><strong>{translationSummary.russian_stories}</strong><span>RU stories</span></div>
+          <div><strong>{translationSummary.en_translated}</strong><span>EN translated</span></div>
+          <div><strong>{translationSummary.he_translated}</strong><span>HE translated</span></div>
+          <div><strong>{translationSummary.both_complete}</strong><span>Both complete</span></div>
+          <div><strong>{translationSummary.still_requiring_translation}</strong><span>Approved still requiring</span></div>
+          <Link href="/admin/map-targets/ai-translations">Open translation workspace →</Link>
+        </section>
+      ) : null}
+
       <section className="map-targets-panel">
         <div className="map-targets-section">
           <div className="map-targets-section__header">
@@ -863,6 +903,7 @@ export default function AdminMapTargetsPage() {
                   <th>map_type</th>
                   <th>target_id</th>
                   <th>Статус</th>
+                  <th>Переводы</th>
                   <th>Маркер</th>
                   <th>YouTube</th>
                   <th>Google Maps / Earth</th>
@@ -878,6 +919,8 @@ export default function AdminMapTargetsPage() {
                   const mapsStatus = getPresenceMeta(item.has_google_maps_url);
                   const imagesStatus = getPresenceMeta(item.has_slide_images);
                   const slidesCountTone = getSlidesCountTone(item.slides_count);
+                  const enTranslation = getTranslationMark(item.en_translation_status);
+                  const heTranslation = getTranslationMark(item.he_translation_status);
 
                   return (
                     <tr key={`${item.map_type}:${item.target_id}`}>
@@ -896,6 +939,15 @@ export default function AdminMapTargetsPage() {
                           <span>{status.icon}</span>
                           <span>{status.label}</span>
                         </span>
+                      </td>
+                      <td>
+                        {item.has_story ? (
+                          <div className="translation-marks">
+                            <span className="map-targets-badge map-targets-badge--success">RU ✓</span>
+                            <span className={`map-targets-badge map-targets-badge--${enTranslation.tone}`} title={enTranslation.title}>EN {enTranslation.text}</span>
+                            <span className={`map-targets-badge map-targets-badge--${heTranslation.tone}`} title={heTranslation.title}>HE {heTranslation.text}</span>
+                          </div>
+                        ) : <span className="map-targets-badge map-targets-badge--neutral">Not a candidate</span>}
                       </td>
                       <td>
                         {item.auto_generated && !item.is_approved ? (
@@ -971,6 +1023,16 @@ export default function AdminMapTargetsPage() {
           align-items: flex-start;
           margin-bottom: 24px;
         }
+
+        .maps-workspaces { display:flex; gap:8px; margin:-10px 0 18px; }
+        .maps-workspaces :global(a) { padding:8px 12px; border:1px solid #e6d8bb; border-radius:9px; background:#fff; color:#5d4822; text-decoration:none; }
+        .maps-workspaces :global(a.is-active) { background:#fff0c9; border-color:#f5a623; font-weight:700; }
+        .map-translation-overview { display:flex; gap:12px; align-items:center; flex-wrap:wrap; background:#fffdf5; border:1px solid #ffe5b4; border-radius:14px; padding:12px 14px; margin-bottom:18px; }
+        .map-translation-overview div { display:flex; flex-direction:column; min-width:100px; }
+        .map-translation-overview strong { font-size:20px; }
+        .map-translation-overview span { font-size:12px; color:#667085; }
+        .map-translation-overview :global(a) { margin-left:auto; color:#8a5700; font-weight:700; }
+        .translation-marks { display:flex; gap:4px; flex-wrap:wrap; }
 
         .map-targets-title {
           margin: 0 0 8px;
