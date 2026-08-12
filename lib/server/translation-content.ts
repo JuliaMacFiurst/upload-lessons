@@ -6,7 +6,9 @@ import {
 import { loadExplanationModes } from "./book-admin";
 import { normalizeAssembledStory } from "./story-submissions-admin";
 import { buildSourceHash, toCanonicalJson } from "./translation-hash";
+import type { TranslationContentType } from "../translations/content-types";
 export { buildSourceHash, toCanonicalJson } from "./translation-hash";
+export type { TranslationContentType } from "../translations/content-types";
 
 export type TranslationScope =
   | "all"
@@ -16,15 +18,6 @@ export type TranslationScope =
   | "books"
   | "stories"
   | "parrot_music_styles";
-
-export type TranslationContentType =
-  | "lesson"
-  | "map_story"
-  | "artwork"
-  | "book"
-  | "story_template"
-  | "story_submission"
-  | "parrot_music_style";
 
 export type LoadedTranslationItem = {
   contentType: TranslationContentType;

@@ -11,6 +11,8 @@ import { TranslationProgress } from "../../components/translations/TranslationPr
 import { TranslationLogs } from "../../components/translations/TranslationLogs";
 import { TranslationConfirmModal } from "../../components/translations/TranslationConfirmModal";
 import { TranslationUntranslatedLessons } from "../../components/translations/TranslationUntranslatedLessons";
+import { HumanTranslationQueue } from "../../components/translations/HumanTranslationQueue";
+import { HumanTranslationImport } from "../../components/translations/HumanTranslationImport";
 import type {
   AnalyzeResponse,
   ProgressResponse,
@@ -46,6 +48,7 @@ export default function AdminTranslationsPage() {
   const [openConfirm, setOpenConfirm] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [activeWorkflow, setActiveWorkflow] = useState<"human" | "automatic">("human");
 
   const showMessage = (message: string, type: "success" | "error") => {
     if (type === "success") {
@@ -216,12 +219,40 @@ export default function AdminTranslationsPage() {
       </div>
 
       <h1 className="admin-translations-title">Translation Control Panel</h1>
-      {analysis?.mockModeActive && (
-        <div className="translations-mock-banner">
-          MOCK MODE ACTIVE
-          <span>(no Gemini calls)</span>
+      <div className="translation-workflow-tabs" role="tablist" aria-label="Translation workflow">
+        <button
+          className={`translation-workflow-tab${activeWorkflow === "human" ? " translation-workflow-tab--active" : ""}`}
+          type="button"
+          role="tab"
+          aria-selected={activeWorkflow === "human"}
+          onClick={() => setActiveWorkflow("human")}
+        >
+          Human Translation Queue
+        </button>
+        <button
+          className={`translation-workflow-tab${activeWorkflow === "automatic" ? " translation-workflow-tab--active" : ""}`}
+          type="button"
+          role="tab"
+          aria-selected={activeWorkflow === "automatic"}
+          onClick={() => setActiveWorkflow("automatic")}
+        >
+          Automatic Translation (Gemini)
+        </button>
+      </div>
+
+      {activeWorkflow === "human" ? (
+        <div role="tabpanel" className="translation-workflow-panel">
+          <HumanTranslationQueue />
+          <HumanTranslationImport />
         </div>
-      )}
+      ) : (
+        <div role="tabpanel" className="translation-workflow-panel">
+          {analysis?.mockModeActive && (
+            <div className="translations-mock-banner">
+              MOCK MODE ACTIVE
+              <span>(no Gemini calls)</span>
+            </div>
+          )}
 
       <TranslationSelector
         lang={lang}
@@ -333,6 +364,8 @@ export default function AdminTranslationsPage() {
           void startRun();
         }}
       />
+        </div>
+      )}
     </div>
   );
 }
