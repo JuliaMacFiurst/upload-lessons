@@ -119,6 +119,15 @@ function emptyPreview(errors: HumanTranslationImportError[]): HumanTranslationIm
 }
 
 function validateTranslationScripts(payload: unknown, language: TranslationLanguage): void {
+  const isTechnicalKey = (key: string): boolean =>
+    key === "id" ||
+    key === "slug" ||
+    key === "content_type" ||
+    key === "language" ||
+    key === "source_hash" ||
+    key === "mode_slug" ||
+    key.endsWith("_id") ||
+    key.endsWith("_key");
   const strings: string[] = [];
   const visit = (value: unknown): void => {
     if (typeof value === "string") {
@@ -126,7 +135,9 @@ function validateTranslationScripts(payload: unknown, language: TranslationLangu
     } else if (Array.isArray(value)) {
       value.forEach(visit);
     } else if (value && typeof value === "object") {
-      Object.values(value as Record<string, unknown>).forEach(visit);
+      Object.entries(value as Record<string, unknown>).forEach(([key, child]) => {
+        if (!isTechnicalKey(key)) visit(child);
+      });
     }
   };
   visit(payload);
@@ -141,8 +152,26 @@ function validateTranslationScripts(payload: unknown, language: TranslationLangu
     if (!/\p{Script=Latin}/u.test(text)) {
       throw new Error("English translation contains no Latin text.");
     }
-  } else if (!/\p{Script=Hebrew}/u.test(text)) {
-    throw new Error("Hebrew translation contains no Hebrew text.");
+  } else {
+    if (!/\p{Script=Hebrew}/u.test(text)) {
+      throw new Error("Hebrew translation contains no Hebrew text.");
+    }
+    const words = text.match(/[\p{Letter}]+/gu) ?? [];
+    const invalidWord = words.find((word) =>
+      Array.from(word).some((character) =>
+        /\p{Letter}/u.test(character) && !/\p{Script=Hebrew}/u.test(character),
+      ),
+    );
+    if (invalidWord) {
+      const script = /\p{Script=Arabic}/u.test(invalidWord)
+        ? "Arabic"
+        : /\p{Script=Latin}/u.test(invalidWord)
+          ? "Latin"
+          : /\p{Script=Cyrillic}/u.test(invalidWord)
+            ? "Cyrillic"
+            : "non-Hebrew";
+      throw new Error(`Hebrew translation contains unexpected ${script} letters: “${invalidWord}”. Only Hebrew letters are allowed.`);
+    }
   }
 }
 

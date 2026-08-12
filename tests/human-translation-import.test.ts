@@ -160,6 +160,32 @@ test("semantic language guard rejects an English-only Hebrew translation", () =>
   assert.match(preview.items[0].errors[0].message, /no Hebrew text/);
 });
 
+test("semantic language guard rejects Arabic letters inside Hebrew", () => {
+  const preview = validateHumanTranslationImport({
+    contract_version: 1,
+    items: [item(mapSource, {
+      en: { content: "English story" },
+      he: { content: "סיפור יפה هي מאוד" },
+    })],
+  }, [mapSource]);
+  assert.equal(preview.invalid, 1);
+  assert.equal(preview.items[0].errors[0].language, "he");
+  assert.match(preview.items[0].errors[0].message, /Arabic letters/);
+  assert.match(preview.items[0].errors[0].message, /هي/);
+});
+
+test("Hebrew allows punctuation, numbers, emoji and Latin technical identifiers", () => {
+  const preview = validateHumanTranslationImport({
+    contract_version: 1,
+    items: [item(mapSource, {
+      en: { content: "English story", mode_slug: "intro-v2" },
+      he: { content: "סיפור יפה — פרק 2! 🦫", mode_slug: "intro-v2" },
+    })],
+  }, [mapSource]);
+  assert.equal(preview.ready, 1);
+  assert.equal(preview.invalid, 0);
+});
+
 test("preview separates outdated, missing, duplicate and item schema errors", () => {
   const outdated = item(mapSource, { en: { content: "English" }, he: { content: "עברית" } });
   outdated.source_hash = "0".repeat(64);
