@@ -27,7 +27,7 @@ function supabaseReturning(result: QueryResult) {
           gte(_column: string, value: string) { call.start = value; return builder; },
           lt(_column: string, value: string) { call.end = value; return builder; },
           order() { return builder; },
-          limit() { return Promise.resolve(result); },
+          range() { return Promise.resolve(result); },
         };
         return builder;
       },
@@ -59,6 +59,41 @@ test("fresh analytics_events rows produce non-zero KPI and use the raw table", a
 
   assert.equal(supabase.calls.length, 1);
   assert.equal(supabase.calls[0].table, "analytics_events");
+  assert.equal(payload.periods["7d"].find((metric) => metric.key === "events")?.value, 1);
+});
+
+test("pagination reaches fresh rows after more than 1000 older events", async () => {
+  const olderRows = Array.from({ length: 1000 }, (_, index) => event({
+    id: `old-${index}`,
+    created_at: "2026-07-20T12:00:00Z",
+  }));
+  const freshRow = event({ id: "fresh", created_at: "2026-07-29T16:18:00Z" });
+  const allRows = [...olderRows, freshRow];
+  const ranges: Array<[number, number]> = [];
+  const client = {
+    from(table: string) {
+      assert.equal(table, "analytics_events");
+      const builder = {
+        select() { return builder; },
+        gte() { return builder; },
+        lt() { return builder; },
+        order() { return builder; },
+        range(from: number, to: number) {
+          ranges.push([from, to]);
+          return Promise.resolve({ data: allRows.slice(from, to + 1), error: null });
+        },
+      };
+      return builder;
+    },
+  };
+
+  const payload = await buildAdminAnalytics(
+    client as never,
+    "7d",
+    new Date("2026-07-29T17:00:00Z"),
+  );
+
+  assert.deepEqual(ranges, [[0, 999], [1000, 1999]]);
   assert.equal(payload.periods["7d"].find((metric) => metric.key === "events")?.value, 1);
 });
 

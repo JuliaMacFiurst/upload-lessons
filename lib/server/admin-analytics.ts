@@ -180,6 +180,7 @@ export type AnalyticsAdminPayload = {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_ROWS = 50000;
+const QUERY_PAGE_SIZE = 1000;
 const PERIOD_DAYS: Record<AnalyticsPeriodKey, number> = { "7d": 7, "14d": 14 };
 const PERIOD_LABELS: Record<AnalyticsPeriodKey, string> = {
   "7d": "последние 7 дней",
@@ -1133,13 +1134,30 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
 }
 
 async function queryAnalyticsRows(supabase: SupabaseClient, start: Date, end: Date) {
-  return supabase
-    .from("analytics_events")
-    .select("*")
-    .gte("created_at", start.toISOString())
-    .lt("created_at", end.toISOString())
-    .order("created_at", { ascending: true })
-    .limit(MAX_ROWS);
+  const data: AnalyticsRawRow[] = [];
+
+  for (let from = 0; from < MAX_ROWS; from += QUERY_PAGE_SIZE) {
+    const to = Math.min(from + QUERY_PAGE_SIZE, MAX_ROWS) - 1;
+    const page = await supabase
+      .from("analytics_events")
+      .select("*")
+      .gte("created_at", start.toISOString())
+      .lt("created_at", end.toISOString())
+      .order("created_at", { ascending: true })
+      .range(from, to);
+
+    if (page.error) {
+      return { data: null, error: page.error };
+    }
+
+    const pageRows = (page.data || []) as AnalyticsRawRow[];
+    data.push(...pageRows);
+    if (pageRows.length < to - from + 1) {
+      break;
+    }
+  }
+
+  return { data, error: null };
 }
 
 async function loadRows(supabase: SupabaseClient, start: Date, end: Date): Promise<LoadedAnalyticsRows> {
