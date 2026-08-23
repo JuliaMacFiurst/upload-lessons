@@ -123,6 +123,13 @@ export type AnalyticsAdminPayload = {
   periodLabel: string;
   periodStart: string;
   periodEnd: string;
+  today: {
+    date: string;
+    visitors: number;
+    sessions: number;
+    events: number;
+    projectsCreated: number;
+  };
   availableDays: number;
   periods: Record<AnalyticsPeriodKey, AnalyticsMetricCard[]>;
   growth: Array<{ date: string; visitors: number; sessions: number; events: number }>;
@@ -363,6 +370,17 @@ export function rowsInRange(rows: NormalizedEvent[], start: Date, end: Date) {
   const startMs = start.getTime();
   const endMs = end.getTime();
   return rows.filter((row) => row.createdMs >= startMs && row.createdMs < endMs);
+}
+
+export function analyticsPeriodRanges(days: number, now: Date) {
+  const currentStart = addDays(startOfUtcDay(now), -(days - 1));
+  const currentEnd = new Date(now);
+  return {
+    currentStart,
+    currentEnd,
+    previousStart: addDays(currentStart, -days),
+    previousEnd: addDays(currentEnd, -days),
+  };
 }
 
 function percent(part: number, total: number) {
@@ -1195,16 +1213,15 @@ export function normalizeAnalyticsPeriod(value: unknown): AnalyticsPeriodKey {
 
 export async function buildAdminAnalytics(supabase: SupabaseClient, period: AnalyticsPeriodKey = "7d", now = new Date()): Promise<AnalyticsAdminPayload> {
   const todayStart = startOfUtcDay(now);
-  const tomorrowStart = addDays(todayStart, 1);
   const availablePeriods: AnalyticsPeriodKey[] = ["7d", "14d"];
   const effectivePeriod: AnalyticsPeriodKey = availablePeriods.includes(period) ? period : "14d";
   const days = PERIOD_DAYS[effectivePeriod];
-  const periodStart = addDays(tomorrowStart, -days);
-  const previousStart = addDays(periodStart, -days);
-  const loaded = await loadRows(supabase, previousStart, tomorrowStart);
+  const { currentStart: periodStart, currentEnd: periodEnd, previousStart, previousEnd } = analyticsPeriodRanges(days, now);
+  const loaded = await loadRows(supabase, previousStart, periodEnd);
   const rows = loaded.rows;
-  const currentRows = rowsInRange(rows, periodStart, tomorrowStart);
-  const previousRows = rowsInRange(rows, previousStart, periodStart);
+  const currentRows = rowsInRange(rows, periodStart, periodEnd);
+  const previousRows = rowsInRange(rows, previousStart, previousEnd);
+  const todayRows = rowsInRange(currentRows, todayStart, periodEnd);
   const contentRows = buildContentRows(currentRows, previousRows);
   const languages = buildLanguages(currentRows, previousRows);
   const pages = buildPages(currentRows);
@@ -1223,11 +1240,24 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
     period: effectivePeriod,
     periodLabel: PERIOD_LABELS[effectivePeriod],
     periodStart: periodStart.toISOString(),
-    periodEnd: tomorrowStart.toISOString(),
+    periodEnd: periodEnd.toISOString(),
+    today: {
+      date: formatDay(todayStart),
+      visitors: uniqueCount(todayRows, "userId"),
+      sessions: uniqueCount(todayRows, "sessionId"),
+      events: todayRows.length,
+      projectsCreated: todayRows.filter((row) => row.eventName === "studio_project_created").length,
+    },
     availableDays: days,
     periods: {
-      "7d": buildMetricCards(rowsInRange(rows, addDays(tomorrowStart, -7), tomorrowStart), rowsInRange(rows, addDays(tomorrowStart, -14), addDays(tomorrowStart, -7))),
-      "14d": buildMetricCards(rowsInRange(rows, addDays(tomorrowStart, -14), tomorrowStart), rowsInRange(rows, addDays(tomorrowStart, -28), addDays(tomorrowStart, -14))),
+      "7d": (() => {
+        const range = analyticsPeriodRanges(7, now);
+        return buildMetricCards(rowsInRange(rows, range.currentStart, range.currentEnd), rowsInRange(rows, range.previousStart, range.previousEnd));
+      })(),
+      "14d": (() => {
+        const range = analyticsPeriodRanges(14, now);
+        return buildMetricCards(rowsInRange(rows, range.currentStart, range.currentEnd), rowsInRange(rows, range.previousStart, range.previousEnd));
+      })(),
     },
     growth,
     content: {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  analyticsPeriodRanges,
   buildAdminAnalytics,
   normalizeEvent,
   rowsInRange,
@@ -60,6 +61,43 @@ test("fresh analytics_events rows produce non-zero KPI and use the raw table", a
   assert.equal(supabase.calls.length, 1);
   assert.equal(supabase.calls[0].table, "analytics_events");
   assert.equal(payload.periods["7d"].find((metric) => metric.key === "events")?.value, 1);
+});
+
+test("today event is included in the live 7d period and today snapshot", async () => {
+  const rows = [
+    event({ id: "six-days-ago", created_at: "2026-07-23T09:00:00Z" }),
+    event({ id: "today", event_name: "studio_project_created", created_at: "2026-07-29T11:00:00Z" }),
+  ];
+  const supabase = supabaseReturning({ data: rows, error: null });
+  const payload = await buildAdminAnalytics(
+    supabase.client as never,
+    "7d",
+    new Date("2026-07-29T11:36:00Z"),
+  );
+
+  assert.equal(payload.periodStart, "2026-07-23T00:00:00.000Z");
+  assert.equal(payload.periodEnd, "2026-07-29T11:36:00.000Z");
+  assert.equal(payload.periods["7d"].find((metric) => metric.key === "events")?.value, 2);
+  assert.deepEqual(payload.today, {
+    date: "2026-07-29",
+    visitors: 1,
+    sessions: 1,
+    events: 1,
+    projectsCreated: 1,
+  });
+});
+
+test("current and previous comparison periods have equal live duration", () => {
+  const range = analyticsPeriodRanges(7, new Date("2026-08-23T11:36:00Z"));
+
+  assert.equal(range.currentStart.toISOString(), "2026-08-17T00:00:00.000Z");
+  assert.equal(range.currentEnd.toISOString(), "2026-08-23T11:36:00.000Z");
+  assert.equal(range.previousStart.toISOString(), "2026-08-10T00:00:00.000Z");
+  assert.equal(range.previousEnd.toISOString(), "2026-08-16T11:36:00.000Z");
+  assert.equal(
+    range.currentEnd.getTime() - range.currentStart.getTime(),
+    range.previousEnd.getTime() - range.previousStart.getTime(),
+  );
 });
 
 test("pagination reaches fresh rows after more than 1000 older events", async () => {

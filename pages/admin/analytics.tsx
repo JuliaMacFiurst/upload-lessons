@@ -225,8 +225,31 @@ function LineChart({ payload }: { payload: AnalyticsAdminPayload }) {
 }
 
 function OverviewTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  const todayMetrics = [
+    ["Посетители сегодня", payload.today.visitors],
+    ["Сессии сегодня", payload.today.sessions],
+    ["События сегодня", payload.today.events],
+    ["Созданные проекты сегодня", payload.today.projectsCreated],
+  ] as const;
+
   return (
     <>
+      <section className="analytics-panel">
+        <div className="analytics-section-head">
+          <div>
+            <h2>Сегодня</h2>
+            <p>{payload.today.date}, UTC · данные с 00:00 до момента обновления</p>
+          </div>
+        </div>
+        <div className="analytics-metric-grid">
+          {todayMetrics.map(([label, value]) => (
+            <article className="analytics-metric" key={label}>
+              <div className="analytics-metric__label">{label}</div>
+              <div className="analytics-metric__value">{numberText(value)}</div>
+            </article>
+          ))}
+        </div>
+      </section>
       <div className="analytics-metric-grid">
         {payload.periods[payload.period].map((card) => <MetricCard key={card.key} card={card} />)}
       </div>
