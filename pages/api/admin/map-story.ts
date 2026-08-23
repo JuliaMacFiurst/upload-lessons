@@ -74,6 +74,49 @@ type YouTubeFields = {
   youtube_url_en?: string | null;
 };
 
+async function saveStoryLinks(
+  supabase: SupabaseClient,
+  mapType: string,
+  targetId: string,
+  youtubeFields: YouTubeFields,
+  googleMapsUrl: string | null,
+): Promise<StoryResponse> {
+  const normalizedYouTubeFields = normalizeYouTubeFields(youtubeFields);
+  const normalizedGoogleMapsUrl = normalizeGoogleMapsUrl(googleMapsUrl);
+
+  await ensureMapTargetExists(supabase, mapType, targetId);
+
+  const { data: existing, error: existingError } = await supabase
+    .from("map_stories")
+    .select("id")
+    .eq("type", mapType)
+    .eq("target_id", targetId)
+    .eq("language", "ru")
+    .maybeSingle();
+
+  if (existingError) throw new Error(`Failed to check map_story: ${existingError.message}`);
+
+  const linkValues = { ...normalizedYouTubeFields, google_maps_url: normalizedGoogleMapsUrl };
+  if (existing?.id) {
+    const { error } = await supabase.from("map_stories").update(linkValues).eq("id", existing.id);
+    if (error) throw new Error(`Failed to update map_story links: ${error.message}`);
+  } else {
+    const { error } = await supabase.from("map_stories").insert({
+      type: mapType,
+      target_id: targetId,
+      language: "ru",
+      content: "",
+      ...linkValues,
+      is_approved: true,
+      auto_generated: false,
+      auto_generation_model: null,
+    });
+    if (error) throw new Error(`Failed to insert map_story links: ${error.message}`);
+  }
+
+  return loadStory(supabase, mapType, targetId);
+}
+
 async function ensureMapTargetExists(
   supabase: SupabaseClient,
   mapType: string,
@@ -456,24 +499,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     };
     const googleMapsUrl =
       typeof req.body?.google_maps_url === "string" ? req.body.google_maps_url : null;
+    const linksOnly = req.body?.mode === "links_only";
 
     if (!mapType || !targetId) {
       return res.status(400).json({ error: "mapType and targetId are required." });
     }
 
-    if (!content.trim()) {
+    if (!linksOnly && !content.trim()) {
       return res.status(400).json({ error: "content is required." });
     }
 
     try {
-      const result = await saveStoryContent(
-        supabase,
-        mapType,
-        targetId,
-        content,
-        youtubeFields,
-        googleMapsUrl,
-      );
+      const result = linksOnly
+        ? await saveStoryLinks(supabase, mapType, targetId, youtubeFields, googleMapsUrl)
+        : await saveStoryContent(supabase, mapType, targetId, content, youtubeFields, googleMapsUrl);
       return res.status(200).json(result);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save map story.";

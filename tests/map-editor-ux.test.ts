@@ -98,6 +98,37 @@ test("drafts debounce to a story-specific key, offer restore, and clear after sa
   assert.match(page, /Найдены несохранённые изменения/);
   assert.match(page, /localStorage\.removeItem\(draftKey\)/);
   assert.match(page, /beforeunload/);
+  assert.match(page, /version: 2/);
+  assert.match(page, /setYoutubeUrlRu\(draftCandidate\.youtubeUrlRu/);
+  assert.match(page, /setGoogleMapsUrl\(draftCandidate\.googleMapsUrl/);
+});
+
+test("story actions have risk-specific confirmations and reparse is destructive", async () => {
+  const page = await component("MapTargetEditorPage.tsx");
+  assert.match(page, /kind: "save-story"/);
+  assert.match(page, /Тексты и медиа уже существующих слайдов останутся без изменений/);
+  assert.match(page, /может перезаписать вручную отредактированные тексты слайдов/);
+  assert.match(page, /Тексты слайдов изменяться не будут/);
+  assert.match(page, /destructive=\{confirmAction\?\.kind === "reparse"/);
+});
+
+test("visible story links can be saved independently without a slides request", async () => {
+  const page = await component("MapTargetEditorPage.tsx");
+  const api = await readFile(new URL("../pages/api/admin/map-story.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(page, /<details>/);
+  assert.match(page, /Google Earth \/ большая карта Google/);
+  assert.match(page, /mode: "links_only"/);
+  assert.match(page, /Сохранить ссылки/);
+  assert.match(api, /const linksOnly = req\.body\?\.mode === "links_only"/);
+  assert.match(api, /saveStoryLinks/);
+  const linksWriter = api.slice(api.indexOf("async function saveStoryLinks"), api.indexOf("async function ensureMapTargetExists"));
+  assert.doesNotMatch(linksWriter, /map_story_slides/);
+});
+
+test("automatic media selection preserves every slide text", async () => {
+  const page = await component("MapTargetEditorPage.tsx");
+  assert.match(page, /next\[index\] = \{ \.\.\.next\[index\], image_url: result\.url, credit_line: result\.creditLine \}/);
+  assert.doesNotMatch(page, /next\[index\] = \{[^}]*text:/);
 });
 
 test("media removal is gated by the accessible confirmation dialog", async () => {
