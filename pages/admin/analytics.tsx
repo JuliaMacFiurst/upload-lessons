@@ -5,6 +5,11 @@ import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../components/AdminLogout";
 import { AdminTabs } from "../../components/AdminTabs";
+import {
+  getTestingReminderState,
+  TESTING_REMINDER_TEXT,
+  TESTING_REMINDER_VISITOR_THRESHOLD,
+} from "../../lib/admin-analytics-reminder";
 import type {
   AnalyticsAdminPayload,
   AnalyticsContentRow,
@@ -63,8 +68,11 @@ async function copyTextToClipboard(value: string) {
   document.body.appendChild(textarea);
   textarea.focus();
   textarea.select();
-  document.execCommand("copy");
+  const copied = document.execCommand("copy");
   document.body.removeChild(textarea);
+  if (!copied) {
+    throw new Error("Clipboard is unavailable");
+  }
 }
 
 function formatChange(value: number | null) {
@@ -225,12 +233,29 @@ function LineChart({ payload }: { payload: AnalyticsAdminPayload }) {
 }
 
 function OverviewTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "error">("idle");
   const todayMetrics = [
     ["Посетители сегодня", payload.today.visitors],
     ["Сессии сегодня", payload.today.sessions],
     ["События сегодня", payload.today.events],
     ["Созданные проекты сегодня", payload.today.projectsCreated],
   ] as const;
+  const rollingMetrics = [
+    ["Последние 12 часов", payload.rollingActivity.last12Hours],
+    ["Последние 24 часа", payload.rollingActivity.last24Hours],
+  ] as const;
+  const reminderState = getTestingReminderState(payload.today.visitors, new Date().getHours());
+
+  const copyReminder = async () => {
+    setCopyState("idle");
+    try {
+      await copyTextToClipboard(TESTING_REMINDER_TEXT);
+      setCopyState("copied");
+      window.setTimeout(() => setCopyState("idle"), 2000);
+    } catch {
+      setCopyState("error");
+    }
+  };
 
   return (
     <>
@@ -249,6 +274,35 @@ function OverviewTab({ payload }: { payload: AnalyticsAdminPayload }) {
             </article>
           ))}
         </div>
+        <div className="analytics-metric-grid">
+          {rollingMetrics.map(([label, metrics]) => (
+            <article className="analytics-metric" key={label}>
+              <div className="analytics-metric__label">{label}</div>
+              <p>Посетители: <strong>{numberText(metrics.visitors)}</strong></p>
+              <p>Сессии: <strong>{numberText(metrics.sessions)}</strong></p>
+            </article>
+          ))}
+        </div>
+      </section>
+      <section className="analytics-panel">
+        <h2>Testing reminder</h2>
+        {reminderState === "reminder-needed" ? (
+          <div className="analytics-error" role="status">
+            <div>
+              <strong>Сегодня пока мало тестировщиков</strong>
+              <div>Посетителей сегодня: {payload.today.visitors}</div>
+              <div>Цель для напоминания: {TESTING_REMINDER_VISITOR_THRESHOLD}</div>
+            </div>
+            <button className="analytics-button" type="button" onClick={() => void copyReminder()}>
+              {copyState === "copied" ? "✓ Copied" : "Copy reminder"}
+            </button>
+            {copyState === "error" ? <span className="analytics-copy-status" role="alert">Не удалось скопировать сообщение</span> : null}
+          </div>
+        ) : reminderState === "activity-good" ? (
+          <p>Testing activity looks good today · 15+ visitors</p>
+        ) : (
+          <p>Проверка активности для напоминания начнётся после 09:00 по вашему локальному времени.</p>
+        )}
       </section>
       <div className="analytics-metric-grid">
         {payload.periods[payload.period].map((card) => <MetricCard key={card.key} card={card} />)}

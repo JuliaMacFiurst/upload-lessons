@@ -130,6 +130,10 @@ export type AnalyticsAdminPayload = {
     events: number;
     projectsCreated: number;
   };
+  rollingActivity: {
+    last12Hours: { visitors: number; sessions: number };
+    last24Hours: { visitors: number; sessions: number };
+  };
   availableDays: number;
   periods: Record<AnalyticsPeriodKey, AnalyticsMetricCard[]>;
   growth: Array<{ date: string; visitors: number; sessions: number; events: number }>;
@@ -1222,6 +1226,8 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
   const currentRows = rowsInRange(rows, periodStart, periodEnd);
   const previousRows = rowsInRange(rows, previousStart, previousEnd);
   const todayRows = rowsInRange(currentRows, todayStart, periodEnd);
+  const last12HoursRows = rowsInRange(currentRows, new Date(now.getTime() - 12 * 60 * 60 * 1000), periodEnd);
+  const last24HoursRows = rowsInRange(currentRows, new Date(now.getTime() - 24 * 60 * 60 * 1000), periodEnd);
   const contentRows = buildContentRows(currentRows, previousRows);
   const languages = buildLanguages(currentRows, previousRows);
   const pages = buildPages(currentRows);
@@ -1247,6 +1253,16 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
       sessions: uniqueCount(todayRows, "sessionId"),
       events: todayRows.length,
       projectsCreated: todayRows.filter((row) => row.eventName === "studio_project_created").length,
+    },
+    rollingActivity: {
+      last12Hours: {
+        visitors: uniqueCount(last12HoursRows, "userId"),
+        sessions: uniqueCount(last12HoursRows, "sessionId"),
+      },
+      last24Hours: {
+        visitors: uniqueCount(last24HoursRows, "userId"),
+        sessions: uniqueCount(last24HoursRows, "sessionId"),
+      },
     },
     availableDays: days,
     periods: {

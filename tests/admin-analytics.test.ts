@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { getTestingReminderState } from "../lib/admin-analytics-reminder.ts";
 import {
   analyticsPeriodRanges,
   buildAdminAnalytics,
@@ -98,6 +99,31 @@ test("current and previous comparison periods have equal live duration", () => {
     range.currentEnd.getTime() - range.currentStart.getTime(),
     range.previousEnd.getTime() - range.previousStart.getTime(),
   );
+});
+
+test("testing reminder follows visitor threshold after local 09:00", () => {
+  assert.equal(getTestingReminderState(14, 10), "reminder-needed");
+  assert.equal(getTestingReminderState(15, 10), "activity-good");
+  assert.equal(getTestingReminderState(20, 10), "activity-good");
+  assert.equal(getTestingReminderState(5, 8), "before-reminder-time");
+});
+
+test("rolling activity excludes rows older than 12h and counts unique visitors and sessions over 24h", async () => {
+  const rows = [
+    event({ id: "recent-a", visitor_id: "visitor-a", session_id: "session-a", created_at: "2026-07-29T11:00:00Z" }),
+    event({ id: "recent-a-repeat", visitor_id: "visitor-a", session_id: "session-a", created_at: "2026-07-29T10:00:00Z" }),
+    event({ id: "within-24h", visitor_id: "visitor-b", session_id: "session-b", created_at: "2026-07-28T18:00:00Z" }),
+    event({ id: "older-than-24h", visitor_id: "visitor-c", session_id: "session-c", created_at: "2026-07-28T11:00:00Z" }),
+  ];
+  const supabase = supabaseReturning({ data: rows, error: null });
+  const payload = await buildAdminAnalytics(
+    supabase.client as never,
+    "7d",
+    new Date("2026-07-29T12:00:00Z"),
+  );
+
+  assert.deepEqual(payload.rollingActivity.last12Hours, { visitors: 1, sessions: 1 });
+  assert.deepEqual(payload.rollingActivity.last24Hours, { visitors: 2, sessions: 2 });
 });
 
 test("pagination reaches fresh rows after more than 1000 older events", async () => {
