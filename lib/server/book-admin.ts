@@ -39,6 +39,7 @@ import {
   storyTwistSchema,
   type BookEditorPayload,
   type BookEditorResponse,
+  type BookCategoryGroupKey,
   type BookExplanationInput,
   type BookListItem,
   type CategoryOption,
@@ -49,6 +50,7 @@ import {
   type StoryTemplateInput,
 } from "../books/types";
 import { z } from "zod";
+import { mergeCategoryTranslations } from "../books/book-json-import";
 
 export { requireAdminSession } from "./admin-session";
 
@@ -539,7 +541,7 @@ export async function listBooks(
 export async function loadCategoryOptions(supabase: SupabaseClient): Promise<CategoryOption[]> {
   const { data, error } = await supabase
     .from("categories")
-    .select("id,name,slug,icon,sort_order,is_published")
+    .select("id,name,slug,icon,sort_order,is_published,translations,group_key")
     .order("sort_order", { ascending: true })
     .order("name", { ascending: true });
 
@@ -573,44 +575,87 @@ export async function createUniqueCategorySlug(
 
 export async function createBookCategory(
   supabase: SupabaseClient,
-  input: { name: string; slug?: string | null },
-): Promise<CategoryOption> {
+  input: {
+    name: string;
+    slug?: string | null;
+    translations?: Partial<Record<"ru" | "en" | "he", string>>;
+    group_key?: BookCategoryGroupKey | null;
+    sort_order?: number | null;
+    is_published?: boolean;
+  },
+): Promise<CategoryOption & { created?: boolean }> {
   const normalizedName = input.name.trim();
   if (!normalizedName) {
     throw new Error("Category name is required.");
   }
 
-  const { data: existingByName, error: existingByNameError } = await supabase
+  const requestedSlug = input.slug?.trim() ? safeSlug(input.slug) : safeSlug(normalizedName);
+  const { data: existingBySlug, error: existingBySlugError } = await supabase
     .from("categories")
-    .select("id,name,slug,icon,sort_order,is_published")
-    .ilike("name", normalizedName)
+    .select("id,name,slug,icon,sort_order,is_published,translations,group_key")
+    .eq("slug", requestedSlug)
     .maybeSingle();
+
+  if (existingBySlugError) {
+    throw new Error(`Failed to check existing category slug: ${existingBySlugError.message}`);
+  }
+  const { data: existingNameRows, error: existingByNameError } = existingBySlug
+    ? { data: [], error: null }
+    : await supabase.from("categories")
+      .select("id,name,slug,icon,sort_order,is_published,translations,group_key")
+      .ilike("name", normalizedName)
+      .limit(10);
 
   if (existingByNameError) {
     throw new Error(`Failed to check existing category name: ${existingByNameError.message}`);
   }
 
+  const existingByName = (existingBySlug as CategoryOption | null) ?? ((existingNameRows as CategoryOption[] | null) ?? []).find((category) =>
+    category.slug === requestedSlug || category.name.trim().toLocaleLowerCase("ru") === normalizedName.toLocaleLowerCase("ru"),
+  );
+  const incomingTranslations = Object.fromEntries(
+    Object.entries({ ru: normalizedName, ...(input.translations ?? {}) })
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[1].trim()))
+      .map(([language, label]) => [language, label.trim()]),
+  );
+
   if (existingByName) {
-    return existingByName as CategoryOption;
+    const existingTranslations = existingByName.translations && typeof existingByName.translations === "object"
+      ? existingByName.translations
+      : {};
+    const translations = mergeCategoryTranslations(existingTranslations, incomingTranslations);
+    const patch: Record<string, unknown> = {};
+    if (JSON.stringify(translations) !== JSON.stringify(existingTranslations)) patch.translations = translations;
+    if ((!existingByName.group_key || existingByName.group_key === "other") && input.group_key && input.group_key !== "other") {
+      patch.group_key = input.group_key;
+    }
+    if (Object.keys(patch).length === 0) return { ...existingByName, created: false };
+    const { data: updated, error: updateError } = await supabase.from("categories").update(patch).eq("id", existingByName.id)
+      .select("id,name,slug,icon,sort_order,is_published,translations,group_key").single();
+    if (updateError || !updated) throw new Error(updateError?.message ?? "Failed to update category translations.");
+    return { ...(updated as CategoryOption), created: false };
   }
 
-  const slug = input.slug?.trim() ? safeSlug(input.slug) : await createUniqueCategorySlug(supabase, normalizedName);
+  const slug = input.slug?.trim() ? requestedSlug : await createUniqueCategorySlug(supabase, normalizedName);
 
   const { data, error } = await supabase
     .from("categories")
     .insert({
       name: normalizedName,
       slug,
-      is_published: true,
+      translations: incomingTranslations,
+      group_key: input.group_key || "other",
+      ...(input.sort_order !== undefined && input.sort_order !== null ? { sort_order: input.sort_order } : {}),
+      is_published: input.is_published ?? true,
     })
-    .select("id,name,slug,icon,sort_order,is_published")
+    .select("id,name,slug,icon,sort_order,is_published,translations,group_key")
     .single();
 
   if (error || !data) {
     throw new Error(error?.message ?? "Failed to create category.");
   }
 
-  return data as CategoryOption;
+  return { ...(data as CategoryOption), created: true };
 }
 
 export async function loadExplanationModes(

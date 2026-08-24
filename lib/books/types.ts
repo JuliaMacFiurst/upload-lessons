@@ -164,7 +164,21 @@ export type CategoryOption = {
   icon: string | null;
   sort_order: number | null;
   is_published: boolean | null;
+  translations: Partial<Record<"ru" | "en" | "he", string>>;
+  group_key: BookCategoryGroupKey;
 };
+
+export const BOOK_CATEGORY_GROUP_KEYS = [
+  "literature",
+  "speculative",
+  "mystery",
+  "classic-history",
+  "ideas",
+  "audience",
+  "other",
+] as const;
+
+export type BookCategoryGroupKey = (typeof BOOK_CATEGORY_GROUP_KEYS)[number];
 
 export type ExplanationMode = {
   id: string;

@@ -11,6 +11,7 @@ import {
   extractImportedBookCategories,
   extractImportedBookTranslations,
   extractBookSeedFromImportedJson,
+  previewImportedBookJson,
 } from "../../../lib/books/book-json-import";
 import type { BookEditorResponse, BookListItem, CategoryOption } from "../../../lib/books/types";
 
@@ -47,26 +48,34 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 const bookJsonTemplate = `{
   "title": "Волшебник Земноморья",
+  "slug": "volshebnik-zemnomorya",
   "author": "Урсула Ле Гуин",
   "year": 1968,
   "description": "Короткое описание книги",
   "keywords": "магия, взросление, тень",
   "age": "10–14 лет",
   "reading_time": "6–8 часов",
+  "is_published": false,
   "categories": [
     {
+      "slug": "fantasy",
       "name": "фэнтези",
       "translations": {
+        "ru": "Фэнтези",
         "en": "Fantasy",
         "he": "פנטזיה"
-      }
+      },
+      "group_key": "speculative"
     },
     {
+      "slug": "classic",
       "name": "классика",
       "translations": {
+        "ru": "Классика",
         "en": "Classic",
         "he": "קלאסיקה"
-      }
+      },
+      "group_key": "classic-history"
     }
   ],
   "translations": {
@@ -278,19 +287,24 @@ const bookAiPrompt = `**Роль:** Ты — милая и невероятно 
 \`\`\`json
 {
   "title": "Волшебник Земноморья",
+  "slug": "volshebnik-zemnomorya",
   "author": "Урсула Ле Гуин",
   "year": 1968,
   "description": "Короткое описание книги",
   "keywords": "магия, взросление, тень",
   "age": "10–14 лет",
   "reading_time": "6–8 часов",
+  "is_published": false,
   "categories": [
     {
+      "slug": "fantasy",
       "name": "фэнтези",
       "translations": {
+        "ru": "Фэнтези",
         "en": "Fantasy",
         "he": "פנטזיה"
-      }
+      },
+      "group_key": "speculative"
     }
   ],
   "translations": {
@@ -618,6 +632,15 @@ export default function AdminBooksIndexPage() {
     return book.missing_sections.join(", ");
   };
 
+  const importPreview = useMemo(() => {
+    if (!jsonImportValue.trim()) return null;
+    try {
+      return { data: previewImportedBookJson(jsonImportValue), error: null };
+    } catch (previewError) {
+      return { data: null, error: previewError instanceof Error ? previewError.message : String(previewError) };
+    }
+  }, [jsonImportValue]);
+
   useEffect(() => {
     if (!sessionChecked) {
       return;
@@ -657,6 +680,10 @@ export default function AdminBooksIndexPage() {
     setSuccess(null);
 
     try {
+      const validatedPreview = previewImportedBookJson(jsonImportValue);
+      if (!validatedPreview.canSubmit) {
+        throw new Error(`Импорт заблокирован: ${validatedPreview.scriptIssues[0]?.path}: ${validatedPreview.scriptIssues[0]?.message}`);
+      }
       const seed = extractBookSeedFromImportedJson(jsonImportValue);
       const importedCategories = extractImportedBookCategories(jsonImportValue);
 
@@ -664,7 +691,7 @@ export default function AdminBooksIndexPage() {
         await fetchJson<{ category: CategoryOption }>("/api/admin/book-categories", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name: category.name }),
+          body: JSON.stringify(category),
         });
       }
 
@@ -943,7 +970,7 @@ export default function AdminBooksIndexPage() {
             <button
               type="button"
               className="books-button books-button--primary"
-              disabled={importingBookJson || !jsonImportValue.trim()}
+              disabled={importingBookJson || !jsonImportValue.trim() || Boolean(importPreview?.error) || importPreview?.data?.canSubmit === false}
               onClick={() => {
                 void importBookFromJson();
               }}
@@ -967,12 +994,62 @@ export default function AdminBooksIndexPage() {
             onChange={(event) => setJsonImportValue(event.target.value)}
           />
           <span className="books-field__help">
-            Поддерживаются поля title, author, year, description, keywords, age, reading_time, categories, *_slides и test.
-            `categories` можно передавать как массив строк или массив объектов с переводами. Если в `translations.en/he`
+            Поддерживаются поля title, slug, author, year, description, keywords, age, reading_time, categories, *_slides и test.
+            `categories` можно передавать как массив строк или массив объектов с slug, translations и group_key. Если в `translations.en/he`
             передать `*_slides`, их тексты тоже автоматически сохранятся в `content_translations`.
             Несколько категорий для одной книги разрешены и не считаются ошибкой.
           </span>
         </label>
+
+        {importPreview && (
+          <div className="books-import-preview" dir="auto">
+            {importPreview.error ? (
+              <div className="books-alert books-alert--error">{importPreview.error}</div>
+            ) : importPreview.data ? (
+              <>
+                <strong>{importPreview.data.title}</strong>
+                <small>Canonical slug: {importPreview.data.slug}</small>
+                <div className="books-import-preview__languages">
+                  {(["ru", "en", "he"] as const).map((language) => (
+                    <div key={language}>
+                      <strong>{language.toUpperCase()} {importPreview.data?.languages[language].complete ? "✓ Complete" : "⚠ Missing"}</strong>
+                      {!importPreview.data?.languages[language].complete && (
+                        <small>{importPreview.data?.languages[language].missing.join(", ")}</small>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {importPreview.data.categories.map((category) => (
+                  <div className="books-import-preview__category" key={category.slug ?? category.name}>
+                    <strong>{category.name}</strong>
+                    <span>RU {category.translations.ru ? `✓ ${category.translations.ru}` : "⚠"}</span>
+                    <span>EN {category.translations.en ? `✓ ${category.translations.en}` : "⚠"}</span>
+                    <span>HE {category.translations.he ? `✓ ${category.translations.he}` : "⚠"}</span>
+                    <span>Group: {category.group_key}</span>
+                    <span>Slug: {category.slug ?? "будет создан автоматически"}</span>
+                    <span>{bookCategories.some((existing) => existing.slug === category.slug || existing.name.trim().toLocaleLowerCase("ru") === category.name.trim().toLocaleLowerCase("ru")) ? "Будет переиспользована" : "Будет создана"}</span>
+                  </div>
+                ))}
+                {importPreview.data.scriptIssues.length > 0 && (
+                  <div className="books-import-preview__issues">
+                    <strong>Перевод содержит недопустимые символы — импорт заблокирован</strong>
+                    {importPreview.data.scriptIssues.map((issue, index) => (
+                      <div className="books-import-preview__issue" key={`${issue.path}-${index}`}>
+                        <strong>{issue.language === "he" ? "Hebrew" : "English"} translation</strong>
+                        <code>{issue.path || `translations.${issue.language}`}</code>
+                        <span>{issue.message}</span>
+                        {issue.fragment && <small>Fragment: “{issue.fragment}”</small>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {importPreview.data.warnings.length > 0 && (
+                  <ul>{importPreview.data.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+                )}
+              </>
+            ) : null}
+          </div>
+        )}
 
         <div className="books-import-help">
           <strong>Поддерживаемый формат</strong>

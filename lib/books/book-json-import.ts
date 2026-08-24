@@ -1,5 +1,14 @@
-import type { BookEditorPayload, BookEditorResponse, CategoryOption } from "./types";
-import { slugifyRu } from "./slugify-ru";
+import type {
+  BookCategoryGroupKey,
+  BookEditorPayload,
+  BookEditorResponse,
+  CategoryOption,
+} from "./types.ts";
+import { slugifyRu } from "./slugify-ru.ts";
+import {
+  findTranslationScriptIssues,
+  type TranslationScriptIssue,
+} from "../translations/script-validation.ts";
 
 const SECTION_IMPORT_KEYS = {
   plot: "plot_slides",
@@ -12,16 +21,42 @@ const SECTION_IMPORT_KEYS = {
   twenty_seconds: "book_in_20_sec_slides",
 } as const;
 
+const BOOK_CATEGORY_GROUP_KEYS: readonly BookCategoryGroupKey[] = [
+  "literature", "speculative", "mystery", "classic-history", "ideas", "audience", "other",
+];
+
 type SectionSlug = keyof typeof SECTION_IMPORT_KEYS;
 
 type LooseRecord = Record<string, unknown>;
-type ImportedCategory = {
+export type ImportedCategory = {
   name: string;
-  translations?: {
-    en?: string;
-    he?: string;
-  };
+  slug?: string;
+  translations: Partial<Record<"ru" | "en" | "he", string>>;
+  group_key: BookCategoryGroupKey;
+  sort_order?: number;
+  is_published?: boolean;
 };
+
+export type ImportedBookPreview = {
+  title: string;
+  slug: string;
+  languages: Record<"ru" | "en" | "he", { complete: boolean; missing: string[] }>;
+  categories: ImportedCategory[];
+  warnings: string[];
+  scriptIssues: TranslationScriptIssue[];
+  canSubmit: boolean;
+};
+
+export function mergeCategoryTranslations(
+  existing: Partial<Record<"ru" | "en" | "he", string>> | null | undefined,
+  incoming: Partial<Record<"ru" | "en" | "he", string>>,
+) {
+  return Object.fromEntries(
+    Object.entries({ ...incoming, ...(existing ?? {}) })
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string" && Boolean(entry[1].trim()))
+      .map(([language, label]) => [language, label.trim()]),
+  ) as Partial<Record<"ru" | "en" | "he", string>>;
+}
 export type ImportedBookTranslationPayload = {
   title?: string;
   author?: string | null;
@@ -142,7 +177,7 @@ function readImportedCategories(record: LooseRecord, key: string): ImportedCateg
       if (!name) {
         throw new Error(`Элемент \`${key}[${index}]\` должен быть непустой строкой.`);
       }
-      return { name };
+      return { name, translations: { ru: name }, group_key: "other" };
     }
 
     if (!item || typeof item !== "object" || Array.isArray(item)) {
@@ -160,12 +195,19 @@ function readImportedCategories(record: LooseRecord, key: string): ImportedCateg
       throw new Error(`Поле \`${key}[${index}].name\` обязательно.`);
     }
 
-    const translationsRecord = hasOwn(categoryRecord, "translations") && categoryRecord.translations
-      && typeof categoryRecord.translations === "object"
-      && !Array.isArray(categoryRecord.translations)
-      ? (categoryRecord.translations as LooseRecord)
-      : undefined;
+    let translationsRecord: LooseRecord | undefined;
+    if (hasOwn(categoryRecord, "translations")) {
+      if (!categoryRecord.translations || typeof categoryRecord.translations !== "object" || Array.isArray(categoryRecord.translations)) {
+        throw new Error(`Поле \`${key}[${index}].translations\` должно быть объектом { ru, en, he }.`);
+      }
+      translationsRecord = categoryRecord.translations as LooseRecord;
+      const unknownLanguages = Object.keys(translationsRecord).filter((language) => !["ru", "en", "he"].includes(language));
+      if (unknownLanguages.length > 0) {
+        throw new Error(`Поле \`${key}[${index}].translations\` содержит неподдерживаемые языки: ${unknownLanguages.join(", ")}.`);
+      }
+    }
 
+    const ru = (translationsRecord ? readOptionalString(translationsRecord, "ru") : undefined) ?? name;
     const en =
       (translationsRecord ? readOptionalString(translationsRecord, "en") : undefined) ??
       readOptionalString(categoryRecord, "en") ??
@@ -175,9 +217,30 @@ function readImportedCategories(record: LooseRecord, key: string): ImportedCateg
       readOptionalString(categoryRecord, "he") ??
       undefined;
 
+    const rawSlug = readOptionalString(categoryRecord, "slug");
+    const slug = rawSlug ? slugifyRu(rawSlug) : undefined;
+    if (rawSlug && !slug) {
+      throw new Error(`Поле \`${key}[${index}].slug\` должно содержать допустимый canonical slug.`);
+    }
+
+    const rawGroupKey = readOptionalString(categoryRecord, "group_key") ?? "other";
+    if (!BOOK_CATEGORY_GROUP_KEYS.includes(rawGroupKey as BookCategoryGroupKey)) {
+      throw new Error(`Поле \`${key}[${index}].group_key\` должно быть одним из: ${BOOK_CATEGORY_GROUP_KEYS.join(", ")}.`);
+    }
+
+    const sortOrder = readOptionalNumber(categoryRecord, "sort_order");
+    const rawPublished = categoryRecord.is_published;
+    if (rawPublished !== undefined && typeof rawPublished !== "boolean") {
+      throw new Error(`Поле \`${key}[${index}].is_published\` должно быть boolean.`);
+    }
+
     return {
       name,
-      translations: en || he ? { ...(en ? { en } : {}), ...(he ? { he } : {}) } : undefined,
+      ...(slug ? { slug } : {}),
+      translations: { ru, ...(en ? { en } : {}), ...(he ? { he } : {}) },
+      group_key: rawGroupKey as BookCategoryGroupKey,
+      ...(sortOrder !== undefined && sortOrder !== null ? { sort_order: sortOrder } : {}),
+      ...(typeof rawPublished === "boolean" ? { is_published: rawPublished } : {}),
     };
   });
 }
@@ -193,6 +256,12 @@ function parseKeywords(value: string | null | undefined) {
       .map((item) => item.trim())
       .filter(Boolean),
   )];
+}
+
+function readImportedKeywords(record: LooseRecord) {
+  if (!hasOwn(record, "keywords")) return undefined;
+  if (Array.isArray(record.keywords)) return readStringArray(record, "keywords");
+  return parseKeywords(readOptionalString(record, "keywords"));
 }
 
 function normalizeLookupValue(value: string) {
@@ -446,19 +515,22 @@ export function buildBookPayloadFromImportedJson(
   const raw = parseImportedBookJson(rawJson);
 
   const importedTitle = readOptionalString(raw, "title");
+  const importedSlug = readOptionalString(raw, "slug");
   const importedAuthor = readOptionalString(raw, "author");
   const importedDescription = readOptionalString(raw, "description");
-  const importedAge = readOptionalString(raw, "age");
-  const importedKeywords = hasOwn(raw, "keywords")
-    ? parseKeywords(readOptionalString(raw, "keywords"))
-    : undefined;
+  const importedAge = readOptionalString(raw, "age_group") ?? readOptionalString(raw, "age");
+  const importedKeywords = readImportedKeywords(raw);
   const importedCategories = readImportedCategories(raw, "categories");
   const importedTest = mapImportedTest(current.tests, raw.test);
   const importedYear = readOptionalNumber(raw, "year");
   const importedReadingTime = parseReadingTime(raw.reading_time);
+  const importedPublished = raw.is_published;
+  if (importedPublished !== undefined && typeof importedPublished !== "boolean") {
+    throw new Error("Поле `is_published` должно быть boolean.");
+  }
 
   const nextTitle = importedTitle || current.book.title;
-  const nextSlug = current.book.slug || slugifyRu(nextTitle) || "book";
+  const nextSlug = importedSlug ? slugifyRu(importedSlug) : current.book.slug || slugifyRu(nextTitle) || "book";
 
   return {
     book: {
@@ -471,6 +543,7 @@ export function buildBookPayloadFromImportedJson(
       keywords: importedKeywords ?? current.book.keywords,
       age_group: importedAge !== undefined ? importedAge : current.book.age_group,
       reading_time: importedReadingTime !== undefined ? importedReadingTime : current.book.reading_time,
+      is_published: typeof importedPublished === "boolean" ? importedPublished : current.book.is_published,
     },
     categoryIds: importedCategories ? resolveCategoryIds(importedCategories.map((item) => item.name), current.categories) : current.categoryIds,
     explanations: current.explanations.map((explanation) => {
@@ -500,7 +573,7 @@ export function extractImportedBookTranslations(rawJson: string): Partial<Record
   for (const language of ["en", "he"] as const) {
     const translationRecord = readImportedTranslationRecord(raw, language);
     const categoryNames = importedCategories
-      .map((category) => category.translations?.[language]?.trim() ?? "")
+      .map((category) => category.translations[language]?.trim() ?? "")
       .filter(Boolean);
 
     if (!translationRecord && categoryNames.length === 0) {
@@ -554,6 +627,98 @@ export function extractImportedBookTranslations(rawJson: string): Partial<Record
   return byLanguage;
 }
 
+function supportedTranslationForScriptValidation(
+  record: LooseRecord,
+  language: "en" | "he",
+): LooseRecord {
+  const supported: LooseRecord = {};
+  for (const key of ["title", "author", "description"] as const) {
+    const value = readOptionalString(record, key);
+    if (value !== undefined && value !== null) supported[key] = value;
+  }
+  const categories = readImportedCategories(record, "categories");
+  if (categories) supported.categories = categories.map((category) => category.name);
+  for (const key of Object.values(SECTION_IMPORT_KEYS)) {
+    const slides = readStringArray(record, key);
+    if (slides) supported[key] = slides;
+  }
+  const tests = readTranslatedTests(record.tests);
+  if (tests !== undefined) supported.tests = tests;
+  return { translations: { [language]: supported } };
+}
+
+export function validateImportedBookScripts(rawJson: string): TranslationScriptIssue[] {
+  const raw = parseImportedBookJson(rawJson);
+  const categories = readImportedCategories(raw, "categories") ?? [];
+  const issues: TranslationScriptIssue[] = [];
+
+  for (const language of ["en", "he"] as const) {
+    const translation = readImportedTranslationRecord(raw, language);
+    const payload: LooseRecord = translation
+      ? supportedTranslationForScriptValidation(translation, language)
+      : { translations: { [language]: {} } };
+    payload.categories = categories.map((category) => ({
+      translations: { [language]: category.translations[language] },
+    }));
+
+    const hasLocalizedText = translation || categories.some((category) => Boolean(category.translations[language]));
+    if (hasLocalizedText) issues.push(...findTranslationScriptIssues(payload, language));
+  }
+  return issues;
+}
+
+export function previewImportedBookJson(rawJson: string): ImportedBookPreview {
+  const raw = parseImportedBookJson(rawJson);
+  const title = readOptionalString(raw, "title");
+  if (!title) throw new Error("Поле `title` обязательно для импорта книги.");
+  const requestedSlug = readOptionalString(raw, "slug");
+  const slug = requestedSlug ? slugifyRu(requestedSlug) : slugifyRu(title);
+  if (!slug) throw new Error("Не удалось получить canonical `slug` книги.");
+
+  const categories = readImportedCategories(raw, "categories") ?? [];
+  const duplicateSlugs = categories
+    .map((category) => category.slug ?? slugifyRu(category.name))
+    .filter((value, index, values) => values.indexOf(value) !== index);
+  if (duplicateSlugs.length > 0) {
+    throw new Error(`Категории содержат повторяющиеся canonical slug: ${[...new Set(duplicateSlugs)].join(", ")}.`);
+  }
+
+  const warnings: string[] = [];
+  const knownKeys = new Set([
+    "title", "slug", "author", "year", "description", "keywords", "age", "age_group", "reading_time",
+    "is_published", "categories", "translations", "test", ...Object.values(SECTION_IMPORT_KEYS),
+  ]);
+  const unknownKeys = Object.keys(raw).filter((key) => !knownKeys.has(key));
+  if (unknownKeys.length > 0) warnings.push(`Неизвестные поля не будут сохранены: ${unknownKeys.join(", ")}.`);
+  const languageStatus = (language: "ru" | "en" | "he") => {
+    const source = language === "ru" ? raw : readImportedTranslationRecord(raw, language);
+    const missing: string[] = [];
+    if (!source || !readOptionalString(source, "title")) missing.push("title");
+    if (!source || !readOptionalString(source, "description")) missing.push("description");
+    for (const key of Object.values(SECTION_IMPORT_KEYS)) {
+      if (!source || !readStringArray(source, key)?.length) missing.push(key);
+    }
+    const testValue = language === "ru" ? raw.test : source?.tests;
+    if (testValue === undefined || testValue === null) missing.push("tests");
+    return { complete: missing.length === 0, missing };
+  };
+
+  for (const [index, category] of categories.entries()) {
+    for (const language of ["ru", "en", "he"] as const) {
+      if (!category.translations[language]?.trim()) {
+        warnings.push(`categories[${index}]: отсутствует перевод ${language.toUpperCase()}.`);
+      }
+    }
+  }
+
+  const languages = { ru: languageStatus("ru"), en: languageStatus("en"), he: languageStatus("he") };
+  for (const language of ["ru", "en", "he"] as const) {
+    if (!languages[language].complete) warnings.push(`${language.toUpperCase()}: отсутствуют ${languages[language].missing.join(", ")}.`);
+  }
+  const scriptIssues = validateImportedBookScripts(rawJson);
+  return { title, slug, languages, categories, warnings, scriptIssues, canSubmit: scriptIssues.length === 0 };
+}
+
 export function parseImportedBookJson(rawJson: string): LooseRecord {
   let parsed: unknown;
   try {
@@ -575,5 +740,6 @@ export function extractBookSeedFromImportedJson(rawJson: string) {
   return {
     title,
     author: readOptionalString(raw, "author") ?? "",
+    slug: readOptionalString(raw, "slug") ?? undefined,
   };
 }

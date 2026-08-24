@@ -5,10 +5,20 @@ import {
   loadCategoryOptions,
   requireAdminSession,
 } from "../../../lib/server/book-admin";
+import { BOOK_CATEGORY_GROUP_KEYS } from "../../../lib/books/types";
+import { findTranslationScriptIssues } from "../../../lib/translations/script-validation";
 
 const createCategorySchema = z.object({
   name: z.string().trim().min(1, "Название категории обязательно."),
   slug: z.string().trim().optional().nullable(),
+  translations: z.object({
+    ru: z.string().trim().min(1).optional(),
+    en: z.string().trim().min(1).optional(),
+    he: z.string().trim().min(1).optional(),
+  }).strict().optional(),
+  group_key: z.enum(BOOK_CATEGORY_GROUP_KEYS).optional().default("other"),
+  sort_order: z.number().int().optional().nullable(),
+  is_published: z.boolean().optional(),
 });
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -33,6 +43,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   if (req.method === "POST") {
     try {
       const body = createCategorySchema.parse(req.body ?? {});
+      for (const language of ["en", "he"] as const) {
+        const label = body.translations?.[language];
+        if (!label) continue;
+        const issue = findTranslationScriptIssues(label, language, `translations.${language}`)[0];
+        if (issue) return res.status(422).json({ error: `${issue.path}: ${issue.message}`, issue });
+      }
       const category = await createBookCategory(supabase, body);
       return res.status(201).json({ category });
     } catch (error) {

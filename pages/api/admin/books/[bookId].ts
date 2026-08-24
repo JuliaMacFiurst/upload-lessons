@@ -4,6 +4,7 @@ import { loadBookEditorData, requireAdminSession, saveBookEditorData } from "../
 import type { BookEditorPayload } from "../../../../lib/books/types";
 import type { ImportedBookTranslationPayload } from "../../../../lib/books/book-json-import";
 import { loadTranslationItemByContent } from "../../../../lib/server/translation-content";
+import { findTranslationScriptIssues } from "../../../../lib/translations/script-validation";
 
 type BookTranslationRow = {
   translation: Record<string, unknown> | null;
@@ -160,6 +161,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const body = (req.body ?? {}) as BookRequestBody;
+    for (const language of ["en", "he"] as const) {
+      const translation = body.importedTranslations?.[language];
+      if (!translation) continue;
+      const issue = findTranslationScriptIssues(translation, language, `translations.${language}`)[0];
+      if (issue) {
+        return res.status(422).json({
+          error: `${issue.path || `translations.${language}`}: ${issue.message}`,
+          issue,
+        });
+      }
+    }
     await saveBookEditorData(supabase, bookId, body as BookEditorPayload);
     await upsertImportedBookTranslations(req, res, supabase, bookId, body.importedTranslations);
     const data = await loadBookEditorData(supabase, bookId);

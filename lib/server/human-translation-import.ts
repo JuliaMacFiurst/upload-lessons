@@ -13,6 +13,7 @@ import type {
 import { getTranslationAdapter, type TranslationLanguage } from "./translation-adapters.ts";
 import type { TranslationContentType } from "../translations/content-types.ts";
 import { buildSourceHash } from "./translation-hash.ts";
+import { validateTranslationScripts } from "../translations/script-validation.ts";
 
 export type HumanTranslationImportErrorKind =
   | "parse"
@@ -116,63 +117,6 @@ function emptyPreview(errors: HumanTranslationImportError[]): HumanTranslationIm
     errors,
     items: [],
   };
-}
-
-function validateTranslationScripts(payload: unknown, language: TranslationLanguage): void {
-  const isTechnicalKey = (key: string): boolean =>
-    key === "id" ||
-    key === "slug" ||
-    key === "content_type" ||
-    key === "language" ||
-    key === "source_hash" ||
-    key === "mode_slug" ||
-    key.endsWith("_id") ||
-    key.endsWith("_key");
-  const strings: string[] = [];
-  const visit = (value: unknown): void => {
-    if (typeof value === "string") {
-      strings.push(value);
-    } else if (Array.isArray(value)) {
-      value.forEach(visit);
-    } else if (value && typeof value === "object") {
-      Object.entries(value as Record<string, unknown>).forEach(([key, child]) => {
-        if (!isTechnicalKey(key)) visit(child);
-      });
-    }
-  };
-  visit(payload);
-  const text = strings.join("\n");
-  const cyrillic = text.match(/[\p{Script=Cyrillic}]+/u);
-  if (cyrillic) {
-    throw new Error(`${language.toUpperCase()} translation contains unexpected Cyrillic text: “${cyrillic[0]}”.`);
-  }
-  if (language === "en") {
-    const hebrew = text.match(/[\p{Script=Hebrew}]+/u);
-    if (hebrew) throw new Error(`English translation contains unexpected Hebrew text: “${hebrew[0]}”.`);
-    if (!/\p{Script=Latin}/u.test(text)) {
-      throw new Error("English translation contains no Latin text.");
-    }
-  } else {
-    if (!/\p{Script=Hebrew}/u.test(text)) {
-      throw new Error("Hebrew translation contains no Hebrew text.");
-    }
-    const words = text.match(/[\p{Letter}]+/gu) ?? [];
-    const invalidWord = words.find((word) =>
-      Array.from(word).some((character) =>
-        /\p{Letter}/u.test(character) && !/\p{Script=Hebrew}/u.test(character),
-      ),
-    );
-    if (invalidWord) {
-      const script = /\p{Script=Arabic}/u.test(invalidWord)
-        ? "Arabic"
-        : /\p{Script=Latin}/u.test(invalidWord)
-          ? "Latin"
-          : /\p{Script=Cyrillic}/u.test(invalidWord)
-            ? "Cyrillic"
-            : "non-Hebrew";
-      throw new Error(`Hebrew translation contains unexpected ${script} letters: “${invalidWord}”. Only Hebrew letters are allowed.`);
-    }
-  }
 }
 
 export function parseHumanTranslationJson(raw: string): unknown {

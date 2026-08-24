@@ -9,6 +9,7 @@ import {
 type CreateBody = {
   title?: string;
   author?: string;
+  slug?: string;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -39,18 +40,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   const body = (req.body ?? {}) as CreateBody;
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const author = typeof body.author === "string" ? body.author.trim() : "";
+  const requestedSlug = typeof body.slug === "string" ? body.slug.trim() : "";
 
   if (!title) {
     return res.status(400).json({ error: "Title is required." });
   }
 
   try {
-    const existing = await findBookByExactTitle(supabase, title);
+    const { data: existingBySlug, error: slugLookupError } = requestedSlug
+      ? await supabase.from("books").select("id,title,slug,author,year,is_published,created_at").eq("slug", requestedSlug).maybeSingle()
+      : { data: null, error: null };
+    if (slugLookupError) throw new Error(`Failed to search book slug: ${slugLookupError.message}`);
+    const existing = existingBySlug ?? await findBookByExactTitle(supabase, title);
     if (existing) {
       return res.status(200).json({ existing: true, book: existing });
     }
 
-    const slug = await createUniqueBookSlug(supabase, title);
+    const slug = await createUniqueBookSlug(supabase, requestedSlug || title);
     const { data, error } = await supabase
       .from("books")
       .insert({
