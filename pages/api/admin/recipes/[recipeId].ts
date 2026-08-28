@@ -3,12 +3,14 @@ import { requireAdminSession } from "../../../../lib/server/admin-session";
 import {
   handleRecipeValidationError,
   loadRecipe,
+  saveRecipeCountryTarget,
   updateRecipe,
 } from "../../../../lib/server/recipes-admin";
 import type { RecipePayload } from "../../../../lib/recipes/types";
 
 type SaveBody = {
   recipe?: RecipePayload;
+  countryTargetId?: string | null;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -36,8 +38,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
   }
 
+  if (req.method === "PATCH") {
+    try {
+      const body = (req.body ?? {}) as SaveBody;
+      if (!("countryTargetId" in body)) {
+        return res.status(400).json({ error: "Missing countryTargetId." });
+      }
+      if (body.countryTargetId !== null && typeof body.countryTargetId !== "string") {
+        return res.status(400).json({ error: "countryTargetId must be a string or null." });
+      }
+      const recipe = await saveRecipeCountryTarget(supabase, recipeId, body.countryTargetId);
+      return res.status(200).json({ ok: true, recipe });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to save recipe country target.";
+      const status = message === "Country target not found." ? 400 : 500;
+      return res.status(status).json({ error: message });
+    }
+  }
+
   if (req.method !== "POST") {
-    res.setHeader("Allow", "GET, POST");
+    res.setHeader("Allow", "GET, PATCH, POST");
     return res.status(405).json({ error: "Method not allowed" });
   }
 

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 import { buildSourceHash } from "./translation-content";
+import { mergeRecipeExportUrl } from "../recipes/export-image";
 import {
   recipePayloadSchema,
   recipeRecordSchema,
@@ -481,7 +482,6 @@ export async function updateRecipe(
       description: parsed.description,
       image_url: parsed.image_url,
       country: parsed.country,
-      country_target_id: parsed.country_target_id,
       ingredients: parsed.ingredients,
       fact: parsed.fact,
       raccoon_caption: parsed.raccoon_caption,
@@ -514,6 +514,40 @@ export async function updateRecipe(
   return loadRecipe(supabase, recipeId);
 }
 
+export async function saveRecipeCountryTarget(
+  supabase: SupabaseClient,
+  recipeId: string,
+  countryTargetId: string | null,
+): Promise<RecipeRecord> {
+  const normalizedTargetId = countryTargetId?.trim() || null;
+  if (normalizedTargetId) {
+    const { data: target, error: targetError } = await supabase
+      .from("map_targets")
+      .select("target_id")
+      .eq("map_type", "country")
+      .eq("target_id", normalizedTargetId)
+      .maybeSingle();
+
+    if (targetError) {
+      throw new Error(`Failed to validate country target: ${targetError.message}`);
+    }
+    if (!target) {
+      throw new Error("Country target not found.");
+    }
+  }
+
+  const { error } = await supabase
+    .from("recipes")
+    .update({ country_target_id: normalizedTargetId })
+    .eq("id", recipeId);
+
+  if (error) {
+    throw new Error(`Failed to save recipe country target: ${error.message}`);
+  }
+
+  return loadRecipe(supabase, recipeId);
+}
+
 export async function saveRecipeExportUrl(
   supabase: SupabaseClient,
   recipeId: string,
@@ -521,10 +555,7 @@ export async function saveRecipeExportUrl(
   publicUrl: string,
 ): Promise<RecipeRecord> {
   const current = await loadRecipe(supabase, recipeId);
-  const exportedImageUrls = {
-    ...current.exported_image_urls,
-    [language]: publicUrl,
-  };
+  const exportedImageUrls = mergeRecipeExportUrl(current.exported_image_urls, language, publicUrl);
 
   const { error } = await supabase
     .from("recipes")

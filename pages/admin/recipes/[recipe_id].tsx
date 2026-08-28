@@ -7,6 +7,12 @@ import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../../components/AdminLogout";
 import { AdminTabs } from "../../../components/AdminTabs";
 import type { RecipeLayoutTemplate, RecipeRecord } from "../../../lib/recipes/types";
+import {
+  buildRecipeExportImagePrompt,
+  RECIPE_EXPORT_FORMAT_ERROR,
+  validateRecipeExportDeclaredFormat,
+  validateRecipeExportImageMetadata,
+} from "../../../lib/recipes/export-image";
 
 type RecipeLayoutElement = {
   id: string;
@@ -301,6 +307,38 @@ function blobToDataUrl(blob: Blob): Promise<string> {
     };
     reader.onerror = () => reject(new Error("Failed to read image blob."));
     reader.readAsDataURL(blob);
+  });
+}
+
+function validateExportPngFile(file: File): Promise<void> {
+  return new Promise((resolve, reject) => {
+    try {
+      validateRecipeExportDeclaredFormat({ contentType: file.type, fileName: file.name });
+    } catch {
+      reject(new Error(RECIPE_EXPORT_FORMAT_ERROR));
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        validateRecipeExportImageMetadata({
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+          format: "png",
+        });
+      } catch (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error(RECIPE_EXPORT_FORMAT_ERROR));
+    };
+    image.src = url;
   });
 }
 
@@ -1092,6 +1130,7 @@ export default function RecipeEditorPage() {
   const cropBoxRef = useRef<HTMLDivElement | null>(null);
   const cropInteractionRef = useRef<CropInteraction | null>(null);
   const mediaAssetPointerDragRef = useRef<MediaAssetPointerDrag | null>(null);
+  const aiExportInputRef = useRef<HTMLInputElement | null>(null);
 
   const [sessionChecked, setSessionChecked] = useState(false);
   const [recipe, setRecipe] = useState<RecipeRecord | null>(null);
@@ -1154,7 +1193,17 @@ export default function RecipeEditorPage() {
   const [countryTargets, setCountryTargets] = useState<CountryTarget[]>([]);
   const [countryTargetsLoading, setCountryTargetsLoading] = useState(false);
   const [countryTargetsError, setCountryTargetsError] = useState<string | null>(null);
+  const [savingCountryTarget, setSavingCountryTarget] = useState(false);
   const [positionSourceLanguage, setPositionSourceLanguage] = useState<RecipeStudioLanguage>("ru");
+  const [aiExportLanguage, setAiExportLanguage] = useState<RecipeStudioLanguage>("ru");
+  const [aiExportFile, setAiExportFile] = useState<File | null>(null);
+  const [aiExportPreviewUrl, setAiExportPreviewUrl] = useState<string | null>(null);
+  const [aiExportUploading, setAiExportUploading] = useState(false);
+  const [promptCopied, setPromptCopied] = useState(false);
+
+  useEffect(() => () => {
+    if (aiExportPreviewUrl) URL.revokeObjectURL(aiExportPreviewUrl);
+  }, [aiExportPreviewUrl]);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -1248,22 +1297,36 @@ export default function RecipeEditorPage() {
   }, [recipeId, sessionChecked, templatePanelOpen]);
 
   useEffect(() => {
-    if (!sessionChecked) {
+    const query = countryTargetQuery.trim();
+    if (!sessionChecked || !query) {
+      setCountryTargets([]);
+      setCountryTargetsLoading(false);
+      setCountryTargetsError(null);
       return;
     }
 
+    let cancelled = false;
     const timer = setTimeout(() => {
       setCountryTargetsLoading(true);
       setCountryTargetsError(null);
       fetchJson<{ targets: CountryTarget[] }>(
-        `/api/admin/recipes/country-targets?q=${encodeURIComponent(countryTargetQuery)}&limit=30`,
+        `/api/admin/recipes/country-targets?q=${encodeURIComponent(query)}&limit=12`,
       )
-        .then((data) => setCountryTargets(data.targets))
-        .catch((fetchError) => setCountryTargetsError(fetchError instanceof Error ? fetchError.message : String(fetchError)))
-        .finally(() => setCountryTargetsLoading(false));
+        .then((data) => {
+          if (!cancelled) setCountryTargets(data.targets);
+        })
+        .catch((fetchError) => {
+          if (!cancelled) setCountryTargetsError(fetchError instanceof Error ? fetchError.message : String(fetchError));
+        })
+        .finally(() => {
+          if (!cancelled) setCountryTargetsLoading(false);
+        });
     }, 250);
 
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
   }, [countryTargetQuery, sessionChecked]);
 
   useEffect(() => {
@@ -1867,11 +1930,30 @@ export default function RecipeEditorPage() {
     setSuccess("Свободный текст добавлен как новый слой.");
   };
 
-  const selectCountryTarget = (targetId: string | null) => {
-    setRecipe((current) => current ? {
-      ...current,
-      country_target_id: targetId,
-    } : current);
+  const selectCountryTarget = async (targetId: string | null) => {
+    if (!recipe || savingCountryTarget || recipe.country_target_id === targetId) {
+      return;
+    }
+
+    setSavingCountryTarget(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const data = await fetchJson<{ recipe: RecipeRecord }>(`/api/admin/recipes/${recipe.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ countryTargetId: targetId }),
+      });
+      setRecipe(data.recipe);
+      setJsonValue(recipeToEditableJson(data.recipe));
+      setCountryTargetQuery("");
+      setCountryTargets([]);
+      setSuccess(targetId ? `Страна привязана: ${data.recipe.country_target_id}.` : "Привязка страны удалена.");
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : String(saveError));
+    } finally {
+      setSavingCountryTarget(false);
+    }
   };
 
   const setBrandLogo = (logo: typeof LOGO_OPTIONS[number]) => {
@@ -2480,6 +2562,74 @@ export default function RecipeEditorPage() {
     }
   };
 
+  const selectAiExportFile = async (file: File | null) => {
+    if (!file) return;
+    setError(null);
+    try {
+      await validateExportPngFile(file);
+      setAiExportPreviewUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return URL.createObjectURL(file);
+      });
+      setAiExportFile(file);
+    } catch (validationError) {
+      setAiExportFile(null);
+      setAiExportPreviewUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return null;
+      });
+      if (aiExportInputRef.current) aiExportInputRef.current.value = "";
+      setError(validationError instanceof Error ? validationError.message : RECIPE_EXPORT_FORMAT_ERROR);
+    }
+  };
+
+  const copyAiExportPrompt = async () => {
+    if (!recipe) return;
+    setError(null);
+    try {
+      await navigator.clipboard.writeText(buildRecipeExportImagePrompt(recipe, aiExportLanguage));
+      setPromptCopied(true);
+      window.setTimeout(() => setPromptCopied(false), 1800);
+    } catch {
+      setError("Не удалось скопировать промпт в буфер обмена.");
+    }
+  };
+
+  const uploadAiExport = async () => {
+    if (!recipe || !aiExportFile) return;
+    setAiExportUploading(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      await validateExportPngFile(aiExportFile);
+      const response = await fetchJson<{ recipe: RecipeRecord }>(`/api/admin/recipes/${recipe.id}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          language: aiExportLanguage,
+          contentType: "image/png",
+          imageBase64: await blobToDataUrl(aiExportFile),
+          exportId: `${Date.now().toString(36)}-${aiExportLanguage}`,
+          uploadKind: "ai_png",
+        }),
+      });
+      setRecipe(response.recipe);
+      setJsonValue(recipeToEditableJson(response.recipe));
+      setExportLinksRefreshKey(Date.now());
+      setAiExportFile(null);
+      setAiExportPreviewUrl((current) => {
+        if (current) URL.revokeObjectURL(current);
+        return null;
+      });
+      if (aiExportInputRef.current) aiExportInputRef.current.value = "";
+      setSuccess(`Export image ${aiExportLanguage.toUpperCase()} сохранена.`);
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
+    } finally {
+      setAiExportUploading(false);
+    }
+  };
+
   const downloadCurrentExport = async (language: RecipeStudioLanguage) => {
     if (!recipe) {
       return;
@@ -2797,48 +2947,63 @@ export default function RecipeEditorPage() {
                   Привязка рецепта к `map_targets.target_id` только для `map_type = country`.
                 </p>
               </div>
-              {recipe.country_target_id ? (
-                <button
-                  type="button"
-                  className="books-button books-button--ghost"
-                  onClick={() => selectCountryTarget(null)}
-                >
-                  Очистить
-                </button>
-              ) : null}
             </div>
             <div className="recipe-country-target-picker">
-              <label className="books-field">
-                <span className="books-field__label">Поиск country target</span>
-                <input
-                  className="books-input"
-                  value={countryTargetQuery}
-                  onChange={(event) => setCountryTargetQuery(event.target.value)}
-                  placeholder="indonesia, Индонезия, target_id..."
-                />
-              </label>
-              <div className="recipe-country-target-current">
-                <span>Выбрано:</span>
-                <strong>{recipe.country_target_id || "не выбрано"}</strong>
+              <div className="recipe-country-target-search">
+                <label className="books-field">
+                  <span className="books-field__label">Поиск страны</span>
+                  <input
+                    className="books-input"
+                    value={countryTargetQuery}
+                    onChange={(event) => setCountryTargetQuery(event.target.value)}
+                    placeholder="Начните вводить страну..."
+                    autoComplete="off"
+                  />
+                </label>
+                {countryTargetQuery.trim() ? (
+                  <div className="recipe-country-target-results" role="listbox" aria-label="Результаты поиска стран">
+                    {countryTargets
+                      .filter((target) => target.target_id !== recipe.country_target_id)
+                      .map((target) => (
+                        <button
+                          key={target.target_id}
+                          type="button"
+                          className="recipe-country-target-button"
+                          title={countryTargetLabel(target)}
+                          disabled={savingCountryTarget}
+                          onClick={() => void selectCountryTarget(target.target_id)}
+                          role="option"
+                          aria-selected="false"
+                        >
+                          <strong>{target.title_ru || target.title_en || target.title_he || target.target_id}</strong>
+                          <span>{target.target_id}</span>
+                        </button>
+                      ))}
+                    {countryTargetsLoading ? <div className="books-section-help">Поиск...</div> : null}
+                    {countryTargetsError ? <div className="books-alert books-alert--error">{countryTargetsError}</div> : null}
+                    {!countryTargetsLoading
+                      && !countryTargetsError
+                      && countryTargets.filter((target) => target.target_id !== recipe.country_target_id).length === 0 ? (
+                        <div className="books-section-help">Страны не найдены.</div>
+                      ) : null}
+                  </div>
+                ) : null}
               </div>
-            </div>
-            {countryTargetsLoading ? <div className="books-section-help">Загрузка стран...</div> : null}
-            {countryTargetsError ? <div className="books-alert books-alert--error">{countryTargetsError}</div> : null}
-            <div className="recipe-country-target-results">
-              {countryTargets.map((target) => (
-                <button
-                  key={target.target_id}
-                  type="button"
-                  className={recipe.country_target_id === target.target_id ? "recipe-country-target-button recipe-country-target-button--active" : "recipe-country-target-button"}
-                  title={countryTargetLabel(target)}
-                  onClick={() => selectCountryTarget(target.target_id)}
-                >
-                  <strong>{target.target_id}</strong>
-                  <span>{target.title_ru || target.title_en || target.title_he || "Без названия"}</span>
-                </button>
-              ))}
-              {!countryTargetsLoading && countryTargets.length === 0 ? (
-                <div className="books-section-help">Страны не найдены.</div>
+              {recipe.country_target_id ? (
+                <div className="recipe-country-target-current">
+                  <span>Выбрано:</span>
+                  <div>
+                    <strong>{recipe.country_target_id}</strong>
+                    <button
+                      type="button"
+                      className="recipe-country-target-clear"
+                      disabled={savingCountryTarget}
+                      onClick={() => void selectCountryTarget(null)}
+                    >
+                      Удалить
+                    </button>
+                  </div>
+                </div>
               ) : null}
             </div>
           </section>
@@ -3257,6 +3422,110 @@ export default function RecipeEditorPage() {
               </aside>
             </div>
             ) : null}
+          </section>
+
+          <section className="books-panel recipe-ai-export-panel">
+            <div className="books-section-head">
+              <div>
+                <h2 className="books-panel__title">Recipe export image</h2>
+                <p className="books-section-help">
+                  Подготовьте prompt во внешнем генераторе и загрузите готовый publishing export.
+                </p>
+              </div>
+              <div className="recipe-ai-export-statuses" aria-label="Статус export images">
+                {(["ru", "en", "he"] as const).map((language) => (
+                  <span key={language} className={recipe.exported_image_urls[language] ? "is-ready" : "is-missing"}>
+                    {language.toUpperCase()} {recipe.exported_image_urls[language] ? "✓" : "Missing"}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div className="recipe-ai-export-grid">
+              <div className="recipe-ai-export-controls">
+                <div className="books-actions">
+                  {(["ru", "en", "he"] as const).map((language) => (
+                    <button
+                      key={language}
+                      type="button"
+                      className={aiExportLanguage === language ? "books-button books-button--primary" : "books-button books-button--ghost"}
+                      onClick={() => {
+                        setAiExportLanguage(language);
+                        setAiExportFile(null);
+                        setAiExportPreviewUrl((current) => {
+                          if (current) URL.revokeObjectURL(current);
+                          return null;
+                        });
+                        if (aiExportInputRef.current) aiExportInputRef.current.value = "";
+                      }}
+                    >
+                      {language.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+                <div className="books-actions">
+                  <button type="button" className="books-button books-button--secondary" onClick={() => void copyAiExportPrompt()}>
+                    Скопировать промпт для картинки
+                  </button>
+                  {promptCopied ? <span className="recipe-ai-export-copied">✓ Prompt copied</span> : null}
+                </div>
+
+                <div
+                  className="recipe-ai-export-dropzone"
+                  tabIndex={0}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "copy";
+                  }}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    void selectAiExportFile(event.dataTransfer.files?.[0] ?? null);
+                  }}
+                  onPaste={(event) => {
+                    const imageItem = Array.from(event.clipboardData.items).find((item) => item.type.startsWith("image/"));
+                    const pasted = imageItem?.getAsFile();
+                    if (pasted) {
+                      const pngFile = new File([pasted], `recipe-${aiExportLanguage}.png`, { type: pasted.type });
+                      void selectAiExportFile(pngFile);
+                    }
+                  }}
+                >
+                  <strong>Вставьте PNG из буфера или перетащите файл сюда</strong>
+                  <span>PNG · portrait 2:3 · минимум 800 × 1200 px</span>
+                  <button type="button" className="books-button books-button--ghost" onClick={() => aiExportInputRef.current?.click()}>
+                    Выбрать файл
+                  </button>
+                  <input
+                    ref={aiExportInputRef}
+                    type="file"
+                    accept="image/png,.png"
+                    hidden
+                    onChange={(event) => void selectAiExportFile(event.target.files?.[0] ?? null)}
+                  />
+                </div>
+                <button
+                  type="button"
+                  className="books-button books-button--success"
+                  disabled={!aiExportFile || aiExportUploading}
+                  onClick={() => void uploadAiExport()}
+                >
+                  {aiExportUploading ? "Сохранение..." : `Сохранить export ${aiExportLanguage.toUpperCase()}`}
+                </button>
+              </div>
+
+              <div className="recipe-ai-export-preview">
+                <span className="books-field__label">Current export: {aiExportLanguage.toUpperCase()}</span>
+                {aiExportPreviewUrl || recipe.exported_image_urls[aiExportLanguage] ? (
+                  <img
+                    src={aiExportPreviewUrl || withCacheBuster(recipe.exported_image_urls[aiExportLanguage], exportLinksRefreshKey || recipe.updated_at)}
+                    alt={`Recipe export ${aiExportLanguage.toUpperCase()}`}
+                  />
+                ) : (
+                  <div className="recipe-ai-export-empty">Export image отсутствует</div>
+                )}
+                {aiExportPreviewUrl ? <small>Предпросмотр нового файла до сохранения</small> : null}
+              </div>
+            </div>
           </section>
 
           <section className="books-panel recipe-studio-panel">

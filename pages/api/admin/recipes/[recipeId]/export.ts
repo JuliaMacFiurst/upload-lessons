@@ -1,10 +1,18 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import sharp from "sharp";
 import { requireAdminSession } from "../../../../../lib/server/admin-session";
 import {
   loadRecipe,
   saveRecipeExportUrl,
 } from "../../../../../lib/server/recipes-admin";
 import { hasR2Config, uploadPublicR2Object } from "../../../../../lib/server/r2-storage";
+import {
+  buildRecipeExportObjectKey,
+  normalizeRecipeExportSlug,
+  RECIPE_EXPORT_FORMAT_ERROR,
+  validateRecipeExportDeclaredFormat,
+  validateRecipeExportImageMetadata,
+} from "../../../../../lib/recipes/export-image";
 
 export const config = {
   api: {
@@ -19,18 +27,10 @@ type ExportBody = {
   imageBase64?: string;
   contentType?: string;
   exportId?: string;
+  uploadKind?: "studio" | "ai_png";
 };
 
 const RECIPE_EXPORT_BUCKET = process.env.RECIPE_EXPORT_BUCKET || "recipes";
-
-function normalizeStorageSegment(value: string) {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-}
 
 function decodeImageBase64(value: string): Buffer {
   const payload = value.includes(",") ? value.split(",").pop() ?? "" : value;
@@ -76,13 +76,28 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Missing imageBase64." });
     }
 
-    const contentType = body.contentType === "image/webp" ? "image/webp" : "image/png";
-    const extension = contentType === "image/webp" ? "webp" : "png";
+    const contentType = "image/png";
+    try {
+      validateRecipeExportDeclaredFormat({ contentType: body.contentType ?? "" });
+    } catch (error) {
+      return res.status(400).json({ error: error instanceof Error ? error.message : "Invalid recipe export." });
+    }
+    if (!hasR2Config()) {
+      return res.status(500).json({ error: "Cloudflare R2 storage is not configured." });
+    }
     const recipe = await loadRecipe(supabase, recipeId);
-    const slug = normalizeStorageSegment(recipe.slug || recipe.id);
+    const slug = normalizeRecipeExportSlug(recipe.slug || recipe.id);
     const buffer = decodeImageBase64(body.imageBase64);
+    try {
+      validateRecipeExportImageMetadata(await sharp(buffer, { limitInputPixels: 2_000_000 }).metadata());
+    } catch (error) {
+      const message = error instanceof Error && error.message.startsWith("Recipe export")
+        ? error.message
+        : RECIPE_EXPORT_FORMAT_ERROR;
+      return res.status(400).json({ error: message });
+    }
     const versionId = exportVersionId(body.exportId);
-    const path = `recipes/exports/${slug}/${slug}-${language}-pinterest-${versionId}.${extension}`;
+    const path = buildRecipeExportObjectKey({ slug, language, versionId });
     let publicUrl: string;
 
     if (hasR2Config()) {
