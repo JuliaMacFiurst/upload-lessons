@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { formatLlmJsonDiagnostic } from "../lib/ai/llmJson";
 import type {
   MapTranslationQueueRow,
   MapTranslationSummary,
@@ -112,6 +113,8 @@ export function MapTranslationQueue() {
     validationValid: validation?.valid ?? null,
     validatedJson,
   });
+  const visibleValidationProblems = validation?.problems.filter((problem) =>
+    !validation.diagnostic || (problem.code !== "INVALID_JSON" && problem.code !== "INVALID_SCHEMA")) ?? [];
 
   const visibleSelectableIds = useMemo(
     () => data?.items.filter((item) => item.selectable).map((item) => item.content_id) ?? [],
@@ -305,7 +308,8 @@ export function MapTranslationQueue() {
         {importNotice ? <p className="message success">{importNotice}</p> : null}
         {validation ? <div className={`validation ${validation.valid ? "valid" : "invalid"}`}>
           <div className="validation-counts"><strong>{validation.stories_detected} stories</strong><span>{validation.english_translations} English translations</span><span>{validation.hebrew_translations} Hebrew translations</span><span>{validation.ready_rows} rows ready to insert</span><span>{validation.problems.length} problems</span></div>
-          {validation.problems.length ? <ul className="validation-problems">{validation.problems.map((problem, index) => {
+          {validation.diagnostic ? <pre className="message error" style={{ whiteSpace: "pre-wrap" }}>{formatLlmJsonDiagnostic(validation.diagnostic)}</pre> : null}
+          {visibleValidationProblems.length ? <ul className="validation-problems">{visibleValidationProblems.map((problem, index) => {
             const scriptIssue = problem.code === "UNEXPECTED_SCRIPT_HE" || problem.code === "UNEXPECTED_SCRIPT_EN";
             if (scriptIssue) return <li className="script-issue" key={`${problem.content_id}-${problem.code}-${index}`}>
               <strong>{problem.language === "he" ? "Hebrew" : "English"} translation needs attention</strong>
@@ -319,7 +323,7 @@ export function MapTranslationQueue() {
               </div>
             </li>;
             return <li key={`${problem.content_id}-${problem.code}-${index}`}><strong>{problem.map_type ?? "payload"} / {problem.target_id ?? problem.content_id ?? "—"}</strong> — {problem.message} <code>{problem.code}</code></li>;
-          })}</ul> : <p>Complete batch is ready for insert-only upload.</p>}
+          })}</ul> : validation.valid ? <p>Complete batch is ready for insert-only upload.</p> : null}
         </div> : null}
       </section>
 

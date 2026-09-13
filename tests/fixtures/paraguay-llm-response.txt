@@ -1,0 +1,27 @@
+{
+  "contract_version": 2,
+  "content_type": "map_story",
+  "items": [
+    {
+      "content_id": "paraguay-001",
+      "source_hash": "sha256:unchanged-paraguay-source",
+      "source": {
+        "language": "ru",
+        "content": "🇵🇾 Парагвай! Звучит немножко как "пара-два-ай", правда? Его "сердце" называется Асунсьон. Там напиток мате наливают в сосуд, который называется "калаваса", и пьют через "бомбилью". Каждая такая "паутинка" улиц ведёт к новой истории. 🧑‍⚖️\nУ реки прохладно, а на площади снова слышны песни."
+      },
+      "translations": {
+        "en": {
+          "content": "🇵🇾 Paraguay sounds a little like "para-two-eye", doesn't it? Its "heart" is Asunción. People share mate through a "bombilla" and tell stories by the river. 🧑‍⚖️\nEvery street has a new story."
+        },
+        "he": {
+          "content": "🇵🇾 פרגוואי נשמעת קצת כמו "פארה-שתיים-עין", נכון? ה"לב" שלה הוא אסונסיון. שותים מאטה דרך "בומבייה" ומספרים סיפורים ליד הנהר. 🧑‍⚖️\nבכל רחוב מחכה סיפור חדש."
+        }
+      },
+      "slides": [
+        "Он сказал "привет", "улыбнулся" и ушёл по улице. 🧑‍⚖️",
+        "Другая остановка у реки."
+      ],
+      "tags": ["river", "city"]
+    }
+  ]
+}

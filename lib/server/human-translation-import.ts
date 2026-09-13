@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { formatJsonPath, parseLlmJson, type LlmJsonDiagnostic } from "../ai/llmJson.ts";
 import {
   HUMAN_TRANSLATION_CONTRACT_VERSION,
   HUMAN_TRANSLATION_INSTRUCTIONS,
@@ -43,6 +44,7 @@ export type HumanTranslationImportPreviewItem = {
 };
 
 export type HumanTranslationImportPreview = {
+  diagnostic?: LlmJsonDiagnostic;
   detected: number;
   ready: number;
   invalid: number;
@@ -90,10 +92,6 @@ function identityKey(contentType: string, contentId: string): string {
   return `${contentType}\u0000${contentId}`;
 }
 
-function issuePath(index: number, path: PropertyKey[]): string {
-  return ["items", index, ...path].map(String).join(".");
-}
-
 function readIdentity(value: unknown): { content_type: string | null; content_id: string | null } {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return { content_type: null, content_id: null };
@@ -107,6 +105,11 @@ function readIdentity(value: unknown): { content_type: string | null; content_id
 
 function emptyPreview(errors: HumanTranslationImportError[]): HumanTranslationImportPreview {
   return {
+    diagnostic: {
+      stage: "schema_validation",
+      message: "Translation contract validation failed.",
+      validationIssues: errors.slice(0, 5).map((error) => ({ path: error.path ?? "payload", message: error.message })),
+    },
     detected: 0,
     ready: 0,
     invalid: 0,
@@ -122,8 +125,10 @@ function emptyPreview(errors: HumanTranslationImportError[]): HumanTranslationIm
 export function parseHumanTranslationJson(raw: string): unknown {
   const trimmed = raw.trim();
   if (!trimmed) throw new Error("Paste a translation batch first.");
-  const fenced = trimmed.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
-  return JSON.parse(fenced ? fenced[1] : trimmed);
+  return parseLlmJson(raw, { isExpectedShape: (value) =>
+    value !== null && typeof value === "object" && !Array.isArray(value)
+    && "contract_version" in value && "items" in value && Array.isArray(value.items),
+  }).value;
 }
 
 export function prepareHumanTranslationImport(
@@ -137,7 +142,7 @@ export function prepareHumanTranslationImport(
       preview: emptyPreview(envelopeResult.error.issues.map((issue) => ({
         kind: "envelope",
         message: issue.message,
-        path: issue.path.map(String).join("."),
+        path: formatJsonPath(issue.path),
       }))),
       saveRows: [],
       readyIndexes: [],
@@ -170,16 +175,20 @@ export function prepareHumanTranslationImport(
     const rawIdentity = readIdentity(rawItem);
     const parsed = returnedItemSchema.safeParse(rawItem);
     if (!parsed.success) {
+      const detailed = (rawItem && typeof rawItem === "object" && "source" in rawItem
+        ? humanTranslationExportItemSchema
+        : humanTranslationImportItemSchema).safeParse(rawItem);
+      const issues = detailed.success ? parsed.error.issues : detailed.error.issues;
       return {
         index,
         ...rawIdentity,
         status: "invalid",
         existing_languages: [],
         requires_overwrite_confirmation: false,
-        errors: parsed.error.issues.map((issue) => ({
+        errors: issues.map((issue) => ({
           kind: "item_schema",
           message: issue.message,
-          path: issuePath(index, issue.path),
+          path: formatJsonPath(["items", index, ...issue.path]),
         })),
       };
     }
@@ -254,6 +263,7 @@ export function prepareHumanTranslationImport(
         errors.push({
           kind: "translation",
           language,
+          path: formatJsonPath(["items", index, "translations", language]),
           message: error instanceof Error ? error.message : `Invalid ${language} translation.`,
         });
       }
@@ -286,8 +296,17 @@ export function prepareHumanTranslationImport(
   const outdatedSource = items.filter((item) => item.status === "outdated_source").length;
   const notFound = items.filter((item) => item.status === "not_found").length;
   const overwriteObjects = items.filter((item) => item.requires_overwrite_confirmation).length;
+  const validationIssues = items.flatMap((item) => item.errors.map((error) => ({
+    path: error.path ?? formatJsonPath(["items", item.index]),
+    message: error.message,
+  })));
   return {
     preview: {
+      diagnostic: validationIssues.length > 0 ? {
+        stage: "schema_validation",
+        message: "Translation contract validation failed.",
+        validationIssues: validationIssues.slice(0, 5),
+      } : undefined,
       detected: items.length,
       ready,
       invalid,

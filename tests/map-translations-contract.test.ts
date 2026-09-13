@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatLlmJsonDiagnostic } from "../lib/ai/llmJson.ts";
 import {
   MAX_MAP_TRANSLATION_BATCH,
   mapTranslationContractSchema,
@@ -359,12 +360,56 @@ test("repaired input returns canonical JSON.stringify output before upload", asy
   assert.equal(prepared.canonicalJson, JSON.stringify(JSON.parse(prepared.canonicalJson ?? ""), null, 2));
 });
 
+test("technical Unicode in returned map-translation JSON is normalized before repair", async () => {
+  const source = contract(1);
+  const raw = `\ufeff${JSON.stringify(v2Contract(1)).replace('"items":', '"items"\u202f:').replace('[{', '[\u00a0{')}`;
+  const prepared = await validateAndPrepareMapTranslationJson(raw, storeFor(source));
+  assert.equal(prepared.report.valid, true);
+  assert.equal(prepared.repaired, true);
+  assert.deepEqual(JSON.parse(prepared.canonicalJson ?? "").items, v2Contract(1).items);
+});
+
+test("map translation import repairs human quotes in source.content through shared parser", async () => {
+  const source = contract(1);
+  source.items[0].source.content = 'История про "сердце" страны';
+  source.items[0].source_hash = buildSourceHash({ content: source.items[0].source.content });
+  const raw = JSON.stringify(source).replace('История про \\"сердце\\" страны', 'История про "сердце" страны');
+  const prepared = await validateAndPrepareMapTranslationJson(raw, storeFor(source));
+  assert.equal(prepared.report.valid, true);
+  assert.equal(prepared.repaired, true);
+  assert.equal(JSON.parse(prepared.canonicalJson ?? "").items[0].source.content, source.items[0].source.content);
+});
+
+test("map translation import selects the contract after fenced code and a JSON example", async () => {
+  const payload = contract();
+  const raw = `\`\`\`python\nprint({"ignore": True})\n\`\`\`\n{"example":true}\n${JSON.stringify(payload)}\nDone.`;
+  const prepared = await validateAndPrepareMapTranslationJson(raw, storeFor(payload));
+  assert.equal(prepared.report.valid, true);
+  assert.equal(prepared.report.ready_rows, 2);
+  assert.equal(prepared.repaired, true);
+});
+
 test("structural JSON errors outside translation content remain INVALID_JSON", async () => {
   const malformed = '{"contract_version":2 "content_type":"map_story","items":[]}';
   const prepared = await validateAndPrepareMapTranslationJson(malformed, storeFor(contract(1)));
   assert.equal(prepared.repaired, false);
   assert.equal(prepared.report.valid, false);
   assert.equal(prepared.report.problems[0].code, "INVALID_JSON");
-  assert.match(prepared.report.problems[0].message, /Invalid JSON syntax\./);
-  assert.match(prepared.report.problems[0].message, /(position\s+\d+|Line:\s*\d+)/i);
+  assert.match(prepared.report.problems[0].message, /Initial JSON parse failed/);
+  assert.match(prepared.report.problems[0].message, /(position\s+\d+|Line\s+\d+)/i);
+  assert.equal(prepared.report.diagnostic?.stage, "initial_parse");
+});
+
+test("valid JSON with missing translation content reports contract validation, not a parse error", async () => {
+  const source = contract(1);
+  const value = v2Contract(1) as unknown as { items: Array<{ translations: { en: Record<string, unknown> } }> };
+  value.items[0].translations.en = {};
+  const prepared = await validateAndPrepareMapTranslationJson(JSON.stringify(value), storeFor(source));
+  assert.equal(prepared.report.valid, false);
+  assert.equal(prepared.report.diagnostic?.stage, "schema_validation");
+  assert.deepEqual(prepared.report.diagnostic?.validationIssues?.[0]?.path, "items[0].translations.en.content");
+  assert.match(prepared.report.problems[0].message, /items\[0\]\.translations\.en\.content/);
+  assert.doesNotMatch(prepared.report.problems[0].message, /not valid JSON/i);
+  assert.match(formatLlmJsonDiagnostic(prepared.report.diagnostic!), /JSON is syntactically valid, but contract validation failed\./);
+  assert.match(formatLlmJsonDiagnostic(prepared.report.diagnostic!), /items\[0\]\.translations\.en\.content/);
 });

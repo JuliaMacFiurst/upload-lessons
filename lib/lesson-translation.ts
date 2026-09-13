@@ -1,3 +1,5 @@
+import { parseLlmJson } from "./ai/llmJson.ts";
+
 export const NON_TRANSLATABLE_STEP_FIELDS = [
   "type",
   "coordinates",
@@ -189,7 +191,7 @@ export function extractTranslatableLessonPayload(args: {
 export function parseTranslatedPayload(raw: string): TranslatedPayload {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = parseLlmJson(raw).value;
   } catch {
     throw new Error("Invalid JSON returned by model.");
   }

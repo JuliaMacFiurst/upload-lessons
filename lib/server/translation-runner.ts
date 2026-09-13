@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { parseLlmJson } from "../ai/llmJson.ts";
 import { GoogleGenAI } from "@google/genai";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import {
@@ -150,42 +151,23 @@ function chunk<T>(items: T[], size: number): T[][] {
 }
 
 function parseModelJson(raw: string): unknown {
-  const cleaned = raw
-    .trim()
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
-    .replace(/^\s*[\r\n]/gm, "")
-    .trim();
-
   try {
-    return JSON.parse(cleaned);
+    return parseLlmJson(raw, { isExpectedShape: (value) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+      && "items" in value && Array.isArray(value.items),
+    }).value;
   } catch {
     // handle case where Gemini returns `items: [...]` without braces
-    const trimmed = cleaned.trim();
+    const trimmed = raw.trim();
     if (trimmed.startsWith("items:")) {
       const wrapped = `{ ${trimmed} }`;
       try {
         log("Recovered JSON by wrapping items array.");
-        return JSON.parse(wrapped);
+        return parseLlmJson(wrapped).value;
       } catch {
         log("Failed to recover items array JSON.");
       }
     }
-    // attempt to recover JSON block
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-
-    if (start !== -1 && end !== -1 && end > start) {
-      const jsonSlice = cleaned.slice(start, end + 1);
-
-      try {
-        log("Recovered JSON from Gemini response.");
-        return JSON.parse(jsonSlice);
-      } catch {
-        log("Failed to recover JSON from Gemini response.");
-      }
-    }
-
     throw new Error("Failed to parse Gemini JSON response.");
   }
 }
@@ -522,7 +504,7 @@ async function requestTranslatedBatch(
     let payload = item.translation ?? item.payload;
     if (typeof payload === "string") {
       try {
-        payload = JSON.parse(payload);
+        payload = parseLlmJson(payload).value;
       } catch {
         log(`Failed to parse JSON payload for ${id}, keeping raw string.`);
       }

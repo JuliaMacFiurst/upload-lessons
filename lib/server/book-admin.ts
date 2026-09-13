@@ -10,6 +10,7 @@ import {
   validateWithDiagnostics,
 } from "../ai/generationDiagnostics";
 import { normalizeSlides } from "../ai/normalizeSlides";
+import { parseLlmJson } from "../ai/llmJson";
 import {
   canonicalExplanationSectionSchema,
   canonicalFullBookSchema,
@@ -2105,14 +2106,6 @@ export async function saveStoryTwists(
   }));
 }
 
-function cleanGeminiJson(raw: string): string {
-  return raw
-    .trim()
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
-    .trim();
-}
-
 export class GeminiPipelineError extends Error {
   stage: string;
   rawResponse?: string;
@@ -2126,15 +2119,14 @@ export class GeminiPipelineError extends Error {
 }
 
 export function parseGeminiJson(raw: string): unknown {
-  const cleaned = cleanGeminiJson(raw);
   logGenerationEvent("parsed.json.input", raw, {
     valid: true,
     level: "success",
-    summary: { rawLength: raw.length, cleanedLength: cleaned.length },
-    payloadPreview: { rawPreview: cleaned.slice(0, 180) },
+    summary: { rawLength: raw.length },
+    payloadPreview: { rawPreview: raw.slice(0, 180) },
   });
   try {
-    const parsed = JSON.parse(cleaned);
+    const parsed = parseLlmJson(raw).value;
     detectFormatViolations(parsed, "parseGeminiJson");
     logGenerationEvent("parsed.json", parsed, {
       valid: true,
@@ -2142,36 +2134,11 @@ export function parseGeminiJson(raw: string): unknown {
     });
     return parsed;
   } catch (firstError) {
-    const firstBrace = cleaned.indexOf("{");
-    const lastBrace = cleaned.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-      try {
-        const recovered = JSON.parse(cleaned.slice(firstBrace, lastBrace + 1));
-        detectFormatViolations(recovered, "parseGeminiJson.recovered");
-        logGenerationEvent("parsed.json.recovered", recovered, {
-          valid: true,
-          level: "warning",
-          summary: { recovered: true },
-        });
-        return recovered;
-      } catch (secondError) {
-        logGenerationEvent("parsed.json.error", raw, {
-          valid: false,
-          level: "error",
-          errors: [
-            firstError instanceof Error ? firstError.message : "Initial JSON parse failed.",
-            secondError instanceof Error ? secondError.message : "Recovery JSON parse failed.",
-          ],
-          payloadPreview: { rawPreview: cleaned.slice(0, 180) },
-        });
-        throw new GeminiPipelineError("Failed to parse Gemini JSON response.", "parse", raw);
-      }
-    }
     logGenerationEvent("parsed.json.error", raw, {
       valid: false,
       level: "error",
       errors: [firstError instanceof Error ? firstError.message : "JSON parse failed."],
-      payloadPreview: { rawPreview: cleaned.slice(0, 180) },
+      payloadPreview: { rawPreview: raw.slice(0, 180) },
     });
     throw new GeminiPipelineError("Failed to parse Gemini JSON response.", "parse", raw);
   }

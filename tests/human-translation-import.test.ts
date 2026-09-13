@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { formatLlmJsonDiagnostic } from "../lib/ai/llmJson.ts";
 import { buildSourceHash } from "../lib/server/translation-hash.ts";
 import {
   parseHumanTranslationJson,
@@ -218,4 +219,21 @@ test("invalid envelope reports global errors and does not inspect items", () => 
   assert.equal(preview.items.length, 0);
   assert.equal(preview.errors[0].kind, "envelope");
   assert.equal(preview.can_save, false);
+  assert.equal(preview.diagnostic?.stage, "schema_validation");
+});
+
+test("syntactically valid human batch reports a precise contract path", () => {
+  const preview = validateHumanTranslationImport({
+    contract_version: 1,
+    items: [{
+      content_type: "map_story",
+      content_id: mapSource.contentId,
+      source_hash: mapSource.sourceHash,
+      translations: { en: "not an object", he: { content: "סיפור" } },
+    }],
+  }, [mapSource]);
+  assert.equal(preview.diagnostic?.stage, "schema_validation");
+  assert.equal(preview.diagnostic?.validationIssues?.[0]?.path, "items[0].translations.en");
+  assert.match(preview.items[0].errors[0].message, /Expected object/);
+  assert.doesNotMatch(formatLlmJsonDiagnostic(preview.diagnostic!), /not valid JSON/i);
 });

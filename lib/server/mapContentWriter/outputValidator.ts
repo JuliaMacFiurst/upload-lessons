@@ -3,11 +3,9 @@ import {
   DEFAULT_LATIN_ALLOWLIST,
   type PreWriteValidationResult,
 } from "../ai/languageGuard.ts";
-import {
-  mapStoryCandidateBuilder,
-  validateMapStoryCandidateSchema,
-} from "./candidateBuilder.ts";
+import { validateMapStoryCandidateSchema } from "./candidateBuilder.ts";
 import { validateOpenCTA } from "./ctaValidator.ts";
+import { parseLlmJson } from "../../ai/llmJson.ts";
 
 export type ValidationResult = {
   isValid: boolean;
@@ -92,17 +90,14 @@ export function validatePilotOutput(
   }
 
   // 2. Try parsing JSON
-  let cleanedJsonText = trimmed;
   if (trimmed.startsWith("```json")) {
-    cleanedJsonText = trimmed.replace(/^```json\s*/, "").replace(/```$/, "").trim();
     warnings.push("Response was wrapped in markdown code blocks ```json.");
   } else if (trimmed.startsWith("```")) {
-    cleanedJsonText = trimmed.replace(/^```\s*/, "").replace(/```$/, "").trim();
     warnings.push("Response was wrapped in generic markdown code blocks ```.");
   }
 
   try {
-    parsedData = JSON.parse(cleanedJsonText);
+    parsedData = parseLlmJson(trimmed).value;
   } catch (err: unknown) {
     const parseError = err instanceof Error ? err.message : String(err);
     errors.push(`JSON syntax error: ${parseError}`);
@@ -142,8 +137,6 @@ export function validatePilotOutput(
     );
   }
 
-  const expectedKeys = ["map_type", "target_id", "content"].sort();
-
   items.forEach((item, index) => {
     const itemErrors: string[] = [];
 
@@ -158,7 +151,6 @@ export function validatePilotOutput(
       itemErrors.push(schemaValidation.message);
     }
 
-    const mapType = String(item.map_type ?? "");
     const targetId = String(item.target_id ?? "");
     const content = String(item.content ?? "");
 

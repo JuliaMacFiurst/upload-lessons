@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { createClient } from "@supabase/supabase-js";
 import { GoogleGenAI } from "@google/genai";
+import { parseLlmJson } from "../../../../lib/ai/llmJson";
 import { mockTranslateLesson, type LessonTextPayload } from "../../../../lib/server/translation-runner";
 import {
   loadTranslationItemByContent,
@@ -62,39 +63,22 @@ function createSupabaseServerClient() {
 }
 
 function parseModelJson(raw: string): unknown {
-  const cleaned = raw
-    .trim()
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
-    .replace(/^\s*[\r\n]/gm, "")
-    .trim();
-
   try {
-    return JSON.parse(cleaned);
+    return parseLlmJson(raw, { isExpectedShape: (value) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+      && "items" in value && Array.isArray(value.items),
+    }).value;
   } catch {
     // handle case where Gemini returns `items: [...]` without braces
-    const trimmed = cleaned.trim();
+    const trimmed = raw.trim();
     if (trimmed.startsWith("items:")) {
       const wrapped = `{ ${trimmed} }`;
       try {
-        return JSON.parse(wrapped);
+        return parseLlmJson(wrapped).value;
       } catch {
         // continue to other recovery strategies
       }
     }
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-
-    if (start !== -1 && end !== -1 && end > start) {
-      const jsonSlice = cleaned.slice(start, end + 1);
-
-      try {
-        return JSON.parse(jsonSlice);
-      } catch {
-        // continue to throw below
-      }
-    }
-
     throw new Error("Failed to parse Gemini JSON response.");
   }
 }

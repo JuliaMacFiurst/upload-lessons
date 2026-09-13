@@ -5,12 +5,15 @@ import {
   MAP_TRANSLATION_TYPES,
   MAX_MAP_TRANSLATION_BATCH,
   mapTranslationImportContractSchema,
+  mapTranslationV1ContractSchema,
+  mapTranslationV2ReturnContractSchema,
   type MapTranslationExportContract,
   type MapTranslationLanguage,
   type MapTranslationType,
 } from "../map-translations/contract.ts";
 import { buildSourceHash } from "./translation-hash.ts";
 import { repairTranslationJsonInput } from "../map-translations/repair.ts";
+import { diagnoseJsonParseError, formatJsonPath, formatLlmJsonDiagnostic, LlmJsonDiagnosticError, parseLlmJson, type LlmJsonDiagnostic } from "../ai/llmJson.ts";
 
 const DB_PAGE_SIZE = 1000;
 
@@ -102,6 +105,7 @@ export type ValidationProblem = {
 };
 
 export type MapTranslationValidationReport = {
+  diagnostic?: LlmJsonDiagnostic;
   valid: boolean;
   stories_detected: number;
   english_translations: number;
@@ -339,7 +343,7 @@ function schemaProblems(error: z.ZodError): ValidationProblem[] {
     map_type: null,
     target_id: null,
     code: "INVALID_SCHEMA",
-    message: `${issue.path.join(".") || "payload"}: ${issue.message}`,
+    message: `${formatJsonPath(issue.path) || "payload"}: ${issue.message}`,
   }));
 }
 
@@ -372,7 +376,17 @@ export async function validateMapTranslationContract(
 ): Promise<MapTranslationValidationReport> {
   const parsed = mapTranslationImportContractSchema.safeParse(input);
   if (!parsed.success) {
-    return { valid: false, stories_detected: 0, english_translations: 0, hebrew_translations: 0, ready_rows: 0, problems: schemaProblems(parsed.error), rows: [] };
+    const version = input && typeof input === "object" && "contract_version" in input ? input.contract_version : undefined;
+    const detailed = version === 1 ? mapTranslationV1ContractSchema.safeParse(input)
+      : version === 2 ? mapTranslationV2ReturnContractSchema.safeParse(input)
+        : parsed;
+    const issues = detailed.success ? parsed.error.issues : detailed.error.issues;
+    const diagnostic: LlmJsonDiagnostic = {
+      stage: "schema_validation",
+      message: "Translation contract validation failed.",
+      validationIssues: issues.slice(0, 5).map((issue) => ({ path: formatJsonPath(issue.path), message: issue.message })),
+    };
+    return { valid: false, stories_detected: 0, english_translations: 0, hebrew_translations: 0, ready_rows: 0, problems: schemaProblems(new z.ZodError(issues)), diagnostic, rows: [] };
   }
   const contract = parsed.data;
   const ids = contract.items.map((item) => item.content_id);
@@ -436,6 +450,17 @@ export async function validateMapTranslationContract(
 
   return {
     valid: problems.length === 0,
+    diagnostic: problems.length > 0 ? {
+      stage: "schema_validation",
+      message: "Translation contract validation failed.",
+      validationIssues: problems.slice(0, 5).map((problem) => {
+        const index = contract.items.findIndex((item) => item.content_id === problem.content_id);
+        const base = index < 0 ? "payload" : formatJsonPath(["items", index]);
+        const path = problem.language ? `${base}.translations.${problem.language}.content`
+          : problem.code === "SOURCE_HASH_MISMATCH" ? `${base}.source_hash` : base;
+        return { path, message: problem.message };
+      }),
+    } : undefined,
     stories_detected: contract.items.length,
     english_translations: english,
     hebrew_translations: hebrew,
@@ -498,13 +523,15 @@ export type PreparedMapTranslationJson = {
 };
 
 function invalidJsonReport(json: string, error: unknown): MapTranslationValidationReport {
+  const diagnostic = error instanceof LlmJsonDiagnosticError ? error.diagnostic : undefined;
   return {
+    diagnostic,
     valid: false,
     stories_detected: 0,
     english_translations: 0,
     hebrew_translations: 0,
     ready_rows: 0,
-    problems: [{ content_id: null, map_type: null, target_id: null, code: "INVALID_JSON", message: describeJsonSyntaxError(json, error) }],
+    problems: [{ content_id: null, map_type: null, target_id: null, code: "INVALID_JSON", message: diagnostic ? formatLlmJsonDiagnostic(diagnostic) : describeJsonSyntaxError(json, error) }],
     rows: [],
   };
 }
@@ -514,41 +541,44 @@ export async function validateAndPrepareMapTranslationJson(
   store: MapTranslationDataStore,
 ): Promise<PreparedMapTranslationJson> {
   let input: unknown;
+  let changed = false;
   try {
-    input = JSON.parse(json);
-    return { report: await validateMapTranslationContract(input, store), repaired: false, canonicalJson: null };
+    const parsed = parseLlmJson(json, { isExpectedShape: (value) =>
+      value !== null && typeof value === "object" && !Array.isArray(value)
+      && "contract_version" in value && "items" in value && Array.isArray(value.items),
+    });
+    input = parsed.value;
+    changed = parsed.changed;
   } catch (initialError) {
     const repaired = repairTranslationJsonInput(json);
     if (!repaired.ok) return { report: invalidJsonReport(json, initialError), repaired: false, canonicalJson: null };
     try {
-      input = JSON.parse(repaired.text);
+      const parsed = parseLlmJson(repaired.text);
+      input = parsed.value;
+      changed = repaired.changed || parsed.changed;
     } catch (repairError) {
-      return { report: invalidJsonReport(repaired.text, repairError), repaired: false, canonicalJson: null };
+      if (!repaired.changed) return { report: invalidJsonReport(json, initialError), repaired: false, canonicalJson: null };
+      const diagnostic = initialError instanceof LlmJsonDiagnosticError && repairError instanceof LlmJsonDiagnosticError
+        ? new LlmJsonDiagnosticError({
+          ...repairError.diagnostic,
+          stage: "repaired_parse",
+          initialParseMessage: initialError.diagnostic.initialParseMessage,
+          repairedParseMessage: repairError.diagnostic.repairedParseMessage ?? repairError.diagnostic.message,
+          repairCount: repairError.diagnostic.repairCount,
+        })
+        : repairError;
+      return { report: invalidJsonReport(repaired.text, diagnostic), repaired: false, canonicalJson: null };
     }
-    return {
-      report: await validateMapTranslationContract(input, store),
-      repaired: repaired.changed,
-      canonicalJson: repaired.changed ? JSON.stringify(input, null, 2) : null,
-    };
   }
+  return {
+    report: await validateMapTranslationContract(input, store),
+    repaired: changed,
+    canonicalJson: changed ? JSON.stringify(input, null, 2) : null,
+  };
 }
 
 export function describeJsonSyntaxError(json: string, error: unknown): string {
-  const nativeMessage = error instanceof SyntaxError ? error.message : "Unable to parse JSON.";
-  const positionMatch = nativeMessage.match(/position\s+(\d+)/i);
-  const nativeLineMatch = nativeMessage.match(/line\s+(\d+)\s+column\s+(\d+)/i);
-  let location = "";
-  if (positionMatch) {
-    const position = Number(positionMatch[1]);
-    const before = json.slice(0, position);
-    const line = before.split("\n").length;
-    const lastNewline = before.lastIndexOf("\n");
-    const column = position - lastNewline;
-    location = ` Line: ${line}. Column: ${column}.`;
-  } else if (nativeLineMatch) {
-    location = ` Line: ${nativeLineMatch[1]}. Column: ${nativeLineMatch[2]}.`;
-  }
-  return `Invalid JSON syntax. ${nativeMessage}${location}`;
+  return formatLlmJsonDiagnostic(diagnoseJsonParseError(json, error));
 }
 
 export async function insertValidatedMapTranslations(

@@ -1,4 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from "next";
+import { formatLlmJsonDiagnostic, LlmJsonDiagnosticError } from "../../../../lib/ai/llmJson";
 import { requireAdminSession } from "../../../../lib/server/admin-session";
 import { loadHumanTranslationPopulation } from "../../../../lib/server/human-translation-queue";
 import {
@@ -72,10 +73,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ preview });
   } catch (error) {
+    if (error instanceof LlmJsonDiagnosticError) {
+      return res.status(400).json({
+        error: formatLlmJsonDiagnostic(error.diagnostic),
+        diagnostic: error.diagnostic,
+      });
+    }
     return res.status(400).json({
-      error: error instanceof SyntaxError
-        ? "The pasted text is not valid JSON."
-        : error instanceof Error ? error.message : "Translation batch validation failed.",
+      error: error instanceof Error ? error.message : "Translation batch validation failed.",
     });
   }
 }

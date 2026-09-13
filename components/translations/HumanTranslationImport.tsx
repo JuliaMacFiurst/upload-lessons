@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { formatLlmJsonDiagnostic, type LlmJsonDiagnostic } from "../../lib/ai/llmJson";
 import type {
   HumanTranslationImportPreview,
   HumanTranslationImportPreviewItem,
 } from "../../lib/server/human-translation-import";
 
-type PreviewResponse = { preview: HumanTranslationImportPreview };
+type PreviewResponse = { preview: HumanTranslationImportPreview; diagnostic?: LlmJsonDiagnostic };
 type SaveResponse = PreviewResponse & {
   savedObjects: number;
   savedRows: number;
@@ -49,7 +50,7 @@ export function HumanTranslationImport() {
         body: JSON.stringify({ json: value }),
       });
       const data = await response.json() as PreviewResponse & { error?: string };
-      if (!response.ok) throw new Error(data.error ?? "Validation failed");
+      if (!response.ok) throw new Error(data.diagnostic ? formatLlmJsonDiagnostic(data.diagnostic) : data.error ?? "Validation failed");
       if (currentRequest === requestId.current) setPreview(data.preview);
     } catch (validationError) {
       if (currentRequest === requestId.current) {
@@ -78,10 +79,10 @@ export function HumanTranslationImport() {
         cache: "no-store",
         body: JSON.stringify({ action: "save", json, confirmOverwrite }),
       });
-      const data = await response.json() as Partial<SaveResponse> & { error?: string };
+      const data = await response.json() as Partial<SaveResponse> & { error?: string; diagnostic?: LlmJsonDiagnostic };
       if (!response.ok) {
         if (data.preview && currentRequest === requestId.current) setPreview(data.preview);
-        throw new Error(data.error ?? "Save failed");
+        throw new Error(data.diagnostic ? formatLlmJsonDiagnostic(data.diagnostic) : data.error ?? "Save failed");
       }
       if (currentRequest !== requestId.current) return;
       const savedObjects = data.savedObjects ?? 0;
@@ -147,8 +148,13 @@ export function HumanTranslationImport() {
         </button>
       </div>
 
-      {error && <div className="translations-alert translations-alert--error">{error}</div>}
+      {error && <div className="translations-alert translations-alert--error" style={{ whiteSpace: "pre-wrap", fontFamily: "monospace" }}>{error}</div>}
       {notice && <div className="translations-alert translations-alert--success">{notice}</div>}
+      {preview?.diagnostic?.stage === "schema_validation" && (
+        <div className="translations-alert translations-alert--error" style={{ whiteSpace: "pre-wrap" }}>
+          {formatLlmJsonDiagnostic(preview.diagnostic)}
+        </div>
+      )}
       {preview && preview.errors.length > 0 && (
         <div className="translations-alert translations-alert--error">
           {preview.errors.map((issue, index) => (
