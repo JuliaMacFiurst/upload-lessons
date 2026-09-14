@@ -7,8 +7,11 @@ import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../../components/AdminLogout";
 import { AdminTabs } from "../../../components/AdminTabs";
 import type { RecipeLayoutTemplate, RecipeRecord } from "../../../lib/recipes/types";
+import { prepareRecipeImageForUpload } from "../../../lib/recipes/upload-optimization";
 import {
   buildRecipeExportImagePrompt,
+  RECIPE_EXPORT_MIN_WIDTH,
+  RECIPE_EXPORT_MIN_HEIGHT,
   RECIPE_EXPORT_FORMAT_ERROR,
   validateRecipeExportDeclaredFormat,
   validateRecipeExportImageMetadata,
@@ -2529,10 +2532,20 @@ export default function RecipeEditorPage() {
       let currentRecipe = recipe;
       await saveRecipe(currentRecipe, layout);
 
+      const optimizedNotes: string[] = [];
       for (const language of languages) {
         const exportId = `${Date.now().toString(36)}-${language}`;
         const blob = await renderRecipeDomToPngBlob(language);
-        const imageBase64 = await blobToDataUrl(blob);
+        const optResult = await prepareRecipeImageForUpload(blob, {
+          minWidth: RECIPE_EXPORT_MIN_WIDTH,
+          minHeight: RECIPE_EXPORT_MIN_HEIGHT,
+        });
+        if (optResult.wasOptimized) {
+          const fromMB = (optResult.originalSize / (1024 * 1024)).toFixed(1);
+          const toMB = (optResult.optimizedSize / (1024 * 1024)).toFixed(1);
+          optimizedNotes.push(`${language.toUpperCase()} (${fromMB} MB → ${toMB} MB)`);
+        }
+        const imageBase64 = await blobToDataUrl(optResult.blob);
         const response = await fetchJson<{
           publicUrl: string;
           recipe: RecipeRecord;
@@ -2552,7 +2565,8 @@ export default function RecipeEditorPage() {
       }
 
       setExportLinksRefreshKey(Date.now());
-      setSuccess(`PNG загружен в storage: ${languages.map((language) => language.toUpperCase()).join(", ")}.`);
+      const optMessage = optimizedNotes.length > 0 ? ` (Оптимизировано: ${optimizedNotes.join(", ")})` : "";
+      setSuccess(`PNG загружен в storage: ${languages.map((language) => language.toUpperCase()).join(", ")}.${optMessage}`);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
     } finally {
@@ -2602,13 +2616,18 @@ export default function RecipeEditorPage() {
     setSuccess(null);
     try {
       await validateExportPngFile(aiExportFile);
+      const optResult = await prepareRecipeImageForUpload(aiExportFile, {
+        minWidth: RECIPE_EXPORT_MIN_WIDTH,
+        minHeight: RECIPE_EXPORT_MIN_HEIGHT,
+      });
+      const imageBase64 = await blobToDataUrl(optResult.blob);
       const response = await fetchJson<{ recipe: RecipeRecord }>(`/api/admin/recipes/${recipe.id}/export`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           language: aiExportLanguage,
           contentType: "image/png",
-          imageBase64: await blobToDataUrl(aiExportFile),
+          imageBase64,
           exportId: `${Date.now().toString(36)}-${aiExportLanguage}`,
           uploadKind: "ai_png",
         }),
@@ -2622,7 +2641,10 @@ export default function RecipeEditorPage() {
         return null;
       });
       if (aiExportInputRef.current) aiExportInputRef.current.value = "";
-      setSuccess(`Export image ${aiExportLanguage.toUpperCase()} сохранена.`);
+      const optNotice = optResult.wasOptimized
+        ? ` (Изображение уменьшено с ${(optResult.originalSize / (1024 * 1024)).toFixed(1)} MB до ${(optResult.optimizedSize / (1024 * 1024)).toFixed(1)} MB)`
+        : "";
+      setSuccess(`Export image ${aiExportLanguage.toUpperCase()} сохранена.${optNotice}`);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
     } finally {
@@ -2667,7 +2689,11 @@ export default function RecipeEditorPage() {
     setError(null);
     setSuccess(null);
     try {
-      const imageBase64 = await blobToDataUrl(file);
+      const optResult = await prepareRecipeImageForUpload(file, {
+        minWidth: 400,
+        minHeight: 400,
+      });
+      const imageBase64 = await blobToDataUrl(optResult.blob);
       const response = await fetchJson<{
         publicUrl: string;
         recipe: RecipeRecord;
@@ -2700,7 +2726,10 @@ export default function RecipeEditorPage() {
           setMediaPrefix(`stickers/raccoon-stickers/${response.setKey}/`);
         }
       }
-      setSuccess(`Медиа обработано и загружено: ${response.publicUrl}`);
+      const optNotice = optResult.wasOptimized
+        ? ` (Изображение уменьшено с ${(optResult.originalSize / (1024 * 1024)).toFixed(1)} MB до ${(optResult.optimizedSize / (1024 * 1024)).toFixed(1)} MB)`
+        : "";
+      setSuccess(`Медиа обработано и загружено: ${response.publicUrl}${optNotice}`);
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
     } finally {
