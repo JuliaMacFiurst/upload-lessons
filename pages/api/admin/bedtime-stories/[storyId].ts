@@ -6,10 +6,10 @@ import {
   loadBedtimeStory,
   updateBedtimeStory,
 } from "../../../../lib/server/bedtime-stories-admin";
-import type { BedtimeStoryPayload } from "../../../../lib/bedtime-stories/types";
+import type { BedtimeStoryPatch } from "../../../../lib/bedtime-stories/types";
 
 type SaveBody = {
-  story?: BedtimeStoryPayload;
+  story?: BedtimeStoryPatch;
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {

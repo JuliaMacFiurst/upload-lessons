@@ -12,6 +12,7 @@ import {
   saveBedtimeStorySlideImage,
 } from "../../../../../lib/server/bedtime-stories-admin";
 import { hasR2Config, uploadPublicR2Object } from "../../../../../lib/server/r2-storage";
+import { bedtimeSlideMediaPath, decodeBedtimeImage, validateBedtimeImage } from "../../../../../lib/server/bedtime-media";
 
 export const config = {
   api: {
@@ -38,14 +39,6 @@ function normalizeStorageSegment(value: string) {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/-+/g, "-")
     .replace(/^-|-$/g, "");
-}
-
-function decodeImageBase64(value: string): Buffer {
-  const payload = value.includes(",") ? value.split(",").pop() ?? "" : value;
-  if (!payload.trim()) {
-    throw new Error("Missing image payload.");
-  }
-  return Buffer.from(payload, "base64");
 }
 
 async function imageToWebp(input: Buffer): Promise<Buffer> {
@@ -200,7 +193,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     const story = await loadBedtimeStory(supabase, storyId);
     const slug = normalizeStorageSegment(story.slug || story.id);
-    const input = decodeImageBase64(body.imageBase64);
+    const input = decodeBedtimeImage(body.imageBase64);
+    await validateBedtimeImage(input);
 
     if (body.kind === "slide") {
       const language = body.language;
@@ -213,9 +207,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
 
       const webp = await imageToWebp(input);
-      const path = `bedtime_story/${slug}/${language}/slide-${String(slideNumber).padStart(2, "0")}.webp`;
+      const path = bedtimeSlideMediaPath(story.slug, language, slideNumber);
       const publicUrl = await uploadMedia(supabase, path, webp);
-      const updatedStory = await saveBedtimeStorySlideImage(supabase, story.id, slideNumber, publicUrl);
+      const updatedStory = await saveBedtimeStorySlideImage(supabase, story.id, slideNumber, publicUrl, language);
       return res.status(200).json({ ok: true, kind: body.kind, path, publicUrl, story: updatedStory });
     }
 
@@ -246,6 +240,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(200).json({ ok: true, kind: body.kind, path, publicUrl, story: updatedStory });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to process bedtime story media.";
-    return res.status(500).json({ error: message });
+    const invalid = /invalid|too large|only jpeg|missing image|unsupported/i.test(message);
+    return res.status(invalid ? 400 : 500).json({ error: message });
   }
 }

@@ -3,11 +3,20 @@ import { z } from "zod";
 export const bedtimeStoryLanguageSchema = z.enum(["en", "ru", "he"]);
 export type BedtimeStoryLanguage = z.infer<typeof bedtimeStoryLanguageSchema>;
 
-const localizedTextSchema = z.object({
+export const strictLocalizedTextSchema = z.object({
   en: z.string().trim().min(1, "English text is required."),
   ru: z.string().trim().min(1, "Russian text is required."),
   he: z.string().trim().min(1, "Hebrew text is required."),
 });
+
+export const localizedTextSchema = z.object({
+  en: z.string().trim().optional().default(""),
+  ru: z.string().trim().optional().default(""),
+  he: z.string().trim().optional().default(""),
+}).refine(
+  (value) => Boolean(value.en || value.ru || value.he),
+  "At least one language text is required.",
+);
 
 const optionalLocalizedTextSchema = z.object({
   en: z.string().trim().optional().default(""),
@@ -45,7 +54,7 @@ export const bedtimeStoryStatusSchema = z.enum([
 export const bedtimeStorySlideSchema = z.object({
   slide_number: z.number().int().min(1).max(99),
   text: localizedTextSchema,
-  illustration_prompt: z.string().trim().min(1, "illustration_prompt is required."),
+  illustration_prompt: z.string().trim().optional().default(""),
   stamp_prompt: z.string().trim().optional().default(""),
   marker_prompt: z.string().trim().optional().default(""),
   image_url: z.string().trim().optional().default(""),
@@ -110,4 +119,32 @@ export type BedtimeStoryListItem = {
   slides: BedtimeStorySlide[];
   created_at: string | null;
   updated_at: string | null;
+};
+
+export type BedtimeStorySlidePatch = Partial<Omit<BedtimeStorySlide, "text">> & {
+  slide_number: number;
+  text?: Partial<Record<BedtimeStoryLanguage, string>>;
+};
+
+export type BedtimeStoryPatch = {
+  slug?: string;
+  status?: BedtimeStoryStatus;
+  title?: Partial<Record<BedtimeStoryLanguage, string>>;
+  emotional_theme?: Partial<Record<BedtimeStoryLanguage, string>>;
+  full_json?: Record<string, unknown>;
+  slides?: BedtimeStorySlidePatch[];
+  deleteSlideNumbers?: number[];
+  replaceSlides?: boolean;
+  images?: Record<string, string>;
+  cover_image_url?: string | null;
+  instagram_caption?: Partial<Record<BedtimeStoryLanguage, string>>;
+  instagram_hashtags?: string[];
+  collection_tags?: string[];
+  visual_tags?: string[];
+  stamp_assets?: BedtimeStoryAsset[];
+  marker_assets?: BedtimeStoryAsset[];
+  exported_image_urls?: Record<string, string>;
+  replaceExportedImageUrls?: boolean;
+  publish_date?: string | null;
+  is_published?: boolean;
 };

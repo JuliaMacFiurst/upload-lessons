@@ -4,6 +4,10 @@ export const BEDTIME_STORY_ILLUSTRATION_TECHNICAL_SUFFIX =
 export function withBedtimeStoryIllustrationTechnicalSuffix(prompt: string): string {
   const normalizedPrompt = prompt.trim().replace(/[\s,.;:]+$/, "");
 
+  if (!normalizedPrompt) {
+    return "";
+  }
+
   if (normalizedPrompt.toLowerCase().endsWith(BEDTIME_STORY_ILLUSTRATION_TECHNICAL_SUFFIX.toLowerCase())) {
     return normalizedPrompt;
   }

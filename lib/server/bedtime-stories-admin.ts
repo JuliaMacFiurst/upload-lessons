@@ -3,15 +3,18 @@ import { z } from "zod";
 import {
   bedtimeStoryPayloadSchema,
   bedtimeStoryRecordSchema,
+  strictLocalizedTextSchema,
   type BedtimeStoryAsset,
   type BedtimeStoryLanguage,
   type BedtimeStoryListItem,
+  type BedtimeStoryPatch,
   type BedtimeStoryPayload,
   type BedtimeStoryRecord,
   type BedtimeStorySlide,
-} from "../bedtime-stories/types";
-import { withBedtimeStoryIllustrationTechnicalSuffix } from "../bedtime-stories/illustration-prompt";
-import { listAllPublicR2ObjectKeys, publicR2ObjectUrl } from "./r2-storage";
+  type BedtimeStorySlidePatch,
+} from "../bedtime-stories/types.ts";
+import { withBedtimeStoryIllustrationTechnicalSuffix } from "../bedtime-stories/illustration-prompt.ts";
+import { listAllPublicR2ObjectKeys, publicR2ObjectUrl } from "./r2-storage.ts";
 
 const LANGUAGES: BedtimeStoryLanguage[] = ["en", "ru", "he"];
 const BEDTIME_STAMP_PREFIX = "bedtime_story/stamps/";
@@ -141,9 +144,22 @@ export function parseBedtimeStoryJson(value: string): BedtimeStoryPayload {
   }
 
   const record = parsed as Record<string, unknown>;
+  const rawTitle = localizedText(record.title, true);
+  const title = strictLocalizedTextSchema.parse(rawTitle);
+
   const slidesInput = Array.isArray(record.slides) ? record.slides : [];
-  const normalizedSlides = slidesInput.map((slide, index) => normalizeSlide(slide, index));
-  const slug = getString(record, ["slug"]) ?? slugifyStoryTitle(localizedText(record.title, true).en || "bedtime-story");
+  if (slidesInput.length === 0) {
+    throw new Error("Bedtime story must contain at least 1 slide.");
+  }
+  const normalizedSlides = slidesInput.map((slide, index) => {
+    const normalized = normalizeSlide(slide, index);
+    strictLocalizedTextSchema.parse(normalized.text);
+    if (!normalized.illustration_prompt || !normalized.illustration_prompt.trim()) {
+      throw new Error(`Slide ${index + 1}: illustration_prompt is required for imported JSON.`);
+    }
+    return normalized;
+  });
+  const slug = getString(record, ["slug"]) ?? slugifyStoryTitle(title.en || "bedtime-story");
   const images: Record<string, string> = {};
   normalizedSlides.forEach((slide) => {
     if (slide.image_url) {
@@ -291,12 +307,218 @@ export async function createBedtimeStory(supabase: SupabaseClient, payload: Bedt
   return loadBedtimeStory(supabase, data.id);
 }
 
+export function mergeBedtimeStoryPatch(
+  existing: BedtimeStoryRecord,
+  patch: BedtimeStoryPatch,
+): BedtimeStoryPayload {
+  const slug = typeof patch.slug === "string" && patch.slug.trim()
+    ? patch.slug.trim()
+    : existing.slug;
+
+  const status = patch.status ?? existing.status;
+
+  const title = {
+    ...existing.title,
+    ...(patch.title ?? {}),
+  };
+
+  const emotional_theme = {
+    ...existing.emotional_theme,
+    ...(patch.emotional_theme ?? {}),
+  };
+
+  const full_json = {
+    ...existing.full_json,
+    ...(patch.full_json ?? {}),
+  };
+
+  const cover_image_url = patch.cover_image_url !== undefined
+    ? patch.cover_image_url
+    : existing.cover_image_url;
+
+  const instagram_caption = {
+    ...existing.instagram_caption,
+    ...(patch.instagram_caption ?? {}),
+  };
+
+  const instagram_hashtags = Array.isArray(patch.instagram_hashtags)
+    ? patch.instagram_hashtags
+    : existing.instagram_hashtags;
+
+  const collection_tags = Array.isArray(patch.collection_tags)
+    ? patch.collection_tags
+    : existing.collection_tags;
+
+  const visual_tags = Array.isArray(patch.visual_tags)
+    ? patch.visual_tags
+    : existing.visual_tags;
+
+  const stamp_assets = Array.isArray(patch.stamp_assets)
+    ? patch.stamp_assets
+    : existing.stamp_assets;
+
+  const marker_assets = Array.isArray(patch.marker_assets)
+    ? patch.marker_assets
+    : existing.marker_assets;
+
+  const exported_image_urls = patch.replaceExportedImageUrls
+    ? { ...(patch.exported_image_urls ?? {}) }
+    : { ...existing.exported_image_urls, ...(patch.exported_image_urls ?? {}) };
+
+  let publish_date = patch.publish_date !== undefined
+    ? patch.publish_date
+    : existing.publish_date;
+
+  let is_published = typeof patch.is_published === "boolean"
+    ? patch.is_published
+    : existing.is_published;
+  if (status === "draft" || status === "archived") {
+    is_published = false;
+    publish_date = null;
+  }
+
+  let baseSlides = existing.slides;
+
+  // Explicit structural deletion:
+  if (Array.isArray(patch.deleteSlideNumbers) && patch.deleteSlideNumbers.length > 0) {
+    const toDelete = new Set(patch.deleteSlideNumbers);
+    baseSlides = baseSlides.filter((s) => !toDelete.has(s.slide_number));
+  }
+
+  let slides: BedtimeStorySlide[];
+  if (patch.replaceSlides && Array.isArray(patch.slides) && patch.slides.length > 0) {
+    // Explicit replacement: patch.slides defines the full set of slides.
+    const existingByNumber = new Map<number, BedtimeStorySlide>();
+    baseSlides.forEach((s) => existingByNumber.set(s.slide_number, s));
+
+    slides = patch.slides.map((s, idx) => {
+      const slideNum = s.slide_number ?? idx + 1;
+      const ex = existingByNumber.get(slideNum);
+      return {
+        slide_number: slideNum,
+        text: { en: "", ru: "", he: "", ...(ex?.text ?? {}), ...(s.text ?? {}) },
+        illustration_prompt: s.illustration_prompt !== undefined
+          ? s.illustration_prompt
+          : (ex?.illustration_prompt ?? ""),
+        stamp_prompt: s.stamp_prompt !== undefined
+          ? s.stamp_prompt
+          : (ex?.stamp_prompt ?? ""),
+        marker_prompt: s.marker_prompt !== undefined
+          ? s.marker_prompt
+          : (ex?.marker_prompt ?? ""),
+        image_url: s.image_url !== undefined
+          ? s.image_url
+          : (ex?.image_url ?? ""),
+        layers: s.layers && s.layers.length > 0
+          ? s.layers
+          : (ex?.layers ?? []),
+      };
+    });
+  } else if (!patch.slides || !Array.isArray(patch.slides) || patch.slides.length === 0) {
+    slides = baseSlides;
+  } else {
+    // Non-destructive slide merging:
+    // Update matching slides, keep all untouched existing slides (especially 2..10).
+    // NEVER infer deletion from receiving a shorter slides array!
+    const incomingByNumber = new Map<number, BedtimeStorySlidePatch>();
+    patch.slides.forEach((s) => incomingByNumber.set(s.slide_number, s));
+
+    const updatedBaseSlides = baseSlides.map((existingSlide) => {
+      const incoming = incomingByNumber.get(existingSlide.slide_number);
+      if (!incoming) {
+        return existingSlide;
+      }
+      return {
+        ...existingSlide,
+        slide_number: existingSlide.slide_number,
+        text: {
+          ...existingSlide.text,
+          ...(incoming.text ?? {}),
+        },
+        illustration_prompt: incoming.illustration_prompt !== undefined
+          ? incoming.illustration_prompt
+          : existingSlide.illustration_prompt,
+        stamp_prompt: incoming.stamp_prompt !== undefined
+          ? incoming.stamp_prompt
+          : existingSlide.stamp_prompt,
+        marker_prompt: incoming.marker_prompt !== undefined
+          ? incoming.marker_prompt
+          : existingSlide.marker_prompt,
+        image_url: incoming.image_url !== undefined
+          ? incoming.image_url
+          : existingSlide.image_url,
+        layers: incoming.layers && incoming.layers.length > 0
+          ? incoming.layers
+          : existingSlide.layers,
+      };
+    });
+
+    const brandNewSlides: BedtimeStorySlide[] = patch.slides
+      .filter((s) => !baseSlides.some((es) => es.slide_number === s.slide_number))
+      .map((s) => ({
+        slide_number: s.slide_number,
+        text: { en: "", ru: "", he: "", ...(s.text ?? {}) },
+        illustration_prompt: s.illustration_prompt ?? "",
+        stamp_prompt: s.stamp_prompt ?? "",
+        marker_prompt: s.marker_prompt ?? "",
+        image_url: s.image_url ?? "",
+        layers: s.layers ?? [],
+      }));
+
+    slides = [...updatedBaseSlides, ...brandNewSlides].sort(
+      (a, b) => a.slide_number - b.slide_number,
+    );
+  }
+
+  const images = { ...existing.images, ...(patch.images ?? {}) };
+  slides.forEach((slide) => {
+    if (slide.image_url) {
+      images[String(slide.slide_number).padStart(2, "0")] = slide.image_url;
+    } else if (patch.slides?.some((incoming) => incoming.slide_number === slide.slide_number && incoming.image_url === "")) {
+      delete images[String(slide.slide_number).padStart(2, "0")];
+    }
+  });
+
+  if (Array.isArray(patch.deleteSlideNumbers)) {
+    for (const delNum of patch.deleteSlideNumbers) {
+      const padNum = String(delNum).padStart(2, "0");
+      delete images[padNum];
+      for (const lang of LANGUAGES) {
+        delete exported_image_urls[`${lang}-${padNum}`];
+      }
+      delete exported_image_urls[padNum];
+    }
+  }
+
+  return {
+    slug,
+    status,
+    title,
+    emotional_theme,
+    full_json,
+    slides,
+    images,
+    cover_image_url,
+    instagram_caption,
+    instagram_hashtags,
+    collection_tags,
+    visual_tags,
+    stamp_assets,
+    marker_assets,
+    exported_image_urls,
+    publish_date,
+    is_published,
+  };
+}
+
 export async function updateBedtimeStory(
   supabase: SupabaseClient,
   storyId: string,
-  payload: BedtimeStoryPayload,
+  payload: BedtimeStoryPatch,
 ): Promise<BedtimeStoryRecord> {
-  const parsed = bedtimeStoryPayloadSchema.parse(payload);
+  const existing = await loadBedtimeStory(supabase, storyId);
+  const merged = mergeBedtimeStoryPatch(existing, payload);
+  const parsed = bedtimeStoryPayloadSchema.parse(merged);
   await ensureUniqueSlug(supabase, parsed.slug, storyId);
   const { error } = await supabase
     .from("bedtime_stories")
@@ -309,6 +531,7 @@ export async function updateBedtimeStory(
 
   return loadBedtimeStory(supabase, storyId);
 }
+
 
 export async function deleteBedtimeStory(supabase: SupabaseClient, storyId: string): Promise<void> {
   const { error } = await supabase
@@ -326,18 +549,68 @@ export async function saveBedtimeStorySlideImage(
   storyId: string,
   slideNumber: number,
   publicUrl: string,
+  language?: BedtimeStoryLanguage,
 ): Promise<BedtimeStoryRecord> {
   const story = await loadBedtimeStory(supabase, storyId);
   const slideKey = String(slideNumber).padStart(2, "0");
-  const slides = story.slides.map((slide) => (
-    slide.slide_number === slideNumber ? { ...slide, image_url: publicUrl } : slide
-  ));
-  const images = { ...story.images, [slideKey]: publicUrl };
-  const coverImageUrl = story.cover_image_url || (slideNumber === 1 ? publicUrl : null);
+  const lang = language || "ru";
+  const langKey = `${lang}-${slideKey}`;
+
+  // 1. Localized image mapping in exported_image_urls (canonical multi-language store)
+  const exported_image_urls = {
+    ...story.exported_image_urls,
+    [langKey]: publicUrl,
+  };
+
+  // 2. Images map
+  const images = {
+    ...story.images,
+    [langKey]: publicUrl,
+  };
+
+  // 3. Slides array: ensure the slide exists
+  const slides = [...story.slides];
+  const slideIndex = slides.findIndex((s) => s.slide_number === slideNumber);
+  if (slideIndex !== -1) {
+    // Only update monolithic slide.image_url if this is Russian (canonical default)
+    // NEVER overwrite an existing Russian image with EN or HE!
+    if (lang === "ru") {
+      slides[slideIndex] = {
+        ...slides[slideIndex],
+        image_url: publicUrl,
+      };
+      images[slideKey] = publicUrl;
+    }
+  } else {
+    slides.push({
+      slide_number: slideNumber,
+      text: { ru: "", en: "", he: "" },
+      illustration_prompt: "",
+      stamp_prompt: "",
+      marker_prompt: "",
+      image_url: lang === "ru" ? publicUrl : "",
+      layers: [],
+    });
+    slides.sort((a, b) => a.slide_number - b.slide_number);
+    if (lang === "ru") {
+      images[slideKey] = publicUrl;
+    }
+  }
+
+  // 4. Cover image: update if slide 1 and (language is Russian or no cover exists yet)
+  let coverImageUrl = story.cover_image_url;
+  if (slideNumber === 1 && lang === "ru") {
+    coverImageUrl = publicUrl;
+  }
 
   const { error } = await supabase
     .from("bedtime_stories")
-    .update({ slides, images, cover_image_url: coverImageUrl })
+    .update({
+      slides,
+      images,
+      exported_image_urls,
+      cover_image_url: coverImageUrl,
+    })
     .eq("id", storyId);
 
   if (error) {
