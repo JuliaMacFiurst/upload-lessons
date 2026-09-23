@@ -20,6 +20,7 @@ export function AdminTabs() {
     { href: "/admin/books", label: "Книги" },
     { href: "/admin/story-builder", label: "Истории" },
     { href: "/admin/story-submissions", label: "Заявки" },
+    { href: "/admin/quests", label: "Квесты" },
   ];
 
   return (
@@ -38,6 +39,7 @@ export function AdminTabs() {
             (tab.href === "/admin/books" && router.pathname.startsWith("/admin/books")) ||
             (tab.href === "/admin/story-builder" && router.pathname.startsWith("/admin/story-builder")) ||
             (tab.href === "/admin/story-submissions" && router.pathname.startsWith("/admin/story-submissions")) ||
+            (tab.href === "/admin/quests" && router.pathname.startsWith("/admin/quests")) ||
             (tab.href === "/admin/analytics" && router.pathname.startsWith("/admin/analytics"));
 
           return (
