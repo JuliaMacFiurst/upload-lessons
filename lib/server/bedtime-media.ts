@@ -34,3 +34,36 @@ export function bedtimeSlideMediaPath(slug: string, language: BedtimeStoryLangua
   if (!Number.isInteger(slideNumber) || slideNumber < 1 || slideNumber > 10) throw new Error("Invalid slide number.");
   return `bedtime_story/${slug}/${language}/slide-${String(slideNumber).padStart(2, "0")}-${randomUUID()}.webp`;
 }
+
+export function getBedtimeCleanupKey(oldUrl: string, newUrl: string, story: any, r2Prefix: string): string | null {
+  if (!oldUrl || oldUrl === newUrl) return null;
+  const isExported = Object.values(story.exported_image_urls ?? {}).includes(oldUrl);
+  if (isExported) return null;
+  
+  const prefix = r2Prefix + "/";
+  if (oldUrl.startsWith(prefix)) {
+    return decodeURIComponent(oldUrl.slice(prefix.length));
+  }
+  return null;
+}
+
+export async function cleanupReplacedBedtimeMedia(oldUrl: string, newUrl: string, story: any): Promise<boolean> {
+  const { parsePublicR2ObjectKey, deletePublicR2Object } = await import("./r2-storage.ts");
+  
+  // We can just use the pure function by injecting a dummy prefix or use parsePublicR2ObjectKey directly.
+  // Actually, we already have parsePublicR2ObjectKey, so we just do:
+  if (!oldUrl || oldUrl === newUrl) return false;
+  const isExported = Object.values(story.exported_image_urls ?? {}).includes(oldUrl);
+  if (isExported) return false;
+  
+  const oldKey = parsePublicR2ObjectKey(oldUrl);
+  if (!oldKey) return false;
+  
+  try {
+    await deletePublicR2Object(oldKey);
+    return true;
+  } catch (e) {
+    console.error("Failed to cleanup old bedtime media:", e);
+    return false;
+  }
+}

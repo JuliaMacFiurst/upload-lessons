@@ -553,34 +553,21 @@ export async function saveBedtimeStorySlideImage(
 ): Promise<BedtimeStoryRecord> {
   const story = await loadBedtimeStory(supabase, storyId);
   const slideKey = String(slideNumber).padStart(2, "0");
-  const lang = language || "ru";
-  const langKey = `${lang}-${slideKey}`;
 
-  // 1. Localized image mapping in exported_image_urls (canonical multi-language store)
-  const exported_image_urls = {
-    ...story.exported_image_urls,
-    [langKey]: publicUrl,
-  };
-
-  // 2. Images map
+  // 1. Images map (Source mapping)
   const images = {
     ...story.images,
-    [langKey]: publicUrl,
+    [slideKey]: publicUrl,
   };
 
-  // 3. Slides array: ensure the slide exists
+  // 2. Slides array: ensure the slide exists and update the shared image_url
   const slides = [...story.slides];
   const slideIndex = slides.findIndex((s) => s.slide_number === slideNumber);
   if (slideIndex !== -1) {
-    // Only update monolithic slide.image_url if this is Russian (canonical default)
-    // NEVER overwrite an existing Russian image with EN or HE!
-    if (lang === "ru") {
-      slides[slideIndex] = {
-        ...slides[slideIndex],
-        image_url: publicUrl,
-      };
-      images[slideKey] = publicUrl;
-    }
+    slides[slideIndex] = {
+      ...slides[slideIndex],
+      image_url: publicUrl,
+    };
   } else {
     slides.push({
       slide_number: slideNumber,
@@ -588,18 +575,15 @@ export async function saveBedtimeStorySlideImage(
       illustration_prompt: "",
       stamp_prompt: "",
       marker_prompt: "",
-      image_url: lang === "ru" ? publicUrl : "",
+      image_url: publicUrl,
       layers: [],
     });
     slides.sort((a, b) => a.slide_number - b.slide_number);
-    if (lang === "ru") {
-      images[slideKey] = publicUrl;
-    }
   }
 
-  // 4. Cover image: update if slide 1 and (language is Russian or no cover exists yet)
+  // 3. Cover image: update if slide 1 and no cover exists yet
   let coverImageUrl = story.cover_image_url;
-  if (slideNumber === 1 && lang === "ru") {
+  if (slideNumber === 1 && !coverImageUrl) {
     coverImageUrl = publicUrl;
   }
 
@@ -608,7 +592,6 @@ export async function saveBedtimeStorySlideImage(
     .update({
       slides,
       images,
-      exported_image_urls,
       cover_image_url: coverImageUrl,
     })
     .eq("id", storyId);

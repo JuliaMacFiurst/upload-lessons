@@ -197,6 +197,16 @@ export function publicR2ObjectUrl(path: string) {
   return `${config.publicUrl}/${encodePath(path.replace(/^\/+/, ""))}`;
 }
 
+export function parsePublicR2ObjectKey(url: string): string | null {
+  const config = getR2Config();
+  if (!config) return null;
+  const prefix = config.publicUrl + "/";
+  if (url.startsWith(prefix)) {
+    return decodeURIComponent(url.slice(prefix.length));
+  }
+  return null;
+}
+
 export async function uploadPublicR2Object(input: R2UploadInput): Promise<string> {
   const objectKey = input.key.replace(/^\/+/, "");
   const { config, response } = await signedR2Request({

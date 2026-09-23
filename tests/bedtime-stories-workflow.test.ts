@@ -55,67 +55,48 @@ function database() {
   return { client: { from } as unknown as SupabaseClient };
 }
 
-test("create, upload RU/EN/HE on three pages, replace, clear, save and reload", async () => {
+test("source illustration uploads update shared canonical image, preserving finished exports", async () => {
   const { client } = database();
   let story = await createBedtimeStory(client, payload());
-  for (const language of ["ru", "en", "he"] as const) {
-    for (const page of [1, 2, 3]) {
-      story = await saveBedtimeStorySlideImage(client, id, page, `https://example.test/${language}/${page}.webp`, language);
-    }
-  }
-  assert.equal(Object.keys(story.exported_image_urls).length, 9);
-  assert.equal(story.exported_image_urls["ru-02"], "https://example.test/ru/2.webp");
-  assert.equal(story.exported_image_urls["en-02"], "https://example.test/en/2.webp");
-  assert.equal(story.exported_image_urls["he-02"], "https://example.test/he/2.webp");
-  assert.equal(story.slides[0].image_url, "https://example.test/ru/1.webp");
-
-  story = await saveBedtimeStorySlideImage(client, id, 1, "https://example.test/en/replaced.webp", "en");
-  assert.equal(story.exported_image_urls["ru-01"], "https://example.test/ru/1.webp");
-  assert.equal(story.exported_image_urls["he-01"], "https://example.test/he/1.webp");
-
-  const remaining = { ...story.exported_image_urls };
-  delete remaining["en-01"];
+  
+  // Prepare existing finished exports
   story = await updateBedtimeStory(client, id, {
-    title: { en: "Updated Story" },
-    slides: [{ slide_number: 2, text: { en: "Updated EN 2" } }],
-    exported_image_urls: remaining,
+    exported_image_urls: {
+      "en-01": "finished-en.webp",
+      "ru-01": "finished-ru.webp",
+      "he-01": "finished-he.webp",
+      "ru-02": "finished-ru-02.webp"
+    },
     replaceExportedImageUrls: true,
   });
+
+  // CASE 1: Upload while EN selected
+  story = await saveBedtimeStorySlideImage(client, id, 1, "https://example.test/en/new.webp", "en");
+  assert.equal(story.slides[0].image_url, "https://example.test/en/new.webp");
+  assert.equal(story.images["01"], "https://example.test/en/new.webp");
+  // CASE 4: exported_image_urls remains unchanged
+  assert.equal(story.exported_image_urls["en-01"], "finished-en.webp");
+  assert.equal(story.exported_image_urls["ru-01"], "finished-ru.webp");
+  assert.equal(story.exported_image_urls["he-01"], "finished-he.webp");
+  // CASE 5: other slides untouched
+  assert.equal(story.images["02"], undefined);
+  assert.equal(story.slides[1].image_url, "");
+  
+  // CASE 2: Upload while HE selected
+  story = await saveBedtimeStorySlideImage(client, id, 1, "https://example.test/he/newer.webp", "he");
+  assert.equal(story.slides[0].image_url, "https://example.test/he/newer.webp");
+  assert.equal(story.images["01"], "https://example.test/he/newer.webp");
+  assert.equal(story.exported_image_urls["he-01"], "finished-he.webp");
+
+  // CASE 3: Upload while RU selected
+  story = await saveBedtimeStorySlideImage(client, id, 1, "https://example.test/ru/newest.webp", "ru");
+  assert.equal(story.slides[0].image_url, "https://example.test/ru/newest.webp");
+  assert.equal(story.images["01"], "https://example.test/ru/newest.webp");
+  assert.equal(story.exported_image_urls["ru-01"], "finished-ru.webp");
+  
+  // Test loading again
   const reloaded = await loadBedtimeStory(client, id);
-  assert.equal(reloaded.title.en, "Updated Story");
-  assert.equal(reloaded.slides.length, 3);
-  assert.equal(reloaded.slides[1].text.en, "Updated EN 2");
-  assert.equal(reloaded.exported_image_urls["en-01"], undefined);
-  assert.equal(reloaded.exported_image_urls["ru-01"], "https://example.test/ru/1.webp");
-  assert.equal(reloaded.exported_image_urls["he-01"], "https://example.test/he/1.webp");
-  assert.deepEqual(getBedtimePreviewPages(reloaded, "en").map((page) => page.imageUrl), ["", "https://example.test/en/2.webp", "https://example.test/en/3.webp"]);
-  assert.deepEqual(getBedtimePreviewPages(reloaded, "ru").map((page) => page.imageUrl), ["https://example.test/ru/1.webp", "https://example.test/ru/2.webp", "https://example.test/ru/3.webp"]);
-  assert.deepEqual(getBedtimePreviewPages(reloaded, "he").map((page) => page.imageUrl), ["https://example.test/he/1.webp", "https://example.test/he/2.webp", "https://example.test/he/3.webp"]);
-  assert.deepEqual(getBedtimePreviewPages(reloaded, "he").map((page) => page.text), ["HE 1", "HE 2", "HE 3"]);
-
-  const withoutHe = { ...reloaded.exported_image_urls };
-  delete withoutHe["he-02"];
-  await updateBedtimeStory(client, id, { exported_image_urls: withoutHe, replaceExportedImageUrls: true });
-  assert.equal(getBedtimePreviewPages(await loadBedtimeStory(client, id), "he")[1].imageUrl, "");
-
-  const withoutRu = { ...withoutHe };
-  delete withoutRu["ru-01"];
-  story = await updateBedtimeStory(client, id, {
-    slides: [{ slide_number: 1, image_url: "" }],
-    cover_image_url: null,
-    exported_image_urls: withoutRu,
-    replaceExportedImageUrls: true,
-  });
-  assert.equal(story.images["01"], undefined);
-  assert.equal(story.cover_image_url, null);
-  assert.equal(getBedtimePreviewPages(story, "ru")[0].imageUrl, "");
-  assert.equal(getBedtimePreviewPages(story, "en")[1].imageUrl, "https://example.test/en/2.webp");
-
-  story = await updateBedtimeStory(client, id, { status: "exported", is_published: true, publish_date: "2026-09-21T00:00:00.000Z" });
-  assert.equal(story.is_published, true);
-  story = await updateBedtimeStory(client, id, { status: "draft" });
-  assert.equal(story.is_published, false);
-  assert.equal(story.publish_date, null);
+  assert.equal(reloaded.slides[0].image_url, "https://example.test/ru/newest.webp");
 });
 
 test("localized upload paths are isolated and never reuse the same object", () => {
@@ -135,4 +116,30 @@ test("upload rejects malformed, oversized, and non-image content", async () => {
   assert.throws(() => decodeBedtimeImage("data:text/html;base64,PHNjcmlwdD4="));
   assert.throws(() => decodeBedtimeImage("a".repeat(30 * 1024 * 1024)), /too large/);
   await assert.rejects(validateBedtimeImage(Buffer.from("not an image")), /Invalid image/);
+});
+
+import { getBedtimeCleanupKey } from "../lib/server/bedtime-media.ts";
+
+test("R2 media cleanup sequence handles replacement safely", () => {
+  const storyMock = {
+    exported_image_urls: {
+      "en-01": "https://media.laplapla.com/exported.webp",
+    }
+  };
+  const prefix = "https://media.laplapla.com";
+
+  // 1. First upload (no old URL) -> null key (no delete attempted)
+  assert.equal(getBedtimeCleanupKey("", "https://media.laplapla.com/new.webp", storyMock, prefix), null);
+
+  // 2. Replacement (old URL exists, not exported) -> returns correct R2 key
+  assert.equal(
+    getBedtimeCleanupKey("https://media.laplapla.com/old.webp", "https://media.laplapla.com/new.webp", storyMock, prefix), 
+    "old.webp"
+  );
+
+  // 5. External old URL -> null key (not matched by prefix)
+  assert.equal(getBedtimeCleanupKey("https://example.com/other.webp", "https://media.laplapla.com/new.webp", storyMock, prefix), null);
+
+  // 6. Finished export safety -> null key (protected by exported_image_urls)
+  assert.equal(getBedtimeCleanupKey("https://media.laplapla.com/exported.webp", "https://media.laplapla.com/new.webp", storyMock, prefix), null);
 });

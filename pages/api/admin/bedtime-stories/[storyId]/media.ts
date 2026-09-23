@@ -11,8 +11,8 @@ import {
   loadBedtimeStory,
   saveBedtimeStorySlideImage,
 } from "../../../../../lib/server/bedtime-stories-admin";
-import { hasR2Config, uploadPublicR2Object } from "../../../../../lib/server/r2-storage";
-import { bedtimeSlideMediaPath, decodeBedtimeImage, validateBedtimeImage } from "../../../../../lib/server/bedtime-media";
+import { hasR2Config, uploadPublicR2Object, deletePublicR2Object, parsePublicR2ObjectKey } from "../../../../../lib/server/r2-storage";
+import { bedtimeSlideMediaPath, decodeBedtimeImage, validateBedtimeImage, cleanupReplacedBedtimeMedia } from "../../../../../lib/server/bedtime-media";
 
 export const config = {
   api: {
@@ -206,10 +206,18 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: "slideNumber must be 1-10 for Instagram carousel export." });
       }
 
+      const slide = story.slides.find((s) => s.slide_number === slideNumber);
+      const oldUrl = slide?.image_url || story.images[String(slideNumber).padStart(2, "0")];
+
       const webp = await imageToWebp(input);
       const path = bedtimeSlideMediaPath(story.slug, language, slideNumber);
       const publicUrl = await uploadMedia(supabase, path, webp);
       const updatedStory = await saveBedtimeStorySlideImage(supabase, story.id, slideNumber, publicUrl, language);
+
+      if (oldUrl && oldUrl !== publicUrl) {
+        await cleanupReplacedBedtimeMedia(oldUrl, publicUrl, story);
+      }
+
       return res.status(200).json({ ok: true, kind: body.kind, path, publicUrl, story: updatedStory });
     }
 
