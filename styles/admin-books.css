@@ -2990,6 +2990,80 @@
   text-align: center;
 }
 
+.cat-readiness {
+  align-self: flex-start;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #fff0c2;
+  color: #795600;
+  font-weight: 800;
+}
+
+.cat-readiness[data-ready="true"] {
+  background: #d7f8e4;
+  color: #126536;
+}
+
+.cat-production-scenes {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.cat-production-scene {
+  display: grid;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #d8e3ef;
+  border-radius: 16px;
+  background: #fbfdff;
+}
+
+.cat-production-scene p {
+  margin: 6px 0;
+  font-size: 17px;
+  line-height: 1.45;
+}
+
+.cat-production-scene small,
+.cat-narration-recorder__status small {
+  color: #6c7a8d;
+  overflow-wrap: anywhere;
+}
+
+.cat-narration-recorder,
+.cat-narration-recorder__status {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cat-narration-audio {
+  width: 100%;
+  max-width: 560px;
+}
+
+.cat-narration-recording {
+  color: #b42318;
+  font-weight: 800;
+}
+
+.cat-voice-effects {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.cat-scene-direction summary {
+  cursor: pointer;
+  font-weight: 800;
+  padding: 8px 0;
+}
+
+.cat-scene-direction[open] summary {
+  margin-bottom: 12px;
+}
+
 .cat-slide-editor__delete {
   margin-bottom: 2px;
 }
@@ -3220,5 +3294,14 @@
   .recipe-media-browser,
   .story-overview-step {
     grid-template-columns: 1fr;
+  }
+
+  .cat-production-scene {
+    padding: 14px;
+  }
+
+  .cat-voice-effects .books-button,
+  .cat-narration-recorder .books-actions .books-button {
+    min-height: 46px;
   }
 }

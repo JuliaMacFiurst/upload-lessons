@@ -490,8 +490,49 @@ export async function updateCatQuestion(
     throw new Error(`Failed to update cat question: ${presetError.message}`);
   }
 
-  await replaceCatSlides(supabase, id, parsed.kind, slides);
+  await syncCatSlides(supabase, id, parsed.kind, slides);
   return loadCatQuestionEditor(supabase, id);
+}
+
+async function syncCatSlides(
+  supabase: SupabaseClient,
+  presetId: string,
+  kind: "text" | "full",
+  slides: CatSlideInput[],
+) {
+  const normalizedSlides = normalizeSlideOrder(slides);
+  const { data: existing, error: existingError } = await supabase
+    .from("cat_preset_slides")
+    .select("id")
+    .eq("preset_id", presetId);
+  if (existingError) throw new Error(`Failed to load existing slides: ${existingError.message}`);
+
+  const existingIds = new Set(((existing as Array<{ id: string }> | null) ?? []).map((slide) => slide.id));
+  const retainedIds = new Set(normalizedSlides.flatMap((slide) => slide.id && existingIds.has(slide.id) ? [slide.id] : []));
+  const invalidId = normalizedSlides.find((slide) => slide.id && !slide.id.startsWith("new-") && !existingIds.has(slide.id));
+  if (invalidId) throw new Error(`Slide ${invalidId.id} does not belong to question ${presetId}.`);
+
+  const removedIds = [...existingIds].filter((id) => !retainedIds.has(id));
+  if (removedIds.length > 0) {
+    const { error } = await supabase.from("cat_preset_slides").delete().in("id", removedIds);
+    if (error) throw new Error(`Failed to remove deleted slides: ${error.message}`);
+  }
+
+  for (const slide of normalizedSlides) {
+    const mediaUrl = kind === "full" ? slide.mediaUrl?.trim() || null : null;
+    const mediaType = kind === "full" ? slide.mediaType ?? null : null;
+    if ((mediaUrl && !mediaType) || (!mediaUrl && mediaType)) {
+      throw new Error("Each media slide must include both mediaUrl and mediaType.");
+    }
+    const row = { slide_order: slide.order, text: slide.text.trim(), media_url: mediaUrl, media_type: mediaType };
+    if (slide.id && existingIds.has(slide.id)) {
+      const { error } = await supabase.from("cat_preset_slides").update(row).eq("id", slide.id).eq("preset_id", presetId);
+      if (error) throw new Error(`Failed to update slide ${slide.id}: ${error.message}`);
+    } else {
+      const { error } = await supabase.from("cat_preset_slides").insert({ preset_id: presetId, ...row });
+      if (error) throw new Error(`Failed to insert slide ${slide.order}: ${error.message}`);
+    }
+  }
 }
 
 async function replaceCatSlides(

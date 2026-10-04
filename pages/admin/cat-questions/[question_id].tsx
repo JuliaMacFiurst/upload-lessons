@@ -5,6 +5,7 @@ import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../../components/AdminLogout";
 import { AdminTabs } from "../../../components/AdminTabs";
+import { ProductionWorkspace } from "../../../components/admin/cat-questions/ProductionWorkspace";
 import type { CatQuestionEditor, CatSlideInput } from "../../../lib/cat-questions/types";
 
 async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
@@ -124,6 +125,7 @@ export default function CatQuestionEditorPage() {
             is_active: question.is_active,
             sort_order: question.sort_order,
             slides: question.slides.map((slide, index) => ({
+              id: slide.id.startsWith("new-") ? undefined : slide.id,
               order: index + 1,
               text: slide.text,
               mediaUrl: question.kind === "full" ? slide.mediaUrl : null,
@@ -305,6 +307,12 @@ export default function CatQuestionEditorPage() {
             </button>
           </div>
         </section>
+      )}
+      {question && (
+        <ProductionWorkspace
+          key={question.slides.map((slide) => slide.id).join(":")}
+          questionId={question.id}
+        />
       )}
     </div>
   );
