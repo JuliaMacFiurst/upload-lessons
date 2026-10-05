@@ -10,23 +10,25 @@ import {
   createBedtimeStampAsset,
   loadBedtimeStory,
   saveBedtimeStorySlideImage,
+  saveLibraryMedia,
 } from "../../../../../lib/server/bedtime-stories-admin";
 import { hasR2Config, uploadPublicR2Object, deletePublicR2Object, parsePublicR2ObjectKey } from "../../../../../lib/server/r2-storage";
-import { bedtimeSlideMediaPath, decodeBedtimeImage, validateBedtimeImage, cleanupReplacedBedtimeMedia } from "../../../../../lib/server/bedtime-media";
+import { bedtimeSlideMediaPath, decodeBedtimeImage, validateBedtimeImage, cleanupReplacedBedtimeMedia, decodeLibraryVideo, validateLibraryVideo, libraryVideoMediaPath, libraryPosterMediaPath } from "../../../../../lib/server/bedtime-media";
 
 export const config = {
   api: {
     bodyParser: {
-      sizeLimit: "35mb",
+      sizeLimit: "110mb",
     },
   },
 };
 
 type MediaBody = {
-  kind?: "slide" | "stamp" | "marker";
+  kind?: "slide" | "stamp" | "marker" | "video" | "cover";
   language?: "en" | "ru" | "he";
   slideNumber?: number;
   imageBase64?: string;
+  videoBase64?: string;
   fileName?: string;
 };
 
@@ -169,8 +171,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     return res.status(400).json({ error: "Missing `storyId`." });
   }
 
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
+  if (req.method !== "POST" && req.method !== "DELETE") {
+    res.setHeader("Allow", "POST, DELETE");
     return res.status(405).json({ error: "Method not allowed" });
   }
 
@@ -184,17 +186,70 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
   try {
     const body = (req.body ?? {}) as MediaBody;
-    if (body.kind !== "slide" && body.kind !== "stamp" && body.kind !== "marker") {
-      return res.status(400).json({ error: "Unsupported media kind." });
-    }
-    if (!body.imageBase64) {
-      return res.status(400).json({ error: "Missing imageBase64." });
+    const story = await loadBedtimeStory(supabase, storyId);
+
+    if (req.method === "DELETE") {
+      if (body.kind !== "video" && body.kind !== "cover") return res.status(400).json({ error: "Only video or cover media can be deleted here." });
+      const oldUrl = body.kind === "video" ? story.media.url : story.media.posterUrl;
+      const media = body.kind === "video"
+        ? { ...story.media, url: "", mimeType: "", sizeBytes: undefined }
+        : { ...story.media, posterUrl: "" };
+      const updatedStory = await saveLibraryMedia(supabase, story.id, media, body.kind === "cover" ? null : undefined);
+      const oldKey = oldUrl ? parsePublicR2ObjectKey(oldUrl) : null;
+      if (oldKey) await deletePublicR2Object(oldKey).catch((error) => console.error("Failed to delete old library media", error));
+      return res.status(200).json({ ok: true, story: updatedStory });
     }
 
-    const story = await loadBedtimeStory(supabase, storyId);
+    if (body.kind !== "slide" && body.kind !== "stamp" && body.kind !== "marker" && body.kind !== "video" && body.kind !== "cover") {
+      return res.status(400).json({ error: "Unsupported media kind." });
+    }
+    if (body.kind !== "video" && !body.imageBase64) {
+      return res.status(400).json({ error: "Missing imageBase64." });
+    }
     const slug = normalizeStorageSegment(story.slug || story.id);
+
+    if (body.kind === "video") {
+      if (!hasR2Config()) return res.status(503).json({ error: "R2 configuration is required for video uploads." });
+      const input = decodeLibraryVideo(body.videoBase64);
+      validateLibraryVideo(input);
+      const path = libraryVideoMediaPath(story.slug);
+      const oldUrl = story.media.url;
+      const publicUrl = await uploadPublicR2Object({ key: path, body: input, contentType: "video/mp4" });
+      try {
+        const updatedStory = await saveLibraryMedia(supabase, story.id, {
+          ...story.media,
+          url: publicUrl,
+          mimeType: "video/mp4",
+          sizeBytes: input.length,
+        });
+        const oldKey = oldUrl ? parsePublicR2ObjectKey(oldUrl) : null;
+        if (oldKey && oldUrl !== publicUrl) await deletePublicR2Object(oldKey).catch((error) => console.error("Failed to cleanup replaced video", error));
+        return res.status(200).json({ ok: true, kind: body.kind, path, publicUrl, story: updatedStory });
+      } catch (error) {
+        await deletePublicR2Object(path).catch(() => undefined);
+        throw error;
+      }
+    }
+
     const input = decodeBedtimeImage(body.imageBase64);
     await validateBedtimeImage(input);
+
+    if (body.kind === "cover") {
+      if (!hasR2Config()) return res.status(503).json({ error: "R2 configuration is required for cover uploads." });
+      const webp = await imageToWebp(input);
+      const path = libraryPosterMediaPath(story.slug);
+      const oldUrl = story.media.posterUrl || story.cover_image_url || "";
+      const publicUrl = await uploadPublicR2Object({ key: path, body: webp, contentType: "image/webp" });
+      try {
+        const updatedStory = await saveLibraryMedia(supabase, story.id, { ...story.media, posterUrl: publicUrl }, publicUrl);
+        const oldKey = parsePublicR2ObjectKey(oldUrl);
+        if (oldKey && oldUrl !== publicUrl) await deletePublicR2Object(oldKey).catch((error) => console.error("Failed to cleanup replaced poster", error));
+        return res.status(200).json({ ok: true, kind: body.kind, path, publicUrl, story: updatedStory });
+      } catch (error) {
+        await deletePublicR2Object(path).catch(() => undefined);
+        throw error;
+      }
+    }
 
     if (body.kind === "slide") {
       const language = body.language;

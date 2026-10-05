@@ -30,8 +30,12 @@ function database() {
     neq: () => uniqueQuery,
     then: (resolve: (value: { data: never[]; error: null }) => void) => resolve({ data: [], error: null }),
   };
-  const from = () => ({
+  const from = (table: string) => ({
     select: () => ({
+      in: async (_column: string, values: string[]) => ({
+        data: table === "library_categories" ? values.map((slug, index) => ({ id: `category-${index}`, slug })) : [],
+        error: null,
+      }),
       eq: () => ({
         single: async () => ({ data: row, error: row ? null : { message: "not found" } }),
         limit: uniqueQuery.limit,
@@ -51,6 +55,7 @@ function database() {
         return { error: null };
       },
     }),
+    delete: () => ({ eq: async () => ({ error: null }) }),
   });
   return { client: { from } as unknown as SupabaseClient };
 }

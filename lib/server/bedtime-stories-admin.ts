@@ -14,7 +14,7 @@ import {
   type BedtimeStorySlidePatch,
 } from "../bedtime-stories/types.ts";
 import { withBedtimeStoryIllustrationTechnicalSuffix } from "../bedtime-stories/illustration-prompt.ts";
-import { listAllPublicR2ObjectKeys, publicR2ObjectUrl } from "./r2-storage.ts";
+import { deletePublicR2Object, listAllPublicR2ObjectKeys, parsePublicR2ObjectKey, publicR2ObjectUrl } from "./r2-storage.ts";
 
 const LANGUAGES: BedtimeStoryLanguage[] = ["en", "ru", "he"];
 const BEDTIME_STAMP_PREFIX = "bedtime_story/stamps/";
@@ -123,6 +123,50 @@ function rowToRecord(row: unknown): BedtimeStoryRecord {
   };
 }
 
+function validateLibraryItem(payload: BedtimeStoryPayload) {
+  if (payload.content_type === "slideshow" && payload.slides.length === 0) {
+    throw new Error("Slideshow content must contain at least 1 slide.");
+  }
+  if ((payload.content_type === "video" || payload.content_type === "image") && !payload.media.url) {
+    if (payload.status !== "draft") throw new Error(`${payload.content_type} content requires uploaded media before publishing.`);
+  }
+  if (payload.content_type === "video" && payload.media.url && payload.media.mimeType !== "video/mp4") {
+    throw new Error("Video media must be an MP4 file.");
+  }
+  if (payload.status !== "draft" && payload.status !== "archived") {
+    for (const language of LANGUAGES) {
+      if (!payload.description[language]?.trim()) throw new Error(`Description is required in ${language.toUpperCase()} before publishing.`);
+    }
+  }
+}
+
+async function loadCategorySlugs(supabase: SupabaseClient, storyId: string) {
+  const { data, error } = await supabase
+    .from("bedtime_story_categories")
+    .select("library_categories(slug)")
+    .eq("story_id", storyId);
+  if (error) return [];
+  return (data || []).flatMap((row: any) => {
+    const value = Array.isArray(row.library_categories) ? row.library_categories[0] : row.library_categories;
+    return typeof value?.slug === "string" ? [value.slug] : [];
+  });
+}
+
+async function syncCategorySlugs(supabase: SupabaseClient, storyId: string, slugs: string[]) {
+  const unique = Array.from(new Set(slugs));
+  const { data, error } = await supabase.from("library_categories").select("id,slug").in("slug", unique);
+  if (error) throw new Error(`Failed to load library categories: ${error.message}`);
+  if ((data || []).length !== unique.length) throw new Error("One or more library categories are invalid.");
+  const { error: deleteError } = await supabase.from("bedtime_story_categories").delete().eq("story_id", storyId);
+  if (deleteError) throw new Error(`Failed to update library categories: ${deleteError.message}`);
+  if ((data || []).length) {
+    const { error: insertError } = await supabase.from("bedtime_story_categories").insert(
+      (data || []).map((category: any) => ({ story_id: storyId, category_id: category.id })),
+    );
+    if (insertError) throw new Error(`Failed to update library categories: ${insertError.message}`);
+  }
+}
+
 function sanitizeSlides(slides: BedtimeStorySlide[]): BedtimeStorySlide[] {
   return slides.map((slide, index) => ({
     ...slide,
@@ -171,6 +215,12 @@ export function parseBedtimeStoryJson(value: string): BedtimeStoryPayload {
     slug,
     status: getString(record, ["status"]) ?? "draft",
     title: localizedText(record.title, true),
+    description: localizedText(record.description, false),
+    content_type: getString(record, ["content_type", "contentType"]) ?? "slideshow",
+    media: record.media && typeof record.media === "object" && !Array.isArray(record.media) ? record.media : {},
+    category_slugs: getStringArray(record, ["category_slugs", "categorySlugs"]).length
+      ? getStringArray(record, ["category_slugs", "categorySlugs"])
+      : ["stories"],
     emotional_theme: localizedText(record.emotional_theme ?? record.theme, false),
     full_json: record,
     slides: normalizedSlides,
@@ -227,6 +277,9 @@ function dbPayload(payload: BedtimeStoryPayload) {
     slug: payload.slug,
     status: payload.status,
     title: payload.title,
+    description: payload.description,
+    content_type: payload.content_type,
+    media: payload.media,
     emotional_theme: payload.emotional_theme,
     full_json: { ...payload.full_json, slides },
     slides,
@@ -256,12 +309,12 @@ export async function listBedtimeStories(
 
   let query = supabase
     .from("bedtime_stories")
-    .select("id,slug,status,title,publish_date,is_published,slides,created_at,updated_at", { count: "exact" })
+    .select("id,slug,status,title,description,content_type,publish_date,is_published,slides,created_at,updated_at", { count: "exact" })
     .order("created_at", { ascending: false })
     .range(from, to);
 
   if (search) {
-    query = query.or(`slug.ilike.%${search}%,title->>en.ilike.%${search}%,title->>ru.ilike.%${search}%`);
+    query = query.or(`slug.ilike.%${search}%,title->>en.ilike.%${search}%,title->>ru.ilike.%${search}%,title->>he.ilike.%${search}%,description->>en.ilike.%${search}%,description->>ru.ilike.%${search}%,description->>he.ilike.%${search}%`);
   }
 
   const { data, error, count } = await query;
@@ -288,11 +341,14 @@ export async function loadBedtimeStory(supabase: SupabaseClient, storyId: string
     throw new Error(error?.message ?? "Bedtime story not found.");
   }
 
-  return rowToRecord(data);
+  const record = rowToRecord(data);
+  const categorySlugs = await loadCategorySlugs(supabase, storyId);
+  return { ...record, category_slugs: categorySlugs.length ? categorySlugs : record.category_slugs };
 }
 
 export async function createBedtimeStory(supabase: SupabaseClient, payload: BedtimeStoryPayload): Promise<BedtimeStoryRecord> {
   const parsed = bedtimeStoryPayloadSchema.parse(payload);
+  validateLibraryItem(parsed);
   await ensureUniqueSlug(supabase, parsed.slug);
   const { data, error } = await supabase
     .from("bedtime_stories")
@@ -303,6 +359,8 @@ export async function createBedtimeStory(supabase: SupabaseClient, payload: Bedt
   if (error || !data) {
     throw new Error(error?.message ?? "Failed to create bedtime story.");
   }
+
+  await syncCategorySlugs(supabase, data.id, parsed.category_slugs);
 
   return loadBedtimeStory(supabase, data.id);
 }
@@ -321,6 +379,11 @@ export function mergeBedtimeStoryPatch(
     ...existing.title,
     ...(patch.title ?? {}),
   };
+
+  const description = { ...existing.description, ...(patch.description ?? {}) };
+  const content_type = patch.content_type ?? existing.content_type;
+  const media = { ...existing.media, ...(patch.media ?? {}) };
+  const category_slugs = patch.category_slugs ?? existing.category_slugs;
 
   const emotional_theme = {
     ...existing.emotional_theme,
@@ -494,6 +557,10 @@ export function mergeBedtimeStoryPatch(
     slug,
     status,
     title,
+    description,
+    content_type,
+    media,
+    category_slugs,
     emotional_theme,
     full_json,
     slides,
@@ -519,6 +586,7 @@ export async function updateBedtimeStory(
   const existing = await loadBedtimeStory(supabase, storyId);
   const merged = mergeBedtimeStoryPatch(existing, payload);
   const parsed = bedtimeStoryPayloadSchema.parse(merged);
+  validateLibraryItem(parsed);
   await ensureUniqueSlug(supabase, parsed.slug, storyId);
   const { error } = await supabase
     .from("bedtime_stories")
@@ -529,11 +597,28 @@ export async function updateBedtimeStory(
     throw new Error(`Failed to update bedtime story: ${error.message}`);
   }
 
+
+  await syncCategorySlugs(supabase, storyId, parsed.category_slugs);
+
+  return loadBedtimeStory(supabase, storyId);
+}
+
+export async function saveLibraryMedia(
+  supabase: SupabaseClient,
+  storyId: string,
+  media: BedtimeStoryRecord["media"],
+  coverImageUrl?: string | null,
+) {
+  const payload: Record<string, unknown> = { media };
+  if (coverImageUrl !== undefined) payload.cover_image_url = coverImageUrl;
+  const { error } = await supabase.from("bedtime_stories").update(payload).eq("id", storyId);
+  if (error) throw new Error(`Failed to save library media: ${error.message}`);
   return loadBedtimeStory(supabase, storyId);
 }
 
 
 export async function deleteBedtimeStory(supabase: SupabaseClient, storyId: string): Promise<void> {
+  const story = await loadBedtimeStory(supabase, storyId);
   const { error } = await supabase
     .from("bedtime_stories")
     .delete()
@@ -542,6 +627,13 @@ export async function deleteBedtimeStory(supabase: SupabaseClient, storyId: stri
   if (error) {
     throw new Error(`Failed to delete bedtime story: ${error.message}`);
   }
+
+  const ownedMediaKeys = [story.media.url, story.media.posterUrl]
+    .map((url) => url ? parsePublicR2ObjectKey(url) : null)
+    .filter((key): key is string => Boolean(key));
+  await Promise.all(ownedMediaKeys.map((key) => deletePublicR2Object(key).catch((cleanupError) => {
+    console.error(`Failed to cleanup deleted Library media ${key}:`, cleanupError);
+  })));
 }
 
 export async function saveBedtimeStorySlideImage(

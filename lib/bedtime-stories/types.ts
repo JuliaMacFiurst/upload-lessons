@@ -2,6 +2,10 @@ import { z } from "zod";
 
 export const bedtimeStoryLanguageSchema = z.enum(["en", "ru", "he"]);
 export type BedtimeStoryLanguage = z.infer<typeof bedtimeStoryLanguageSchema>;
+export const libraryContentTypeSchema = z.enum(["slideshow", "video", "image"]);
+export type LibraryContentType = z.infer<typeof libraryContentTypeSchema>;
+export const libraryCategorySlugSchema = z.enum(["stories", "crafts", "science", "art"]);
+export type LibraryCategorySlug = z.infer<typeof libraryCategorySlugSchema>;
 
 export const strictLocalizedTextSchema = z.object({
   en: z.string().trim().min(1, "English text is required."),
@@ -42,6 +46,11 @@ const nullableUrlSchema = z.preprocess(
   z.string().trim().url("URL must be valid.").nullable(),
 );
 
+const optionalMediaUrlSchema = z.string().trim().refine(
+  (value) => !value || z.string().url().safeParse(value).success,
+  "URL must be valid.",
+).default("");
+
 export const bedtimeStoryStatusSchema = z.enum([
   "draft",
   "ready",
@@ -78,11 +87,19 @@ export const bedtimeStoryPayloadSchema = z.object({
     .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must contain lowercase latin letters, numbers, and hyphens."),
   status: bedtimeStoryStatusSchema.default("draft"),
   title: localizedTextSchema,
+  description: optionalLocalizedTextSchema.default({ en: "", ru: "", he: "" }),
+  content_type: libraryContentTypeSchema.default("slideshow"),
+  media: z.object({
+    url: optionalMediaUrlSchema,
+    posterUrl: optionalMediaUrlSchema,
+    mimeType: z.string().trim().optional().default(""),
+    sizeBytes: z.number().int().nonnegative().optional(),
+  }).default({ url: "", posterUrl: "", mimeType: "" }),
+  category_slugs: z.array(libraryCategorySlugSchema).default(["stories"]),
   emotional_theme: optionalLocalizedTextSchema.default({ en: "", ru: "", he: "" }),
   full_json: z.record(z.string(), z.unknown()).default({}),
   slides: z
     .array(bedtimeStorySlideSchema)
-    .min(1, "Bedtime story must contain at least 1 slide.")
     .max(10, "Instagram carousel supports up to 10 slides."),
   images: z.record(z.string(), z.string()).default({}),
   cover_image_url: nullableUrlSchema,
@@ -114,6 +131,8 @@ export type BedtimeStoryListItem = {
   slug: string;
   status: BedtimeStoryStatus;
   title: Record<BedtimeStoryLanguage, string>;
+  content_type: LibraryContentType;
+  description: Record<BedtimeStoryLanguage, string>;
   publish_date: string | null;
   is_published: boolean;
   slides: BedtimeStorySlide[];
@@ -130,6 +149,10 @@ export type BedtimeStoryPatch = {
   slug?: string;
   status?: BedtimeStoryStatus;
   title?: Partial<Record<BedtimeStoryLanguage, string>>;
+  description?: Partial<Record<BedtimeStoryLanguage, string>>;
+  content_type?: LibraryContentType;
+  media?: Partial<BedtimeStoryPayload["media"]>;
+  category_slugs?: LibraryCategorySlug[];
   emotional_theme?: Partial<Record<BedtimeStoryLanguage, string>>;
   full_json?: Record<string, unknown>;
   slides?: BedtimeStorySlidePatch[];

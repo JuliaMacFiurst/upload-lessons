@@ -14,12 +14,19 @@ import type {
   BedtimeStoryRecord,
   BedtimeStorySlidePatch,
   BedtimeStoryStatus,
+  LibraryCategorySlug,
 } from "../../lib/bedtime-stories/types.ts";
 
 const LANGUAGES: BedtimeStoryLanguage[] = ["ru", "en", "he"];
 const STATUSES: BedtimeStoryStatus[] = ["draft", "ready", "exported", "scheduled", "published", "archived"];
 const MAX_UPLOAD_IMAGE_SIDE = 2600;
 const UPLOAD_WEBP_QUALITY = 0.9;
+const LIBRARY_CATEGORIES: Array<{ slug: LibraryCategorySlug; label: string }> = [
+  { slug: "stories", label: "Stories" },
+  { slug: "crafts", label: "Crafts" },
+  { slug: "science", label: "Science" },
+  { slug: "art", label: "Art" },
+];
 
 type StoriesResponse = {
   stories: BedtimeStoryListItem[];
@@ -194,6 +201,10 @@ function createEmptyDraft(): BedtimeStoryRecord {
     slug: "",
     status: "draft",
     title: { ru: "", en: "", he: "" },
+    description: { ru: "", en: "", he: "" },
+    content_type: "slideshow",
+    media: { url: "", posterUrl: "", mimeType: "" },
+    category_slugs: ["stories"],
     emotional_theme: { ru: "", en: "", he: "" },
     full_json: {},
     slides: [
@@ -294,6 +305,7 @@ export default function BedtimeStoriesAdminPage() {
   const [publishing, setPublishing] = useState(false);
   const [importing, setImporting] = useState(false);
   const [uploadingSlide, setUploadingSlide] = useState<number | null>(null);
+  const [uploadingLibraryMedia, setUploadingLibraryMedia] = useState<"video" | "cover" | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -496,6 +508,67 @@ export default function BedtimeStoriesAdminPage() {
     handleSlideImageUrlChange(slideNumber, "");
   };
 
+  const handleUploadLibraryMedia = async (kind: "video" | "cover", event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    event.target.value = "";
+    if (kind === "video" && file.type !== "video/mp4") {
+      setError("Only MP4 video files are allowed.");
+      return;
+    }
+    if (kind === "video" && file.size > 80 * 1024 * 1024) {
+      setError("Video is too large (80 MB maximum).");
+      return;
+    }
+
+    setUploadingLibraryMedia(kind);
+    setError(null);
+    setSuccess(null);
+    try {
+      const currentStory = await saveStory();
+      if (!currentStory) throw new Error("Save the item before uploading media.");
+      const uploadFile = kind === "cover" ? await imageFileToUploadFile(file) : file;
+      const dataUrl = await blobToDataUrl(uploadFile);
+      const data = await fetchJson<{ story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${currentStory.id}/media`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind,
+          fileName: uploadFile.name,
+          ...(kind === "video" ? { videoBase64: dataUrl } : { imageBase64: dataUrl }),
+        }),
+      });
+      setActiveStory(data.story);
+      setSavedSnapshot(JSON.stringify(data.story));
+      setSuccess(kind === "video" ? "MP4 uploaded to R2." : "Cover uploaded to R2.");
+      await loadStories();
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
+    } finally {
+      setUploadingLibraryMedia(null);
+    }
+  };
+
+  const deleteLibraryMedia = async (kind: "video" | "cover") => {
+    if (!activeStory.id || !window.confirm(`Delete the current ${kind} from this Library item?`)) return;
+    setUploadingLibraryMedia(kind);
+    setError(null);
+    try {
+      const data = await fetchJson<{ story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${activeStory.id}/media`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind }),
+      });
+      setActiveStory(data.story);
+      setSavedSnapshot(JSON.stringify(data.story));
+      setSuccess(`${kind === "video" ? "Video" : "Cover"} deleted.`);
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : String(deleteError));
+    } finally {
+      setUploadingLibraryMedia(null);
+    }
+  };
+
   // Save changes to story (draft or updated) without creating duplicates
   const saveStory = async (statusOverride?: BedtimeStoryStatus): Promise<BedtimeStoryRecord | null> => {
     setSaving(true);
@@ -564,6 +637,10 @@ export default function BedtimeStoriesAdminPage() {
 
       const patch: BedtimeStoryPatch = {
         title,
+        description: activeStory.description,
+        content_type: activeStory.content_type,
+        media: activeStory.media,
+        category_slugs: activeStory.category_slugs,
         slug,
         status: targetStatus,
         is_published: targetStatus === "draft" || targetStatus === "archived" ? false : activeStory.is_published,
@@ -615,8 +692,17 @@ export default function BedtimeStoriesAdminPage() {
   // sets status = "exported", preserves other language exports, is_published, and publish_date.
   const publishFinishedStory = async () => {
     const page1Url = getSlideImageUrl(activeStory, 1, editLanguage);
-    if (!page1Url) {
+    if (activeStory.content_type === "slideshow" && !page1Url) {
       setError(`Cannot publish story without a Page 1 finished image for ${editLanguage.toUpperCase()}. Please upload or set Page 1 image first.`);
+      return;
+    }
+    if (activeStory.content_type === "video" && (!activeStory.media.url || !activeStory.media.posterUrl)) {
+      setError("Cannot publish video without both an MP4 and a cover/poster.");
+      return;
+    }
+    const missingDescription = LANGUAGES.find((language) => !activeStory.description[language]?.trim());
+    if (missingDescription) {
+      setError(`Add a short description in ${missingDescription.toUpperCase()} before publishing.`);
       return;
     }
 
@@ -639,17 +725,19 @@ export default function BedtimeStoriesAdminPage() {
       // preserving existing exports for other languages (e.g. en-01, he-01).
       const updatedExportedUrls: Record<string, string> = { ...currentStory.exported_image_urls };
 
-      for (const slide of currentStory.slides) {
-        const url = getSlideImageUrl(currentStory, slide.slide_number, editLanguage);
-        if (!url) throw new Error(`Page ${slide.slide_number} has no ${editLanguage.toUpperCase()} image.`);
-        updatedExportedUrls[`${editLanguage}-${String(slide.slide_number).padStart(2, "0")}`] = url;
+      if (currentStory.content_type === "slideshow") {
+        for (const slide of currentStory.slides) {
+          const url = getSlideImageUrl(currentStory, slide.slide_number, editLanguage);
+          if (!url) throw new Error(`Page ${slide.slide_number} has no ${editLanguage.toUpperCase()} image.`);
+          updatedExportedUrls[`${editLanguage}-${String(slide.slide_number).padStart(2, "0")}`] = url;
+        }
       }
 
       const patch: BedtimeStoryPatch = {
         status: "exported",
         is_published: true,
         publish_date: currentStory.publish_date || new Date().toISOString(),
-        cover_image_url: currentStory.cover_image_url || (editLanguage === "ru" ? page1Url : currentStory.cover_image_url),
+        cover_image_url: currentStory.media.posterUrl || currentStory.cover_image_url || (editLanguage === "ru" ? page1Url : currentStory.cover_image_url),
         exported_image_urls: updatedExportedUrls,
       };
 
@@ -717,9 +805,9 @@ export default function BedtimeStoriesAdminPage() {
 
       <header className="books-admin-header">
         <div>
-          <h1 className="books-admin-title">Bedtime Stories Workshop</h1>
+          <h1 className="books-admin-title">LapLapLa Library Workshop</h1>
           <p className="books-admin-subtitle">
-            Author, edit, and publish 1–2 page illustrated bedtime stories, or import JSON carousels for the public reader.
+            Author and publish slideshows and short videos for the public LapLapLa Library.
           </p>
         </div>
       </header>
@@ -739,11 +827,11 @@ export default function BedtimeStoriesAdminPage() {
                   Edit Story: <span style={{ color: "#2b6cb0" }}>{activeStory.title[editLanguage] || activeStory.slug}</span>
                 </>
               ) : (
-                "New Bedtime Story"
+                "New Library Item"
               )}
             </h2>
             <p className="books-section-help">
-              Prepare 1 or 2 finished illustrated pages. Changes are saved server-side to Supabase.
+              Choose a format, add localized metadata and media, then publish through the existing secure pipeline.
             </p>
           </div>
           <div className="books-actions">
@@ -920,10 +1008,79 @@ export default function BedtimeStoriesAdminPage() {
               ))}
             </select>
           </label>
+
+          <label className="books-field">
+            <span className="books-field__label">Content type</span>
+            <select
+              className="books-input"
+              value={activeStory.content_type}
+              onChange={(e) => setActiveStory((prev) => ({
+                ...prev,
+                content_type: e.target.value as BedtimeStoryRecord["content_type"],
+                category_slugs: e.target.value === "slideshow" && prev.category_slugs.length === 0 ? ["stories"] : prev.category_slugs,
+              }))}
+            >
+              <option value="slideshow">Slideshow</option>
+              <option value="video">Video</option>
+            </select>
+          </label>
         </div>
 
+        <div className="books-grid books-grid--2" style={{ marginBottom: 20 }}>
+          <label className="books-field">
+            <span className="books-field__label">Description ({editLanguage.toUpperCase()})</span>
+            <textarea
+              className="books-input books-input--textarea"
+              value={activeStory.description[editLanguage] || ""}
+              placeholder="A short, human description for cards, detail pages and SEO."
+              onChange={(e) => setActiveStory((prev) => ({ ...prev, description: { ...prev.description, [editLanguage]: e.target.value } }))}
+            />
+          </label>
+          <fieldset className="books-field" style={{ border: 0, padding: 0, margin: 0 }}>
+            <legend className="books-field__label">Categories</legend>
+            <div className="books-actions">
+              {LIBRARY_CATEGORIES.map((category) => (
+                <label key={category.slug} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={activeStory.category_slugs.includes(category.slug)}
+                    onChange={(event) => setActiveStory((prev) => ({
+                      ...prev,
+                      category_slugs: event.target.checked
+                        ? Array.from(new Set([...prev.category_slugs, category.slug]))
+                        : prev.category_slugs.filter((slug) => slug !== category.slug),
+                    }))}
+                  />
+                  {category.label}
+                </label>
+              ))}
+            </div>
+          </fieldset>
+        </div>
+
+        {activeStory.content_type === "video" ? (
+          <div className="books-panel" style={{ marginBottom: 20, background: "#f7fafc" }}>
+            <h3 style={{ marginTop: 0 }}>Video media</h3>
+            {activeStory.media.url ? (
+              <video src={activeStory.media.url} poster={activeStory.media.posterUrl || undefined} controls playsInline preload="metadata" style={{ width: "100%", maxHeight: 520, objectFit: "contain", background: "#111", borderRadius: 12 }} />
+            ) : <p className="books-section-help">Upload a short MP4 (maximum 80 MB). The file is stored in R2, never in Supabase DB.</p>}
+            <div className="books-actions" style={{ marginTop: 12 }}>
+              <label className="books-button books-button--secondary" style={{ cursor: "pointer" }}>
+                {uploadingLibraryMedia === "video" ? "Uploading…" : activeStory.media.url ? "Replace MP4" : "Upload MP4"}
+                <input type="file" accept="video/mp4" hidden disabled={uploadingLibraryMedia !== null} onChange={(event) => void handleUploadLibraryMedia("video", event)} />
+              </label>
+              {activeStory.media.url ? <button type="button" className="books-button books-button--ghost" onClick={() => void deleteLibraryMedia("video")}>Delete video</button> : null}
+              <label className="books-button books-button--secondary" style={{ cursor: "pointer" }}>
+                {uploadingLibraryMedia === "cover" ? "Uploading…" : activeStory.media.posterUrl ? "Replace cover" : "Upload cover"}
+                <input type="file" accept="image/png,image/jpeg,image/webp" hidden disabled={uploadingLibraryMedia !== null} onChange={(event) => void handleUploadLibraryMedia("cover", event)} />
+              </label>
+              {activeStory.media.posterUrl ? <button type="button" className="books-button books-button--ghost" onClick={() => void deleteLibraryMedia("cover")}>Delete cover</button> : null}
+            </div>
+          </div>
+        ) : null}
+
         {/* Finished Illustrated Pages */}
-        {/* Finished Illustrated Pages */}
+        {activeStory.content_type === "slideshow" ? <>
         <div style={{ display: "grid", gridTemplateColumns: includePage2 ? "1fr 1fr" : "minmax(320px, 540px)", gap: 20, marginBottom: includePage2 ? 20 : 12 }}>
           {/* PAGE 1 CARD */}
           <div
@@ -1414,6 +1571,7 @@ export default function BedtimeStoriesAdminPage() {
             </button>
           </div>
         )}
+        </> : null}
 
         {/* Action Controls */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
@@ -1439,11 +1597,11 @@ export default function BedtimeStoriesAdminPage() {
             <button
               type="button"
               className="books-button books-button--success"
-              disabled={saving || publishing || uploadingSlide !== null || !page1ImageUrl}
+              disabled={saving || publishing || uploadingSlide !== null || uploadingLibraryMedia !== null || (activeStory.content_type === "slideshow" ? !page1ImageUrl : !activeStory.media.url || !activeStory.media.posterUrl)}
               onClick={() => void publishFinishedStory()}
               title="Explicitly copy finished page images to exported pages and mark status as exported"
             >
-              {publishing ? "Publishing..." : "Publish Finished Story 🚀"}
+              {publishing ? "Publishing..." : "Publish Library Item 🚀"}
             </button>
           </div>
 

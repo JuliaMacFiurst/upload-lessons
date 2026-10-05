@@ -300,6 +300,10 @@ function storyToPayload(story: BedtimeStoryRecord): BedtimeStoryPayload {
     slug: story.slug,
     status: story.status,
     title: story.title,
+    description: story.description,
+    content_type: story.content_type,
+    media: story.media,
+    category_slugs: story.category_slugs,
     emotional_theme: story.emotional_theme,
     full_json: {
       ...story.full_json,

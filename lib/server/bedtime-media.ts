@@ -3,6 +3,7 @@ import sharp from "sharp";
 import type { BedtimeStoryLanguage } from "../bedtime-stories/types.ts";
 
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+export const MAX_VIDEO_BYTES = 80 * 1024 * 1024;
 const ALLOWED_FORMATS = new Set(["jpeg", "png", "webp"]);
 
 export function decodeBedtimeImage(value: unknown): Buffer {
@@ -33,6 +34,34 @@ export function bedtimeSlideMediaPath(slug: string, language: BedtimeStoryLangua
   if (!["ru", "en", "he"].includes(language)) throw new Error("Invalid language.");
   if (!Number.isInteger(slideNumber) || slideNumber < 1 || slideNumber > 10) throw new Error("Invalid slide number.");
   return `bedtime_story/${slug}/${language}/slide-${String(slideNumber).padStart(2, "0")}-${randomUUID()}.webp`;
+}
+
+export function decodeLibraryVideo(value: unknown): Buffer {
+  if (typeof value !== "string") throw new Error("Missing video payload.");
+  const match = /^(?:data:video\/mp4;base64,)?([A-Za-z0-9+/]+={0,2})$/.exec(value);
+  if (!match || match[1].length % 4 === 1) throw new Error("Invalid MP4 payload.");
+  const estimatedBytes = Math.floor(match[1].length * 3 / 4);
+  if (estimatedBytes > MAX_VIDEO_BYTES) throw new Error("Video is too large (80 MB maximum).");
+  const buffer = Buffer.from(match[1], "base64");
+  if (!buffer.length || buffer.length > MAX_VIDEO_BYTES) throw new Error("Invalid video size.");
+  return buffer;
+}
+
+export function validateLibraryVideo(buffer: Buffer) {
+  // ISO Base Media files (including MP4) carry an ftyp box near the beginning.
+  if (buffer.length < 16 || buffer.subarray(4, 8).toString("ascii") !== "ftyp") {
+    throw new Error("Invalid MP4 file.");
+  }
+}
+
+export function libraryVideoMediaPath(slug: string) {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error("Invalid story slug.");
+  return `library/${slug}/video-${randomUUID()}.mp4`;
+}
+
+export function libraryPosterMediaPath(slug: string) {
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error("Invalid story slug.");
+  return `library/${slug}/poster-${randomUUID()}.webp`;
 }
 
 export function getBedtimeCleanupKey(oldUrl: string, newUrl: string, story: any, r2Prefix: string): string | null {
