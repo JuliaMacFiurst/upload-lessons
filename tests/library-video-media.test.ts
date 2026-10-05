@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import type { BedtimeStoryRecord } from "../lib/bedtime-stories/types.ts";
 import { bedtimeStoryPayloadSchema } from "../lib/bedtime-stories/types.ts";
-import { hasMp4FileSignature } from "../lib/client/direct-file-upload.ts";
+import { directUploadFailureMessage, hasMp4FileSignature } from "../lib/client/direct-file-upload.ts";
 import {
   createLibraryVideoUploadAuthorization,
   finalizeLibraryVideoUpload,
@@ -206,6 +206,42 @@ test("MP4 binary bypasses Vercel APIs and the browser validates the file signatu
   const validHeader = new Blob([Buffer.concat([Buffer.from([0, 0, 0, 24]), Buffer.from("ftypisom")])]);
   assert.equal(await hasMp4FileSignature(validHeader), true);
   assert.equal(await hasMp4FileSignature(new Blob([Buffer.from("not-an-mp4")])), false);
+});
+
+test("direct upload diagnostics distinguish opaque network/CORS failures from readable R2 HTTP errors", () => {
+  const signedUrl = "https://account.r2.cloudflarestorage.com/bucket/library/video.mp4?X-Amz-Signature=secret-signature";
+  const opaque = directUploadFailureMessage({ kind: "network", url: signedUrl });
+  assert.match(opaque, /network\/CORS failure/);
+  assert.match(opaque, /browser status 0/);
+  assert.match(opaque, /account\.r2\.cloudflarestorage\.com/);
+  assert.doesNotMatch(opaque, /secret-signature|X-Amz-Signature/);
+
+  const forbidden = directUploadFailureMessage({
+    kind: "http",
+    url: signedUrl,
+    status: 403,
+    responseText: "<Error><Code>SignatureDoesNotMatch</Code><Message>sensitive canonical request</Message></Error>",
+  });
+  assert.match(forbidden, /HTTP 403/);
+  assert.match(forbidden, /R2 code: SignatureDoesNotMatch/);
+  assert.doesNotMatch(forbidden, /sensitive canonical request|secret-signature|X-Amz-Signature/);
+});
+
+test("authorization and browser use the same PUT and Content-Type request contract", () => {
+  const auth = authorization();
+  const clientSource = readFileSync("lib/client/direct-file-upload.ts", "utf8");
+  assert.equal(auth.method, "PUT");
+  assert.deepEqual(auth.headers, { "Content-Type": LIBRARY_VIDEO_CONTENT_TYPE });
+  assert.match(clientSource, /request\.open\("PUT", url\)/);
+  assert.match(clientSource, /Object\.entries\(headers\)/);
+  assert.doesNotMatch(clientSource, /setRequestHeader\("(?:Authorization|x-amz-)/i);
+});
+
+test("UI reports authorization and finalize failures separately", () => {
+  const page = readFileSync("pages/admin/bedtime-stories.tsx", "utf8");
+  assert.match(page, /Video upload authorization failed:/);
+  assert.match(page, /Video upload finalize failed:/);
+  assert.doesNotMatch(page, /Check the network and R2 CORS configuration/);
 });
 
 test("video and poster replacements always receive safe unique R2 keys", () => {

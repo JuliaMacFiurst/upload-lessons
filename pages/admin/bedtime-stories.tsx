@@ -501,11 +501,13 @@ export default function BedtimeStoriesAdminPage() {
     setUploadingLibraryMedia(kind);
     setError(null);
     setSuccess(null);
+    let videoUploadStep: "authorization" | "direct" | "finalize" | null = null;
     try {
       const currentStory = await saveStory();
       if (!currentStory) throw new Error("Save the item before uploading media.");
 
       if (kind === "video") {
+        videoUploadStep = "authorization";
         setVideoUploadPhase("authorizing");
         setVideoUploadProgress(0);
         const authorization = await fetchJson<{
@@ -521,8 +523,10 @@ export default function BedtimeStoriesAdminPage() {
           body: JSON.stringify({ fileName: file.name, contentType: file.type, sizeBytes: file.size }),
         });
 
+        videoUploadStep = "direct";
         setVideoUploadPhase("uploading");
         await uploadFileDirectly(authorization.uploadUrl, file, authorization.headers, setVideoUploadProgress);
+        videoUploadStep = "finalize";
         setVideoUploadPhase("finalizing");
         const finalized = await fetchJson<{ story: BedtimeStoryRecord }>(
           `/api/admin/bedtime-stories/${currentStory.id}/video-upload/finalize`,
@@ -555,7 +559,10 @@ export default function BedtimeStoriesAdminPage() {
       setSuccess("Cover uploaded to R2.");
       await loadStories();
     } catch (uploadError) {
-      setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
+      const message = uploadError instanceof Error ? uploadError.message : String(uploadError);
+      if (kind === "video" && videoUploadStep === "authorization") setError(`Video upload authorization failed: ${message}`);
+      else if (kind === "video" && videoUploadStep === "finalize") setError(`Video upload finalize failed: ${message}`);
+      else setError(message);
     } finally {
       setUploadingLibraryMedia(null);
       setVideoUploadPhase(null);
