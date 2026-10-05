@@ -3,6 +3,7 @@ import {
   DEFAULT_RU_SCIENTIFIC_VOICE_PRESET,
   buildProductionBrief,
   calculateNarrationReadiness,
+  getProductionBriefExampleJson,
   type CatQuestionProductionManifest,
   type NarrationAsset,
   type VoiceProcessingSettings,
@@ -312,6 +313,7 @@ export function ProductionWorkspace({ questionId }: { questionId: string }) {
   const [recorderStatuses, setRecorderStatuses] = useState<Record<string, RecorderSummary>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [exampleCopied, setExampleCopied] = useState(false);
   const recorderRefs = useRef(new Map<string, RecorderHandle>());
   const endpoint = `/api/admin/cat-questions/${questionId}/production`;
 
@@ -363,6 +365,18 @@ export function ProductionWorkspace({ questionId }: { questionId: string }) {
     setError(null); setMessage(null);
     try { await copyText(JSON.stringify(manifest, null, 2)); setMessage("Production JSON скопирован."); }
     catch (copyError) { setError(copyError instanceof Error ? copyError.message : "Не удалось скопировать JSON."); }
+  };
+
+  const copyBriefExample = async () => {
+    setError(null); setMessage(null);
+    try {
+      await copyText(getProductionBriefExampleJson());
+      setExampleCopied(true);
+      setMessage("Пример Production Brief JSON скопирован в буфер обмена.");
+      setTimeout(() => setExampleCopied(false), 2500);
+    } catch (copyError) {
+      setError(copyError instanceof Error ? copyError.message : "Не удалось скопировать пример brief.");
+    }
   };
 
   const importProductionBrief = async () => {
@@ -427,12 +441,20 @@ export function ProductionWorkspace({ questionId }: { questionId: string }) {
             ["mood", "Mood"], ["pacing", "Pacing"], ["musicDirection", "Music direction"], ["continuityIdea", "Continuity idea"], ["productionNotes", "Заметки Production Director"],
           ] as const).map(([key, label]) => <label className="books-field" key={key}><span className="books-field__label">{label}</span><textarea className="books-input books-input--textarea books-input--small-textarea" value={manifest.direction[key] ?? ""} onChange={(event) => updateQuestionDirection(key, event.target.value)} /></label>)}
         </div>
-        <div className="books-actions"><button type="button" className="books-button books-button--primary" disabled={saving} onClick={() => void saveDirections()}>{saving ? "Сохранение…" : "Сохранить production direction"}</button><button type="button" className="books-button books-button--secondary" onClick={() => void copyBrief()}>Copy Production Brief</button><button type="button" className="books-button books-button--ghost" onClick={() => void copyProductionJson()}>Copy Production JSON</button></div>
+        <div className="books-actions">
+          <button type="button" className="books-button books-button--primary" disabled={saving} onClick={() => void saveDirections()}>{saving ? "Сохранение…" : "Сохранить production direction"}</button>
+          <button type="button" className="books-button books-button--secondary" onClick={() => void copyBrief()}>Copy Production Brief</button>
+          <button type="button" className="books-button books-button--ghost" onClick={() => void copyProductionJson()}>Copy Production JSON</button>
+          <button type="button" className="books-button books-button--ghost" onClick={() => void copyBriefExample()}>{exampleCopied ? "Copied" : "Copy Brief Example"}</button>
+        </div>
         <details className="cat-production-import">
           <summary>Import Production Brief</summary>
           <p className="books-section-help">Отдельный JSON для режиссуры. Он не изменяет question JSON или локализованные тексты. Можно импортировать только нужные поля.</p>
           <textarea className="books-input books-input--textarea cat-production-import__textarea" value={productionImport} onChange={(event) => setProductionImport(event.target.value)} placeholder={'{"production":{"video_concept":"..."},"slides":[{"slide_number":1,"visual_idea":"..."}]}'} />
-          <div className="books-actions"><button type="button" className="books-button books-button--secondary" disabled={importing || !productionImport.trim()} onClick={() => void importProductionBrief()}>{importing ? "Импорт…" : "Import Production Brief"}</button></div>
+          <div className="books-actions">
+            <button type="button" className="books-button books-button--secondary" disabled={importing || !productionImport.trim()} onClick={() => void importProductionBrief()}>{importing ? "Импорт…" : "Import Production Brief"}</button>
+            <button type="button" className="books-button books-button--ghost" onClick={() => void copyBriefExample()}>{exampleCopied ? "Copied" : "Copy Brief Example"}</button>
+          </div>
         </details>
         {message && <div className="books-alert books-alert--success">{message}</div>}
         {error && <div className="books-alert books-alert--error">{error}</div>}

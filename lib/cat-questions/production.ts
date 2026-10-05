@@ -47,37 +47,89 @@ export const productionDirectionsPayloadSchema = z.object({
 
 const optionalImportText = z.string().max(10_000).nullable().optional();
 
+export const productionBriefQuestionImportSchema = z.object({
+  video_concept: optionalImportText,
+  production_mode: optionalImportText,
+  overall_visual_direction: optionalImportText,
+  mood: optionalImportText,
+  pacing: optionalImportText,
+  music_direction: optionalImportText,
+  continuity_idea: optionalImportText,
+  production_notes: optionalImportText,
+}).strict();
+
+export const productionBriefSlideImportSchema = z.object({
+  slide_id: z.string().uuid().optional(),
+  slide_number: z.number().int().positive().optional(),
+  scene_intent: optionalImportText,
+  visual_idea: optionalImportText,
+  important_constraints: optionalImportText,
+  things_to_avoid: optionalImportText,
+  asset_search_hints: optionalImportText,
+  visual_style_hint: optionalImportText,
+  continuity_transition_hint: optionalImportText,
+  generation_notes: optionalImportText,
+  production_notes: optionalImportText,
+}).strict().refine((slide) => Boolean(slide.slide_id) !== Boolean(slide.slide_number), {
+  message: "Each slide must specify exactly one of slide_id or slide_number.",
+});
+
 export const productionBriefImportSchema = z.object({
-  production: z.object({
-    video_concept: optionalImportText,
-    production_mode: optionalImportText,
-    overall_visual_direction: optionalImportText,
-    mood: optionalImportText,
-    pacing: optionalImportText,
-    music_direction: optionalImportText,
-    continuity_idea: optionalImportText,
-    production_notes: optionalImportText,
-  }).strict().optional(),
-  slides: z.array(z.object({
-    slide_id: z.string().uuid().optional(),
-    slide_number: z.number().int().positive().optional(),
-    scene_intent: optionalImportText,
-    visual_idea: optionalImportText,
-    important_constraints: optionalImportText,
-    things_to_avoid: optionalImportText,
-    asset_search_hints: optionalImportText,
-    visual_style_hint: optionalImportText,
-    continuity_transition_hint: optionalImportText,
-    generation_notes: optionalImportText,
-    production_notes: optionalImportText,
-  }).strict().refine((slide) => Boolean(slide.slide_id) !== Boolean(slide.slide_number), {
-    message: "Each slide must specify exactly one of slide_id or slide_number.",
-  })).optional(),
+  production: productionBriefQuestionImportSchema.optional(),
+  slides: z.array(productionBriefSlideImportSchema).optional(),
 }).strict().refine((brief) => Boolean(brief.production) || Boolean(brief.slides?.length), {
   message: "Production Brief must contain production fields or at least one slide.",
 });
 
 export type ProductionBriefImport = z.infer<typeof productionBriefImportSchema>;
+export type ProductionBriefQuestionImport = z.infer<typeof productionBriefQuestionImportSchema>;
+export type ProductionBriefSlideImport = z.infer<typeof productionBriefSlideImportSchema>;
+
+export const CANONICAL_PRODUCTION_BRIEF_EXAMPLE: ProductionBriefImport = {
+  production: {
+    video_concept: "Короткий научно-познавательный ролик для детей, объясняющий сложное явление через простые физические аналогии.",
+    production_mode: "cutout_animation",
+    overall_visual_direction: "Тёплый бумажный коллаж, тактильные текстуры, выразительная мультипликационная пластика персонажа-кота.",
+    mood: "Любознательное, дружелюбное, вовлекающее.",
+    pacing: "Умеренный темп с чёткими смысловыми паузами для детского восприятия.",
+    music_direction: "Акустическая, игривая фоновая музыка без резких перепадов, не заглушающая голос.",
+    continuity_idea: "Плавное визуальное развитие от макромира к микромиру с сохранением единой цветовой палитры.",
+    production_notes: "Все ключевые научные термины сопровождаются наглядной визуализацией.",
+  },
+  slides: [
+    {
+      slide_number: 1,
+      scene_intent: "Задать главный вопрос и захватить внимание зрителя через знакомую повседневную ситуацию.",
+      visual_idea: "Кот сидит у окна и наблюдает за явлением природы, вокруг появляются рисованные знаки вопроса.",
+      important_constraints: "Персонаж должен быть в левой трети кадра, оставляя центр под анимацию процесса.",
+      things_to_avoid: "Избегать мелкого нечитаемого текста и перегруженного деталями заднего плана.",
+      asset_search_hints: "paper texture, cozy room interior, window rain view, cute cat character",
+      visual_style_hint: "Бумажная перекладка, мягкое студийное освещение, естественные тени.",
+      continuity_transition_hint: "Зум-ин в каплю воды на окне для перехода к микромиру в следующем слайде.",
+      generation_notes: "Сгенерировать слой с котом отдельно от фона для последующей покадровой перекладки.",
+      production_notes: "Синхронизировать поворот головы кота с ключевым словом в озвучке.",
+    },
+    {
+      slide_number: 2,
+      scene_intent: "Наглядно объяснить физический механизм простыми визуальными метафорами.",
+      visual_idea: "Анимированная схема взаимодействия молекул или частиц в виде забавных прыгающих шариков.",
+      important_constraints: "Сохранять размер частиц читаемым на экранах смартфонов.",
+      things_to_avoid: "Слишком быстрые перемещения объектов, вызывающие рябь в глазах.",
+      asset_search_hints: "molecule particles paper cutout, colorful spheres, scientific diagram simple",
+      visual_style_hint: "Инфографика в стиле детской энциклопедии с живой покадровой анимацией.",
+      continuity_transition_hint: "Плавное растворение в общий план перед финальным выводом.",
+      generation_notes: "Сформировать циклическую анимацию теплового движения частиц.",
+      production_notes: "Акцентный звуковой эффект при столкновении частиц.",
+    },
+  ],
+};
+
+// Immediate schema evaluation ensures code breaks build/tests if example ever drifts from schema
+productionBriefImportSchema.parse(CANONICAL_PRODUCTION_BRIEF_EXAMPLE);
+
+export function getProductionBriefExampleJson(): string {
+  return JSON.stringify(CANONICAL_PRODUCTION_BRIEF_EXAMPLE, null, 2);
+}
 
 export type QuestionProductionDirection = z.infer<typeof questionProductionDirectionSchema>;
 export type SlideProductionDirection = z.infer<typeof slideProductionDirectionSchema>;

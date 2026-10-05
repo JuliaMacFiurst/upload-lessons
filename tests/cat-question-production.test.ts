@@ -4,11 +4,14 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  CANONICAL_PRODUCTION_BRIEF_EXAMPLE,
   DEFAULT_RU_SCIENTIFIC_VOICE_PRESET,
   PROCESSOR_VERSION,
   buildProductionBrief,
   calculateNarrationReadiness,
+  getProductionBriefExampleJson,
   productionBriefImportSchema,
+  productionBriefSlideImportSchema,
   type CatQuestionProductionManifest,
 } from "../lib/cat-questions/production.ts";
 import { saveDirtyNarrations } from "../lib/cat-questions/narration-batch.ts";
@@ -354,3 +357,109 @@ test("Question JSON import remains separate from Production Brief import", async
   assert.match(productionWorkspace, /method: "POST"/);
   assert.match(productionWorkspace, /body: JSON\.stringify\(\{ brief \}\)/);
 });
+
+test("Canonical Production Brief example passes real import schema and has valid JSON", () => {
+  const parsed = productionBriefImportSchema.parse(CANONICAL_PRODUCTION_BRIEF_EXAMPLE);
+  assert.ok(parsed.production);
+  assert.equal(parsed.slides?.length, 2);
+
+  const jsonString = getProductionBriefExampleJson();
+  const parsedFromJson = JSON.parse(jsonString);
+  const validatedFromJson = productionBriefImportSchema.parse(parsedFromJson);
+  assert.deepEqual(validatedFromJson, parsed);
+});
+
+test("Canonical Production Brief example covers all schema keys with valid types and no unknown keys", () => {
+  const expectedQuestionKeys = [
+    "continuity_idea",
+    "mood",
+    "music_direction",
+    "overall_visual_direction",
+    "pacing",
+    "production_mode",
+    "production_notes",
+    "video_concept",
+  ].sort();
+  const actualQuestionKeys = Object.keys(CANONICAL_PRODUCTION_BRIEF_EXAMPLE.production ?? {}).sort();
+  assert.deepEqual(actualQuestionKeys, expectedQuestionKeys);
+
+  const expectedSlideKeys = [
+    "asset_search_hints",
+    "continuity_transition_hint",
+    "generation_notes",
+    "important_constraints",
+    "production_notes",
+    "scene_intent",
+    "slide_number",
+    "things_to_avoid",
+    "visual_idea",
+    "visual_style_hint",
+  ].sort();
+
+  for (const slide of CANONICAL_PRODUCTION_BRIEF_EXAMPLE.slides ?? []) {
+    const actualSlideKeys = Object.keys(slide).sort();
+    assert.deepEqual(actualSlideKeys, expectedSlideKeys);
+
+    assert.equal(typeof slide.slide_number, "number");
+    assert.ok((slide.slide_number as number) > 0);
+    assert.equal(typeof slide.scene_intent, "string");
+    assert.equal(typeof slide.visual_idea, "string");
+    assert.equal(typeof slide.important_constraints, "string");
+    assert.equal(typeof slide.things_to_avoid, "string");
+    assert.equal(typeof slide.asset_search_hints, "string", "asset_search_hints must be a string, not an array");
+    assert.equal(typeof slide.visual_style_hint, "string");
+    assert.equal(typeof slide.continuity_transition_hint, "string");
+    assert.equal(typeof slide.generation_notes, "string");
+    assert.equal(typeof slide.production_notes, "string");
+
+    assert.equal("order" in slide, false, "order key is forbidden");
+    assert.equal("slide_id" in slide, false, "slide_id must not be present when slide_number is used");
+  }
+});
+
+test("Canonical Production Brief slide example passes slide-level validation and rejects invalid variants", () => {
+  const slide1 = CANONICAL_PRODUCTION_BRIEF_EXAMPLE.slides?.[0];
+  assert.ok(slide1);
+  const validatedSlide = productionBriefSlideImportSchema.parse(slide1);
+  assert.equal(validatedSlide.slide_number, 1);
+
+  // Rejecting 'order' key
+  assert.throws(
+    () => productionBriefSlideImportSchema.parse({ ...slide1, order: 1 }),
+    /unrecognized_keys/i,
+  );
+
+  // Rejecting array for asset_search_hints
+  assert.throws(
+    () => productionBriefSlideImportSchema.parse({ ...slide1, asset_search_hints: ["paper", "cat"] }),
+    /expected string/i,
+  );
+
+  // Rejecting both slide_id and slide_number simultaneously
+  assert.throws(
+    () => productionBriefSlideImportSchema.parse({ ...slide1, slide_id: slideId }),
+    /exactly one/i,
+  );
+});
+
+test("Canonical Production Brief example executes cleanly through buildProductionBriefImportPlan", () => {
+  const plan = buildProductionBriefImportPlan(productionManifest(), CANONICAL_PRODUCTION_BRIEF_EXAMPLE);
+  assert.ok(plan.questionRow);
+  assert.equal(plan.questionRow.video_concept, CANONICAL_PRODUCTION_BRIEF_EXAMPLE.production?.video_concept);
+  assert.equal(plan.questionRow.mood, CANONICAL_PRODUCTION_BRIEF_EXAMPLE.production?.mood);
+  assert.equal(plan.questionRow.production_mode, CANONICAL_PRODUCTION_BRIEF_EXAMPLE.production?.production_mode);
+  assert.equal(plan.slideRows.length, 2);
+  assert.equal(plan.slideRows[0]?.slide_id, slideId);
+  assert.equal(plan.slideRows[1]?.slide_id, secondSlideId);
+  assert.equal(plan.slideRows[0]?.visual_idea, CANONICAL_PRODUCTION_BRIEF_EXAMPLE.slides?.[0]?.visual_idea);
+  assert.equal(plan.slideRows[1]?.visual_idea, CANONICAL_PRODUCTION_BRIEF_EXAMPLE.slides?.[1]?.visual_idea);
+});
+
+test("Production Workspace renders Copy Brief Example button with feedback", async () => {
+  const source = await readFile(new URL("../components/admin/cat-questions/ProductionWorkspace.tsx", import.meta.url), "utf8");
+  assert.match(source, /getProductionBriefExampleJson/);
+  assert.match(source, /copyBriefExample/);
+  assert.match(source, /Copy Brief Example/);
+  assert.match(source, /exampleCopied \? "Copied" : "Copy Brief Example"/);
+});
+
