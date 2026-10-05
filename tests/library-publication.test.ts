@@ -96,6 +96,27 @@ test("canonical Publish produces the public publication fields", () => {
   assert.equal(isCanonicalLibraryPublicationState(fields), true);
 });
 
+test("canonical Publish repairs a contradictory legacy row without routing it through ordinary Save", () => {
+  const legacy = record(item({ status: "published", is_published: false, publish_date: null }));
+  const editorPatch = {
+    title: { en: "Edited before publish" },
+    media: { url: "https://media.example/video.mp4", posterUrl: "https://media.example/poster.webp", mimeType: "video/mp4" },
+  };
+  const prepared = mergeBedtimeStoryPatch(legacy, editorPatch);
+  const published = mergeBedtimeStoryPatch(legacy, {
+    ...editorPatch,
+    ...canonicalLibraryPublicationFields(prepared, new Date("2026-10-05T21:00:00.000Z")),
+  });
+
+  assert.equal(isCanonicalLibraryPublicationState(published), true);
+  assert.equal(getLibraryPublishError(published), null);
+
+  const page = readFileSync("pages/admin/bedtime-stories.tsx", "utf8");
+  assert.match(page, /const currentStory = activeStory\.id \? activeStory : await saveStory\("draft"\)/);
+  assert.match(page, /\.\.\.buildEditorPatch\(currentStory\)/);
+  assert.doesNotMatch(page, /Story could not be saved before publishing/);
+});
+
 test("draft and archived always remain unpublished", () => {
   const publicRecord = record(item({
     status: "published",

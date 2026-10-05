@@ -595,6 +595,45 @@ export default function BedtimeStoriesAdminPage() {
     }
   };
 
+  const buildEditorPatch = (story: BedtimeStoryRecord, statusOverride?: BedtimeStoryStatus): BedtimeStoryPatch => {
+    const titleRu = story.title.ru.trim();
+    const titleEn = story.title.en.trim() || titleRu || "Bedtime Story";
+    const title = {
+      ru: titleRu || titleEn,
+      en: titleEn,
+      he: story.title.he || "",
+    };
+    const slug = story.slug.trim() || slugify(titleEn || titleRu);
+
+    const ruPage1 = getSlideImageUrl(story, 1, "ru");
+    const ruPage2 = getSlideImageUrl(story, 2, "ru");
+    const isVideo = story.content_type === "video";
+    const slidePatch = buildLibrarySlidesSavePatch(story, includePage2, ruPage1, ruPage2);
+
+    return {
+      title,
+      description: story.description,
+      content_type: story.content_type,
+      media: story.media,
+      category_slugs: story.category_slugs,
+      slug,
+      slides: slidePatch.slides,
+      replaceSlides: slidePatch.replaceSlides,
+      cover_image_url: isVideo
+        ? (story.media.posterUrl || story.cover_image_url || null)
+        : (ruPage1 || story.cover_image_url || null),
+      emotional_theme: story.emotional_theme,
+      exported_image_urls: story.exported_image_urls,
+      replaceExportedImageUrls: true,
+      ...(statusOverride ? {
+        status: statusOverride,
+        is_published: statusOverride === "draft" || statusOverride === "archived" ? false : story.is_published,
+        publish_date: statusOverride === "draft" || statusOverride === "archived" ? null : story.publish_date,
+      } : {}),
+      ...(slidePatch.deleteSlideNumbers.length > 0 ? { deleteSlideNumbers: slidePatch.deleteSlideNumbers } : {}),
+    };
+  };
+
   // Save changes to story (draft or updated) without creating duplicates
   const saveStory = async (statusOverride?: BedtimeStoryStatus): Promise<BedtimeStoryRecord | null> => {
     setSaving(true);
@@ -602,41 +641,7 @@ export default function BedtimeStoriesAdminPage() {
     setSuccess(null);
     try {
       const targetStatus = statusOverride ?? activeStory.status;
-
-      const titleRu = activeStory.title.ru.trim();
-      const titleEn = activeStory.title.en.trim() || titleRu || "Bedtime Story";
-      const title = {
-        ru: titleRu || titleEn,
-        en: titleEn,
-        he: activeStory.title.he || "",
-      };
-      const slug = activeStory.slug.trim() || slugify(titleEn || titleRu);
-
-      const ruPage1 = getSlideImageUrl(activeStory, 1, "ru");
-      const ruPage2 = getSlideImageUrl(activeStory, 2, "ru");
-      const isVideo = activeStory.content_type === "video";
-      const slidePatch = buildLibrarySlidesSavePatch(activeStory, includePage2, ruPage1, ruPage2);
-
-      const patch: BedtimeStoryPatch = {
-        title,
-        description: activeStory.description,
-        content_type: activeStory.content_type,
-        media: activeStory.media,
-        category_slugs: activeStory.category_slugs,
-        slug,
-        status: targetStatus,
-        is_published: targetStatus === "draft" || targetStatus === "archived" ? false : activeStory.is_published,
-        publish_date: targetStatus === "draft" || targetStatus === "archived" ? null : activeStory.publish_date,
-        slides: slidePatch.slides,
-        replaceSlides: slidePatch.replaceSlides,
-        cover_image_url: isVideo
-          ? (activeStory.media.posterUrl || activeStory.cover_image_url || null)
-          : (ruPage1 || activeStory.cover_image_url || null),
-        emotional_theme: activeStory.emotional_theme,
-        exported_image_urls: activeStory.exported_image_urls,
-        replaceExportedImageUrls: true,
-        ...(slidePatch.deleteSlideNumbers.length > 0 ? { deleteSlideNumbers: slidePatch.deleteSlideNumbers } : {}),
-      };
+      const patch = buildEditorPatch(activeStory, targetStatus);
 
       let updatedRecord: BedtimeStoryRecord;
 
@@ -708,9 +713,10 @@ export default function BedtimeStoriesAdminPage() {
     setError(null);
     setSuccess(null);
     try {
-      // 1. Ensure saved draft
-      const currentStory = await saveStory("draft");
-      if (!currentStory) throw new Error("Story could not be saved before publishing.");
+      // Existing items publish their current editor state directly. A brand-new item
+      // still needs an id before the canonical publish endpoint can be called.
+      const currentStory = activeStory.id ? activeStory : await saveStory("draft");
+      if (!currentStory?.id) throw new Error("Story could not be created before publishing.");
 
       // Update exported_image_urls strictly for the active editing language,
       // preserving existing exports for other languages (e.g. en-01, he-01).
@@ -725,6 +731,7 @@ export default function BedtimeStoriesAdminPage() {
       }
 
       const patch: BedtimeStoryPatch = {
+        ...buildEditorPatch(currentStory),
         cover_image_url: currentStory.media.posterUrl || currentStory.cover_image_url || (editLanguage === "ru" ? page1Url : currentStory.cover_image_url),
         exported_image_urls: updatedExportedUrls,
       };
