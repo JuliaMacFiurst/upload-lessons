@@ -107,10 +107,28 @@ test("source illustration uploads update shared canonical image, preserving fini
 test("VIDEO import -> editor state -> Save never validates a placeholder slideshow", async () => {
   const { client } = database();
   const imported = parseBedtimeStoryJson(JSON.stringify({
-    slug: "video-workflow",
+    slug: "moving-paper-desert",
+    status: "draft",
     content_type: "video",
-    title: { en: "Video", ru: "Видео", he: "וידאו" },
-    slides: [{ slide_number: 1, text: { en: "", ru: "", he: "" } }],
+    title: {
+      en: "Make a Moving Paper Desert",
+      ru: "Сделай движущуюся бумажную пустыню",
+      he: "יוצרים מדבר נייר שזז",
+    },
+    emotional_theme: {
+      en: "A tiny paper desert where a simple hidden mechanism makes the sun move.",
+      ru: "Маленькая бумажная пустыня, в которой простой скрытый механизм заставляет солнце двигаться.",
+      he: "מדבר נייר קטן שבו מנגנון נסתר ופשוט גורם לשמש לזוז.",
+    },
+    collection_tags: ["crafts", "science", "paper craft", "moving paper", "desert"],
+    visual_tags: ["paper desert", "layered dunes", "moving sun", "paper slider", "hands-on craft"],
+    instagram_caption: {
+      en: "Make a tiny paper desert that actually moves. Cut three wavy dune layers, hide a simple paper slider behind them, add a sun and pull. ☀️🏜️ Then see if you can make the dune sing.",
+      ru: "Сделай маленькую бумажную пустыню, которая действительно движется. Вырежи три волнистых слоя дюн, спрячь за ними простой бумажный слайдер, добавь солнце и потяни. ☀️🏜️ А потом попробуй заставить дюну петь.",
+      he: "יוצרים מדבר נייר קטן שבאמת זז. גוזרים שלוש שכבות גליות של דיונות, מחביאים מאחוריהן סליידר פשוט מנייר, מוסיפים שמש ומושכים. ☀️🏜️ ואז נסו לגרום לדיונה לשיר.",
+    },
+    hashtags: ["#papercraft", "#kidscrafts", "#craftideas", "#stemactivities", "#creativelearning", "#laplapla"],
+    slides: [],
   }));
 
   const created = await createBedtimeStory(client, imported);

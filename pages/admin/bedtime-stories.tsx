@@ -11,6 +11,7 @@ import {
   buildLibrarySlidesSavePatch,
   normalizeLibraryEditorStory,
 } from "../../lib/bedtime-stories/admin-flow.ts";
+import { libraryImportExampleJson } from "../../lib/bedtime-stories/import-examples.ts";
 import type {
   BedtimeStoryLanguage,
   BedtimeStoryListItem,
@@ -146,44 +147,6 @@ async function imageFileToUploadFile(file: File): Promise<File> {
   }
 }
 
-const bedtimeStoryJsonTemplate = `{
-  "slug": "moon-train-memory",
-  "status": "draft",
-  "title": {
-    "en": "The Moon Train Remembered My Name",
-    "ru": "Лунный поезд помнил мое имя",
-    "he": "רכבת הירח זכרה את שמי"
-  },
-  "emotional_theme": {
-    "en": "A remembered journey that feels almost real.",
-    "ru": "Вспомненное путешествие, которое почти было настоящим.",
-    "he": "מסע זכור שמרגיש כמעט אמיתי."
-  },
-  "collection_tags": ["dream travel", "moon"],
-  "visual_tags": ["watercolor", "night train"],
-  "instagram_caption": {
-    "en": "A tiny bedtime carousel about a soft moon train and the names it keeps.",
-    "ru": "Маленькая bedtime-карусель про мягкий лунный поезд и имена, которые он хранит.",
-    "he": "קרוסלת לילה קטנה על רכבת ירח רכה והשמות שהיא שומרת."
-  },
-  "hashtags": ["#bedtimestory", "#illustratedstory", "#laplapla"],
-  "slides": [
-    {
-      "slide_number": 1,
-      "text": {
-        "en": "I found the moon train waiting where the road became silver.",
-        "ru": "Я нашла лунный поезд там, где дорога стала серебряной.",
-        "he": "מצאתי את רכבת הירח במקום שבו הדרך הפכה כסופה."
-      },
-      "illustration_prompt": "watercolor moon train at a quiet silver road, storybook, soft night",
-      "stamp_prompt": "tiny moon ticket stamp",
-      "marker_prompt": "silver rail marker",
-      "image_url": "",
-      "layers": []
-    }
-  ]
-}`;
-
 const bedtimeStoryProductionPrompt = `# LapLapLa Emotional Bedtime Story Prompt
 
 Create a short bedtime carousel story for Instagram.
@@ -315,6 +278,7 @@ export default function BedtimeStoriesAdminPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [savedSnapshot, setSavedSnapshot] = useState(() => JSON.stringify(createEmptyDraft()));
   const hasUnsavedChanges = JSON.stringify(activeStory) !== savedSnapshot;
+  const jsonImportExample = libraryImportExampleJson(activeStory.content_type);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -850,8 +814,8 @@ export default function BedtimeStoriesAdminPage() {
                   type="button"
                   className="books-button books-button--secondary"
                   onClick={() => {
-                    void copyTextToClipboard(bedtimeStoryJsonTemplate);
-                    setSuccess("Example JSON copied.");
+                    void copyTextToClipboard(jsonImportExample);
+                    setSuccess(`${activeStory.content_type === "video" ? "Video" : "Slideshow"} JSON example copied.`);
                   }}
                 >
                   Copy JSON example
@@ -882,7 +846,7 @@ export default function BedtimeStoriesAdminPage() {
               className="books-input books-input--textarea books-input--json"
               value={jsonImportValue}
               onChange={(event) => setJsonImportValue(event.target.value)}
-              placeholder={bedtimeStoryJsonTemplate}
+              placeholder={jsonImportExample}
               style={{ minHeight: 140 }}
             />
           </div>
