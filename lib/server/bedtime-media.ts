@@ -36,24 +36,6 @@ export function bedtimeSlideMediaPath(slug: string, language: BedtimeStoryLangua
   return `bedtime_story/${slug}/${language}/slide-${String(slideNumber).padStart(2, "0")}-${randomUUID()}.webp`;
 }
 
-export function decodeLibraryVideo(value: unknown): Buffer {
-  if (typeof value !== "string") throw new Error("Missing video payload.");
-  const match = /^(?:data:video\/mp4;base64,)?([A-Za-z0-9+/]+={0,2})$/.exec(value);
-  if (!match || match[1].length % 4 === 1) throw new Error("Invalid MP4 payload.");
-  const estimatedBytes = Math.floor(match[1].length * 3 / 4);
-  if (estimatedBytes > MAX_VIDEO_BYTES) throw new Error("Video is too large (80 MB maximum).");
-  const buffer = Buffer.from(match[1], "base64");
-  if (!buffer.length || buffer.length > MAX_VIDEO_BYTES) throw new Error("Invalid video size.");
-  return buffer;
-}
-
-export function validateLibraryVideo(buffer: Buffer) {
-  // ISO Base Media files (including MP4) carry an ftyp box near the beginning.
-  if (buffer.length < 16 || buffer.subarray(4, 8).toString("ascii") !== "ftyp") {
-    throw new Error("Invalid MP4 file.");
-  }
-}
-
 export function libraryVideoMediaPath(slug: string) {
   if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) throw new Error("Invalid story slug.");
   return `library/${slug}/video-${randomUUID()}.mp4`;
@@ -64,7 +46,11 @@ export function libraryPosterMediaPath(slug: string) {
   return `library/${slug}/poster-${randomUUID()}.webp`;
 }
 
-export function getBedtimeCleanupKey(oldUrl: string, newUrl: string, story: any, r2Prefix: string): string | null {
+type BedtimeMediaCleanupStory = {
+  exported_image_urls?: Record<string, string>;
+};
+
+export function getBedtimeCleanupKey(oldUrl: string, newUrl: string, story: BedtimeMediaCleanupStory, r2Prefix: string): string | null {
   if (!oldUrl || oldUrl === newUrl) return null;
   const isExported = Object.values(story.exported_image_urls ?? {}).includes(oldUrl);
   if (isExported) return null;
@@ -76,7 +62,7 @@ export function getBedtimeCleanupKey(oldUrl: string, newUrl: string, story: any,
   return null;
 }
 
-export async function cleanupReplacedBedtimeMedia(oldUrl: string, newUrl: string, story: any): Promise<boolean> {
+export async function cleanupReplacedBedtimeMedia(oldUrl: string, newUrl: string, story: BedtimeMediaCleanupStory): Promise<boolean> {
   const { parsePublicR2ObjectKey, deletePublicR2Object } = await import("./r2-storage.ts");
   
   // We can just use the pure function by injecting a dummy prefix or use parsePublicR2ObjectKey directly.

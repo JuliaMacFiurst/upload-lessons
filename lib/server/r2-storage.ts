@@ -6,6 +6,14 @@ type R2UploadInput = {
   contentType: string;
 };
 
+export type R2ObjectMetadata = {
+  key: string;
+  size: number;
+  contentType: string;
+  etag: string | null;
+  lastModified: string | null;
+};
+
 export type R2ListedObject = {
   key: string;
   size: number;
@@ -105,7 +113,7 @@ function firstXmlValue(xml: string, tagName: string) {
 }
 
 async function signedR2Request(input: {
-  method: "DELETE" | "GET" | "PUT";
+  method: "DELETE" | "GET" | "HEAD" | "PUT";
   key?: string;
   query?: Record<string, string | undefined>;
   body?: Buffer;
@@ -185,6 +193,60 @@ async function signedR2Request(input: {
   };
 }
 
+export function createPresignedR2PutUrl(input: {
+  key: string;
+  contentType: string;
+  expiresInSeconds?: number;
+  now?: Date;
+}) {
+  const config = getR2Config();
+  if (!config) throw new Error("Missing R2 configuration.");
+
+  const now = input.now ?? new Date();
+  const expiresInSeconds = Math.max(1, Math.min(input.expiresInSeconds ?? 300, 900));
+  const amzDate = toAmzDate(now);
+  const dateStamp = amzDate.slice(0, 8);
+  const credentialScope = `${dateStamp}/auto/s3/aws4_request`;
+  const objectKey = input.key.replace(/^\/+/, "");
+  const canonicalUri = `/${config.bucketName}/${encodePath(objectKey)}`;
+  const endpointUrl = new URL(config.endpoint);
+  const host = endpointUrl.host;
+  const signedHeaders = "content-type;host";
+  const queryParams = {
+    "X-Amz-Algorithm": "AWS4-HMAC-SHA256",
+    "X-Amz-Content-Sha256": "UNSIGNED-PAYLOAD",
+    "X-Amz-Credential": `${config.accessKeyId}/${credentialScope}`,
+    "X-Amz-Date": amzDate,
+    "X-Amz-Expires": String(expiresInSeconds),
+    "X-Amz-SignedHeaders": signedHeaders,
+  };
+  const query = canonicalQuery(queryParams);
+  const canonicalHeaders = `content-type:${input.contentType}\nhost:${host}\n`;
+  const canonicalRequest = [
+    "PUT",
+    canonicalUri,
+    query,
+    canonicalHeaders,
+    signedHeaders,
+    "UNSIGNED-PAYLOAD",
+  ].join("\n");
+  const stringToSign = [
+    "AWS4-HMAC-SHA256",
+    amzDate,
+    credentialScope,
+    sha256Hex(canonicalRequest),
+  ].join("\n");
+  const signature = crypto
+    .createHmac("sha256", getSigningKey(config.secretAccessKey, dateStamp))
+    .update(stringToSign, "utf8")
+    .digest("hex");
+
+  return {
+    url: `${config.endpoint}${canonicalUri}?${query}&X-Amz-Signature=${signature}`,
+    expiresAt: new Date(now.getTime() + expiresInSeconds * 1000).toISOString(),
+  };
+}
+
 export function hasR2Config() {
   return getR2Config() !== null;
 }
@@ -238,6 +300,33 @@ export async function fetchPublicR2Object(key: string): Promise<Buffer> {
   }
 
   return Buffer.from(await response.arrayBuffer());
+}
+
+export async function headPublicR2Object(key: string): Promise<R2ObjectMetadata | null> {
+  const objectKey = key.replace(/^\/+/, "");
+  const { response } = await signedR2Request({
+    method: "HEAD",
+    key: objectKey,
+    contentType: "application/octet-stream",
+  });
+
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`R2 metadata check failed (${response.status}).`);
+  }
+
+  const size = Number(response.headers.get("content-length"));
+  if (!Number.isFinite(size) || size < 0) {
+    throw new Error("R2 object metadata is missing a valid content length.");
+  }
+
+  return {
+    key: objectKey,
+    size,
+    contentType: response.headers.get("content-type")?.split(";", 1)[0]?.trim().toLowerCase() ?? "",
+    etag: response.headers.get("etag"),
+    lastModified: response.headers.get("last-modified"),
+  };
 }
 
 export async function deletePublicR2Object(key: string): Promise<void> {

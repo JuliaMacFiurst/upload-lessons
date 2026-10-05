@@ -12,6 +12,7 @@ import {
   normalizeLibraryEditorStory,
 } from "../../lib/bedtime-stories/admin-flow.ts";
 import { libraryImportExampleJson } from "../../lib/bedtime-stories/import-examples.ts";
+import { hasMp4FileSignature, uploadFileDirectly } from "../../lib/client/direct-file-upload.ts";
 import type {
   BedtimeStoryLanguage,
   BedtimeStoryListItem,
@@ -273,6 +274,8 @@ export default function BedtimeStoriesAdminPage() {
   const [importing, setImporting] = useState(false);
   const [uploadingSlide, setUploadingSlide] = useState<number | null>(null);
   const [uploadingLibraryMedia, setUploadingLibraryMedia] = useState<"video" | "cover" | null>(null);
+  const [videoUploadPhase, setVideoUploadPhase] = useState<"authorizing" | "uploading" | "finalizing" | null>(null);
+  const [videoUploadProgress, setVideoUploadProgress] = useState(0);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -490,6 +493,10 @@ export default function BedtimeStoriesAdminPage() {
       setError("Video is too large (80 MB maximum).");
       return;
     }
+    if (kind === "video" && !(await hasMp4FileSignature(file))) {
+      setError("The selected file is not a valid MP4 file.");
+      return;
+    }
 
     setUploadingLibraryMedia(kind);
     setError(null);
@@ -497,7 +504,42 @@ export default function BedtimeStoriesAdminPage() {
     try {
       const currentStory = await saveStory();
       if (!currentStory) throw new Error("Save the item before uploading media.");
-      const uploadFile = kind === "cover" ? await imageFileToUploadFile(file) : file;
+
+      if (kind === "video") {
+        setVideoUploadPhase("authorizing");
+        setVideoUploadProgress(0);
+        const authorization = await fetchJson<{
+          uploadUrl: string;
+          uploadToken: string;
+          key: string;
+          method: "PUT";
+          headers: Record<string, string>;
+          expiresAt: string;
+        }>(`/api/admin/bedtime-stories/${currentStory.id}/video-upload/authorize`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ fileName: file.name, contentType: file.type, sizeBytes: file.size }),
+        });
+
+        setVideoUploadPhase("uploading");
+        await uploadFileDirectly(authorization.uploadUrl, file, authorization.headers, setVideoUploadProgress);
+        setVideoUploadPhase("finalizing");
+        const finalized = await fetchJson<{ story: BedtimeStoryRecord }>(
+          `/api/admin/bedtime-stories/${currentStory.id}/video-upload/finalize`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ uploadToken: authorization.uploadToken }),
+          },
+        );
+        setActiveStory(finalized.story);
+        setSavedSnapshot(JSON.stringify(finalized.story));
+        setSuccess("MP4 uploaded directly to R2 and saved.");
+        await loadStories();
+        return;
+      }
+
+      const uploadFile = await imageFileToUploadFile(file);
       const dataUrl = await blobToDataUrl(uploadFile);
       const data = await fetchJson<{ story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${currentStory.id}/media`, {
         method: "POST",
@@ -505,17 +547,19 @@ export default function BedtimeStoriesAdminPage() {
         body: JSON.stringify({
           kind,
           fileName: uploadFile.name,
-          ...(kind === "video" ? { videoBase64: dataUrl } : { imageBase64: dataUrl }),
+          imageBase64: dataUrl,
         }),
       });
       setActiveStory(data.story);
       setSavedSnapshot(JSON.stringify(data.story));
-      setSuccess(kind === "video" ? "MP4 uploaded to R2." : "Cover uploaded to R2.");
+      setSuccess("Cover uploaded to R2.");
       await loadStories();
     } catch (uploadError) {
       setError(uploadError instanceof Error ? uploadError.message : String(uploadError));
     } finally {
       setUploadingLibraryMedia(null);
+      setVideoUploadPhase(null);
+      setVideoUploadProgress(0);
     }
   };
 
@@ -999,7 +1043,13 @@ export default function BedtimeStoriesAdminPage() {
             ) : <p className="books-section-help">Upload a short MP4 (maximum 80 MB). The file is stored in R2, never in Supabase DB.</p>}
             <div className="books-actions" style={{ marginTop: 12 }}>
               <label className="books-button books-button--secondary" style={{ cursor: "pointer" }}>
-                {uploadingLibraryMedia === "video" ? "Uploading…" : activeStory.media.url ? "Replace MP4" : "Upload MP4"}
+                {uploadingLibraryMedia === "video"
+                  ? videoUploadPhase === "authorizing"
+                    ? "Authorizing…"
+                    : videoUploadPhase === "finalizing"
+                      ? "Finalizing…"
+                      : `Uploading… ${videoUploadProgress}%`
+                  : activeStory.media.url ? "Replace MP4" : "Upload MP4"}
                 <input type="file" accept="video/mp4" hidden disabled={uploadingLibraryMedia !== null} onChange={(event) => void handleUploadLibraryMedia("video", event)} />
               </label>
               {activeStory.media.url ? <button type="button" className="books-button books-button--ghost" onClick={() => void deleteLibraryMedia("video")}>Delete video</button> : null}
@@ -1009,6 +1059,11 @@ export default function BedtimeStoriesAdminPage() {
               </label>
               {activeStory.media.posterUrl ? <button type="button" className="books-button books-button--ghost" onClick={() => void deleteLibraryMedia("cover")}>Delete cover</button> : null}
             </div>
+            {uploadingLibraryMedia === "video" && videoUploadPhase === "uploading" ? (
+              <progress max={100} value={videoUploadProgress} style={{ width: "100%", marginTop: 12 }}>
+                {videoUploadProgress}%
+              </progress>
+            ) : null}
           </div>
         ) : null}
 
