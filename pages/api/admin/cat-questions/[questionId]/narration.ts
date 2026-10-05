@@ -2,7 +2,7 @@ import type { NextApiRequest, NextApiResponse } from "next";
 import { z } from "zod";
 import { voiceProcessingSettingsSchema } from "../../../../../lib/cat-questions/production";
 import { requireAdminSession } from "../../../../../lib/server/admin-session";
-import { saveFinalSlideNarration } from "../../../../../lib/server/cat-question-production";
+import { deleteFinalSlideNarration, saveFinalSlideNarration } from "../../../../../lib/server/cat-question-production";
 import { deletePublicR2Object, uploadPublicR2Object } from "../../../../../lib/server/r2-storage";
 
 export const config = {
@@ -17,9 +17,14 @@ const bodySchema = z.object({
   processingSettings: voiceProcessingSettingsSchema,
 });
 
+const deleteBodySchema = z.object({
+  slideId: z.string().uuid(),
+  locale: z.string(),
+});
+
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
-  if (req.method !== "POST") {
-    res.setHeader("Allow", "POST");
+  if (req.method !== "POST" && req.method !== "DELETE") {
+    res.setHeader("Allow", "POST, DELETE");
     return res.status(405).json({ error: "Method not allowed" });
   }
   const questionId = typeof req.query.questionId === "string" ? req.query.questionId : "";
@@ -36,6 +41,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader("Cache-Control", "private, no-store");
 
   try {
+    if (req.method === "DELETE") {
+      const body = deleteBodySchema.parse(req.body);
+      const result = await deleteFinalSlideNarration({
+        supabase,
+        questionId,
+        ...body,
+        remove: deletePublicR2Object,
+      });
+      return res.status(200).json({ ok: true, ...result });
+    }
     const body = bodySchema.parse(req.body);
     const narration = await saveFinalSlideNarration({
       supabase,

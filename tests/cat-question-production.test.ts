@@ -8,11 +8,15 @@ import {
   PROCESSOR_VERSION,
   buildProductionBrief,
   calculateNarrationReadiness,
+  productionBriefImportSchema,
   type CatQuestionProductionManifest,
 } from "../lib/cat-questions/production.ts";
+import { saveDirtyNarrations } from "../lib/cat-questions/narration-batch.ts";
 import { LAPLAPLA_VOICE_PARAMETERS } from "../lib/client/laplapla-voice-processing.ts";
 import {
   buildNarrationStorageKey,
+  buildProductionBriefImportPlan,
+  deleteFinalSlideNarration,
   inspectPcmWav,
   saveCatQuestionProductionDirections,
   saveFinalSlideNarration,
@@ -20,6 +24,23 @@ import {
 
 const questionId = "11111111-1111-4111-8111-111111111111";
 const slideId = "22222222-2222-4222-8222-222222222222";
+const secondSlideId = "33333333-3333-4333-8333-333333333333";
+
+function productionManifest(): CatQuestionProductionManifest {
+  const slides = [
+    { id: slideId, order: 1, narrationText: { ru: "Первый" }, direction: { visualIdea: "Old visual", sceneIntent: "Old intent" }, narrationAssets: {} },
+    { id: secondSlideId, order: 2, narrationText: { ru: "Второй" }, direction: { visualIdea: "Second visual" }, narrationAssets: {} },
+  ];
+  return {
+    schemaVersion: 1,
+    question: { id: questionId, legacyId: "legacy", baseKey: "base", series: "cat_explains", kind: "text", category: null, isActive: true, title: { ru: "Вопрос" } },
+    locales: ["ru"],
+    direction: { videoConcept: "Old concept", mood: "Curious", productionMode: null },
+    slides,
+    readiness: calculateNarrationReadiness(slides, ["ru"]),
+    timingPolicy: { source: "final_processed_narration", alignment: "forced_alignment_per_slide", sceneDuration: "aligned_words_plus_editorial_pause" },
+  } as CatQuestionProductionManifest;
+}
 
 function pcmWav(durationMs = 100) {
   const sampleRate = 48_000;
@@ -99,15 +120,18 @@ test("narration upload persists final metadata and replaces the previous active 
 });
 
 test("R2 failure does not write metadata and DB failure removes the newly uploaded final object", async () => {
-  const uploadFailure = narrationSupabase();
+  const activeKey = "narration/questions/existing-good.wav";
+  const uploadFailure = narrationSupabase({ previousKey: activeKey });
+  const uploadFailureRemovals: string[] = [];
   await assert.rejects(saveFinalSlideNarration({
     supabase: uploadFailure.client, questionId, slideId, locale: "ru", mimeType: "audio/wav",
     audioBase64: pcmWav().toString("base64"), processingSettings: DEFAULT_RU_SCIENTIFIC_VOICE_PRESET,
-    upload: async () => { throw new Error("R2 unavailable"); }, remove: async () => undefined,
+    upload: async () => { throw new Error("R2 unavailable"); }, remove: async (key) => { uploadFailureRemovals.push(key); },
   }), /R2 unavailable/);
   assert.equal(uploadFailure.saved(), null);
+  assert.deepEqual(uploadFailureRemovals, []);
 
-  const dbFailure = narrationSupabase({ dbError: "DB unavailable" });
+  const dbFailure = narrationSupabase({ dbError: "DB unavailable", previousKey: activeKey });
   const removed: string[] = [];
   await assert.rejects(saveFinalSlideNarration({
     supabase: dbFailure.client, questionId, slideId, locale: "ru", mimeType: "audio/wav",
@@ -116,6 +140,7 @@ test("R2 failure does not write metadata and DB failure removes the newly upload
     remove: async (key) => { removed.push(key); },
   }), /DB unavailable/);
   assert.equal(removed.length, 1);
+  assert.notEqual(removed[0], activeKey);
 });
 
 test("DB failure never deletes an already-active object when bytes and deterministic key are unchanged", async () => {
@@ -171,6 +196,91 @@ test("production directions validate locale/slide association before persistence
   }), /does not belong/);
 });
 
+test("Production Brief import validates full/partial JSON and preserves omitted values", () => {
+  const full = buildProductionBriefImportPlan(productionManifest(), {
+    production: { video_concept: "New concept", mood: "Playful" },
+    slides: [{ slide_number: 1, visual_idea: "New visual", production_notes: "Note" }],
+  });
+  assert.equal(full.questionRow?.video_concept, "New concept");
+  assert.equal(full.questionRow?.mood, "Playful");
+  assert.equal(full.questionRow?.production_mode, null);
+  assert.equal(full.slideRows[0]?.slide_id, slideId);
+  assert.equal(full.slideRows[0]?.visual_idea, "New visual");
+  assert.equal(full.slideRows[0]?.scene_intent, "Old intent");
+
+  const partial = buildProductionBriefImportPlan(productionManifest(), { production: { pacing: "Fast" } });
+  assert.equal(partial.questionRow?.video_concept, "Old concept");
+  assert.equal(partial.questionRow?.mood, "Curious");
+  assert.equal(partial.questionRow?.pacing, "Fast");
+  assert.deepEqual(partial.slideRows, []);
+  assert.throws(() => productionBriefImportSchema.parse({ production: { unknown: true } }), /unrecognized/i);
+  assert.throws(() => productionBriefImportSchema.parse({}), /must contain/i);
+});
+
+test("Production Brief import rejects unknown and duplicate slide mappings", () => {
+  assert.throws(() => buildProductionBriefImportPlan(productionManifest(), {
+    slides: [{ slide_number: 99, visual_idea: "Wrong" }],
+  }), /Unknown slide reference/);
+  assert.throws(() => buildProductionBriefImportPlan(productionManifest(), {
+    slides: [
+      { slide_id: slideId, visual_idea: "One" },
+      { slide_number: 1, visual_idea: "Duplicate" },
+    ],
+  }), /Duplicate slide reference/);
+  assert.throws(() => productionBriefImportSchema.parse({ slides: [{ slide_id: slideId, slide_number: 1 }] }), /exactly one/);
+});
+
+test("Save All uploads only dirty takes, isolates partial failure, and retries only remaining dirty items", async () => {
+  let firstDirty = true;
+  let secondDirty = true;
+  let secondAttempts = 0;
+  const first = async () => { firstDirty = false; return true; };
+  const second = async () => { secondAttempts += 1; if (secondAttempts === 1) return false; secondDirty = false; return true; };
+  const initial = await saveDirtyNarrations([
+    { slideId, dirty: firstDirty, save: first },
+    { slideId: secondSlideId, dirty: secondDirty, save: second },
+    { slideId: "saved", dirty: false, save: async () => { throw new Error("must not run"); } },
+  ]);
+  assert.deepEqual(initial.saved, [slideId]);
+  assert.deepEqual(initial.failed, [secondSlideId]);
+  assert.deepEqual(initial.skipped, ["saved"]);
+  const retry = await saveDirtyNarrations([
+    { slideId, dirty: firstDirty, save: first },
+    { slideId: secondSlideId, dirty: secondDirty, save: second },
+  ]);
+  assert.deepEqual(retry.saved, [secondSlideId]);
+  assert.deepEqual(retry.skipped, [slideId]);
+});
+
+test("Delete removes narration metadata before deleting the unreferenced R2 object", async () => {
+  const calls: string[] = [];
+  const client = {
+    from(table: string) {
+      let operation = "select";
+      const builder = {
+        select() { operation = "select"; return builder; },
+        delete() { operation = "delete"; calls.push("db-delete-request"); return builder; },
+        eq() { return builder; },
+        async maybeSingle() {
+          if (table === "cat_preset_slides") return { data: { id: slideId, preset_id: questionId }, error: null };
+          return { data: { storage_key: "narration/questions/old.wav" }, error: null };
+        },
+        then(resolve: (value: unknown) => unknown) {
+          if (operation === "delete") { calls.push("db-delete-success"); return Promise.resolve(resolve({ error: null })); }
+          return Promise.resolve(resolve({ count: 0, error: null }));
+        },
+      };
+      return builder;
+    },
+  } as unknown as SupabaseClient;
+  const result = await deleteFinalSlideNarration({
+    supabase: client, questionId, slideId, locale: "ru",
+    remove: async (key) => { calls.push(`r2-delete:${key}`); },
+  });
+  assert.equal(result.deleted, true);
+  assert.deepEqual(calls, ["db-delete-request", "db-delete-success", "r2-delete:narration/questions/old.wav"]);
+});
+
 test("question edits preserve existing slide identities used by narration metadata", async () => {
   const [server, editor] = await Promise.all([
     readFile(new URL("../lib/server/cat-questions-admin.ts", import.meta.url), "utf8"),
@@ -190,8 +300,12 @@ test("manifest readiness and production brief keep narration optional outside RU
   const manifest = { schemaVersion: 1, question: { id: questionId, legacyId: "q-ru-001", baseKey: "q", series: "cat_explains", kind: "text", category: "Физика", isActive: true, title: { ru: "Почему?", en: "Why?", he: "למה?" } }, locales: ["ru", "en", "he"], direction: {}, slides, readiness, timingPolicy: { source: "final_processed_narration", alignment: "forced_alignment_per_slide", sceneDuration: "aligned_words_plus_editorial_pause" } } as CatQuestionProductionManifest;
   const brief = buildProductionBrief(manifest);
   assert.match(brief, /Human narration: https:\/\/media\.laplapla\.com\/narration\/final\.wav/);
+  assert.match(brief, /Processing settings: \{"enhance":false,"louder":true,"child":true\}/);
+  assert.match(brief, new RegExp(`Processor version: ${PROCESSOR_VERSION}`));
+  assert.match(brief, /Readiness: SAVED/);
   assert.match(brief, /Canonical for production: YES/);
   assert.match(brief, /RU narration: READY/);
+  assert.doesNotMatch(JSON.stringify(manifest), /service.role|secret.access|r2_access/i);
 });
 
 test("server schema persists no raw narration asset or raw archive", async () => {
@@ -212,4 +326,31 @@ test("mobile recorder has codec fallbacks, secure-context permission handling, c
   assert.match(recorder, /navigator\.mediaDevices\?\.getUserMedia/);
   assert.match(recorder, /cancelRecording/);
   assert.match(recorder, /URL\.revokeObjectURL/);
+  assert.match(recorder, /Save All Recordings/);
+  assert.match(recorder, /Import Production Brief/);
+  assert.match(recorder, /processed_unsaved/);
+  assert.match(recorder, /method: "DELETE"/);
+});
+
+test("production and narration APIs remain behind the guarded admin service client", async () => {
+  const [productionApi, narrationApi] = await Promise.all([
+    readFile(new URL("../pages/api/admin/cat-questions/[questionId]/production.ts", import.meta.url), "utf8"),
+    readFile(new URL("../pages/api/admin/cat-questions/[questionId]/narration.ts", import.meta.url), "utf8"),
+  ]);
+  for (const source of [productionApi, narrationApi]) {
+    assert.match(source, /requireAdminSession/);
+    assert.doesNotMatch(source, /createClientComponentClient|NEXT_PUBLIC_SUPABASE_ANON_KEY/);
+  }
+});
+
+test("Question JSON import remains separate from Production Brief import", async () => {
+  const [questionImport, productionWorkspace] = await Promise.all([
+    readFile(new URL("../pages/admin/cat-questions.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../components/admin/cat-questions/ProductionWorkspace.tsx", import.meta.url), "utf8"),
+  ]);
+  assert.match(questionImport, /\/api\/admin\/cat-questions/);
+  assert.doesNotMatch(questionImport, /Import Production Brief/);
+  assert.match(productionWorkspace, /Import Production Brief/);
+  assert.match(productionWorkspace, /method: "POST"/);
+  assert.match(productionWorkspace, /body: JSON\.stringify\(\{ brief \}\)/);
 });

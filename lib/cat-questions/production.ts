@@ -45,6 +45,40 @@ export const productionDirectionsPayloadSchema = z.object({
   slides: z.array(slideProductionDirectionSchema),
 });
 
+const optionalImportText = z.string().max(10_000).nullable().optional();
+
+export const productionBriefImportSchema = z.object({
+  production: z.object({
+    video_concept: optionalImportText,
+    production_mode: optionalImportText,
+    overall_visual_direction: optionalImportText,
+    mood: optionalImportText,
+    pacing: optionalImportText,
+    music_direction: optionalImportText,
+    continuity_idea: optionalImportText,
+    production_notes: optionalImportText,
+  }).strict().optional(),
+  slides: z.array(z.object({
+    slide_id: z.string().uuid().optional(),
+    slide_number: z.number().int().positive().optional(),
+    scene_intent: optionalImportText,
+    visual_idea: optionalImportText,
+    important_constraints: optionalImportText,
+    things_to_avoid: optionalImportText,
+    asset_search_hints: optionalImportText,
+    visual_style_hint: optionalImportText,
+    continuity_transition_hint: optionalImportText,
+    generation_notes: optionalImportText,
+    production_notes: optionalImportText,
+  }).strict().refine((slide) => Boolean(slide.slide_id) !== Boolean(slide.slide_number), {
+    message: "Each slide must specify exactly one of slide_id or slide_number.",
+  })).optional(),
+}).strict().refine((brief) => Boolean(brief.production) || Boolean(brief.slides?.length), {
+  message: "Production Brief must contain production fields or at least one slide.",
+});
+
+export type ProductionBriefImport = z.infer<typeof productionBriefImportSchema>;
+
 export type QuestionProductionDirection = z.infer<typeof questionProductionDirectionSchema>;
 export type SlideProductionDirection = z.infer<typeof slideProductionDirectionSchema>;
 
@@ -112,7 +146,9 @@ export function buildProductionBrief(manifest: CatQuestionProductionManifest, lo
     "PROJECT",
     `Question ID: ${manifest.question.id}`,
     `Legacy ID: ${manifest.question.legacyId}`,
+    `Base key: ${manifest.question.baseKey}`,
     `Series: ${manifest.question.series}`,
+    `Locale: ${locale}`,
     `Languages: ${manifest.locales.join(", ")}`,
     `Title (${locale.toUpperCase()}): ${briefValue(manifest.question.title[locale])}`,
     "",
@@ -142,6 +178,9 @@ export function buildProductionBrief(manifest: CatQuestionProductionManifest, lo
       `Narration R2 key: ${asset?.storageKey ?? "MISSING"}`,
       `Narration SHA-256: ${asset?.sha256 ?? "MISSING"}`,
       `Duration ms: ${asset?.durationMs ?? "MISSING"}`,
+      `Processing settings: ${asset ? JSON.stringify(asset.processingSettings) : "MISSING"}`,
+      `Processor version: ${asset?.processorVersion ?? "MISSING"}`,
+      `Readiness: ${asset ? "SAVED" : "MISSING"}`,
       `Canonical for production: ${locale === "ru" && asset ? "YES" : "NO"}`,
       `Scene intent: ${briefValue(slide.direction.sceneIntent)}`,
       `Visual idea: ${briefValue(slide.direction.visualIdea)}`,

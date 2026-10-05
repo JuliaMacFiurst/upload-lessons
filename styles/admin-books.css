@@ -3010,6 +3010,51 @@
   gap: 18px;
 }
 
+.cat-production-import {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid #d8e3ef;
+  border-radius: 14px;
+  background: #fbfdff;
+}
+
+.cat-production-import summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.cat-production-import__textarea {
+  min-height: 180px;
+  margin: 10px 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 13px;
+}
+
+.cat-narration-batch {
+  position: sticky;
+  top: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid #bed0e3;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 96%);
+  box-shadow: 0 6px 20px rgb(31 55 79 / 10%);
+}
+
+.cat-narration-batch span {
+  margin-right: auto;
+  color: #58687a;
+}
+
+.cat-narration-unsaved {
+  color: #9a5b00 !important;
+  font-weight: 700;
+}
+
 .cat-production-scene {
   display: grid;
   gap: 14px;
@@ -3303,5 +3348,16 @@
   .cat-voice-effects .books-button,
   .cat-narration-recorder .books-actions .books-button {
     min-height: 46px;
+  }
+
+  .cat-narration-batch {
+    top: 4px;
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .cat-narration-batch .books-button {
+    width: 100%;
+    min-height: 48px;
   }
 }

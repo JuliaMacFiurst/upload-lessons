@@ -3,6 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   PROCESSOR_VERSION,
   calculateNarrationReadiness,
+  productionBriefImportSchema,
   productionDirectionsPayloadSchema,
   voiceProcessingSettingsSchema,
   type CatQuestionProductionManifest,
@@ -54,6 +55,10 @@ const emptySlideDirection = (slideId: string): SlideProductionDirection => ({
 
 function textOrNull(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function hasOwn(value: object, key: string) {
+  return Object.prototype.hasOwnProperty.call(value, key);
 }
 
 function mapQuestionDirection(row: Record<string, unknown> | null): QuestionProductionDirection {
@@ -258,6 +263,78 @@ export async function saveCatQuestionProductionDirections(
   }
 }
 
+export async function importCatQuestionProductionBrief(
+  supabase: SupabaseClient,
+  questionId: string,
+  input: unknown,
+) {
+  const manifest = await loadCatQuestionProductionManifest(supabase, questionId);
+  const plan = buildProductionBriefImportPlan(manifest, input);
+
+  if (plan.questionRow) {
+    const { error } = await supabase.from("cat_question_production").upsert(plan.questionRow, { onConflict: "preset_id" });
+    if (error) throw new Error(`Failed to import production direction: ${error.message}`);
+  }
+
+  if (plan.slideRows.length > 0) {
+    const { error } = await supabase.from("cat_question_slide_production").upsert(plan.slideRows, { onConflict: "slide_id" });
+    if (error) throw new Error(`Failed to import scene directions: ${error.message}`);
+  }
+}
+
+export function buildProductionBriefImportPlan(manifest: CatQuestionProductionManifest, input: unknown) {
+  const payload = productionBriefImportSchema.parse(input);
+  const slidesById = new Map(manifest.slides.map((slide) => [slide.id, slide]));
+  const slidesByNumber = new Map(manifest.slides.map((slide) => [slide.order, slide]));
+  const resolved = (payload.slides ?? []).map((incoming) => {
+    const slide = incoming.slide_id ? slidesById.get(incoming.slide_id) : slidesByNumber.get(incoming.slide_number as number);
+    if (!slide) {
+      const reference = incoming.slide_id ? `slide_id ${incoming.slide_id}` : `slide_number ${incoming.slide_number}`;
+      throw new Error(`Unknown slide reference: ${reference}.`);
+    }
+    return { incoming, slide };
+  });
+  const seen = new Set<string>();
+  for (const item of resolved) {
+    if (seen.has(item.slide.id)) throw new Error(`Duplicate slide reference resolves to slide ${item.slide.id}.`);
+    seen.add(item.slide.id);
+  }
+
+  let questionRow: Record<string, unknown> | null = null;
+  if (payload.production) {
+    const source = payload.production;
+    const current = manifest.direction;
+    questionRow = {
+      preset_id: manifest.question.id,
+      video_concept: hasOwn(source, "video_concept") ? textOrNull(source.video_concept) : current.videoConcept,
+      production_mode: hasOwn(source, "production_mode") ? textOrNull(source.production_mode) : current.productionMode,
+      overall_visual_direction: hasOwn(source, "overall_visual_direction") ? textOrNull(source.overall_visual_direction) : current.overallVisualDirection,
+      mood: hasOwn(source, "mood") ? textOrNull(source.mood) : current.mood,
+      pacing: hasOwn(source, "pacing") ? textOrNull(source.pacing) : current.pacing,
+      music_direction: hasOwn(source, "music_direction") ? textOrNull(source.music_direction) : current.musicDirection,
+      continuity_idea: hasOwn(source, "continuity_idea") ? textOrNull(source.continuity_idea) : current.continuityIdea,
+      production_notes: hasOwn(source, "production_notes") ? textOrNull(source.production_notes) : current.productionNotes,
+    };
+  }
+
+  const slideRows = resolved.map(({ incoming, slide }) => {
+      const current = slide.direction;
+      return {
+        slide_id: slide.id,
+        scene_intent: hasOwn(incoming, "scene_intent") ? textOrNull(incoming.scene_intent) : current.sceneIntent,
+        visual_idea: hasOwn(incoming, "visual_idea") ? textOrNull(incoming.visual_idea) : current.visualIdea,
+        important_constraints: hasOwn(incoming, "important_constraints") ? textOrNull(incoming.important_constraints) : current.importantConstraints,
+        things_to_avoid: hasOwn(incoming, "things_to_avoid") ? textOrNull(incoming.things_to_avoid) : current.thingsToAvoid,
+        asset_search_hints: hasOwn(incoming, "asset_search_hints") ? textOrNull(incoming.asset_search_hints) : current.assetSearchHints,
+        visual_style_hint: hasOwn(incoming, "visual_style_hint") ? textOrNull(incoming.visual_style_hint) : current.visualStyleHint,
+        continuity_transition_hint: hasOwn(incoming, "continuity_transition_hint") ? textOrNull(incoming.continuity_transition_hint) : current.continuityTransitionHint,
+        generation_notes: hasOwn(incoming, "generation_notes") ? textOrNull(incoming.generation_notes) : current.generationNotes,
+        production_notes: hasOwn(incoming, "production_notes") ? textOrNull(incoming.production_notes) : current.productionNotes,
+      };
+    });
+  return { questionRow, slideRows };
+}
+
 function decodeFinalWav(value: string) {
   const payload = value.includes(",") ? value.slice(value.indexOf(",") + 1) : value;
   if (!payload || !/^[A-Za-z0-9+/=\r\n]+$/.test(payload)) throw new Error("Invalid base64 audio payload.");
@@ -359,4 +436,48 @@ export async function saveFinalSlideNarration(input: {
   const previousKey = previous?.storage_key as string | undefined;
   if (previousKey && previousKey !== key) await input.remove(previousKey).catch(() => undefined);
   return mapNarration(data as Record<string, unknown>);
+}
+
+export async function deleteFinalSlideNarration(input: {
+  supabase: SupabaseClient;
+  questionId: string;
+  slideId: string;
+  locale: string;
+  remove: ObjectDelete;
+}) {
+  if (!/^[a-z]{2}(?:-[A-Z]{2})?$/.test(input.locale)) throw new Error("Invalid narration locale.");
+  const { data: slide, error: slideError } = await input.supabase
+    .from("cat_preset_slides")
+    .select("id,preset_id")
+    .eq("id", input.slideId)
+    .eq("preset_id", input.questionId)
+    .maybeSingle();
+  if (slideError) throw new Error(`Failed to validate narration slide: ${slideError.message}`);
+  if (!slide) throw new Error("Slide does not belong to this question.");
+
+  const { data: previous, error: previousError } = await input.supabase
+    .from("cat_slide_narrations")
+    .select("storage_key")
+    .eq("slide_id", input.slideId)
+    .eq("locale", input.locale)
+    .maybeSingle();
+  if (previousError) throw new Error(`Failed to load current narration: ${previousError.message}`);
+  if (!previous) return { deleted: false, storageKey: null };
+
+  const storageKey = String(previous.storage_key);
+  const { error: deleteError } = await input.supabase
+    .from("cat_slide_narrations")
+    .delete()
+    .eq("slide_id", input.slideId)
+    .eq("locale", input.locale)
+    .eq("storage_key", storageKey);
+  if (deleteError) throw new Error(`Failed to delete narration metadata: ${deleteError.message}`);
+
+  const { count, error: referenceError } = await input.supabase
+    .from("cat_slide_narrations")
+    .select("slide_id", { count: "exact", head: true })
+    .eq("storage_key", storageKey);
+  if (referenceError) throw new Error(`Narration metadata was deleted, but object cleanup could not be verified: ${referenceError.message}`);
+  if ((count ?? 0) === 0) await input.remove(storageKey);
+  return { deleted: true, storageKey };
 }

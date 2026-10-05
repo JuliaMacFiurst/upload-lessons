@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import {
   DEFAULT_RU_SCIENTIFIC_VOICE_PRESET,
   buildProductionBrief,
@@ -7,6 +7,7 @@ import {
   type NarrationAsset,
   type VoiceProcessingSettings,
 } from "../../../lib/cat-questions/production";
+import { saveDirtyNarrations } from "../../../lib/cat-questions/narration-batch";
 import {
   LAPLAPLA_VOICE_PARAMETERS,
   configureStudioRecordingChain,
@@ -44,19 +45,25 @@ function blobToDataUrl(blob: Blob) {
   });
 }
 
-type RecorderState = "idle" | "requesting" | "recording" | "processing" | "ready" | "saving";
+type RecorderState = "idle" | "requesting" | "recording" | "processing" | "processed_unsaved" | "saving" | "saved" | "failed" | "deleting";
+type RecorderHandle = { saveIfDirty: () => Promise<boolean> };
+type RecorderSummary = { state: RecorderState; dirty: boolean };
 
-function SlideNarrationRecorder({
-  questionId,
-  slideId,
-  existing,
-  onSaved,
-}: {
+const SlideNarrationRecorder = forwardRef<RecorderHandle, {
   questionId: string;
   slideId: string;
   existing?: NarrationAsset;
   onSaved: (asset: NarrationAsset) => void;
-}) {
+  onDeleted: () => void;
+  onStatusChange: (slideId: string, summary: RecorderSummary) => void;
+}>(function SlideNarrationRecorder({
+  questionId,
+  slideId,
+  existing,
+  onSaved,
+  onDeleted,
+  onStatusChange,
+}, ref) {
   const [state, setState] = useState<RecorderState>("idle");
   const [settings, setSettings] = useState<VoiceProcessingSettings>({ ...DEFAULT_RU_SCIENTIFIC_VOICE_PRESET });
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
@@ -106,7 +113,7 @@ function SlideNarrationRecorder({
       const nextUrl = URL.createObjectURL(result.blob);
       previewUrlRef.current = nextUrl;
       setPreviewUrl(nextUrl);
-      setState("ready");
+      setState("processed_unsaved");
     } catch (processingError) {
       setState("idle");
       setError(processingError instanceof Error ? processingError.message : "Не удалось обработать запись.");
@@ -114,7 +121,7 @@ function SlideNarrationRecorder({
   }, [revokePreview]);
 
   const startRecording = async () => {
-    if (state !== "idle" && state !== "ready") return;
+    if (["requesting", "recording", "processing", "saving", "deleting"].includes(state)) return;
     setError(null);
     setState("requesting");
     cancelledRef.current = false;
@@ -197,7 +204,7 @@ function SlideNarrationRecorder({
   };
 
   const save = async () => {
-    if (!processedBlobRef.current) return;
+    if (!processedBlobRef.current) return false;
     setState("saving");
     setError(null);
     try {
@@ -216,11 +223,37 @@ function SlideNarrationRecorder({
       processedBlobRef.current = null;
       chunksRef.current = [];
       revokePreview();
-      setState("idle");
+      setState("saved");
       onSaved(response.narration);
+      return true;
     } catch (saveError) {
-      setState("ready");
+      setState("failed");
       setError(saveError instanceof Error ? saveError.message : "Не удалось сохранить озвучку.");
+      return false;
+    }
+  };
+
+  useImperativeHandle(ref, () => ({ saveIfDirty: save }));
+
+  useEffect(() => {
+    onStatusChange(slideId, { state, dirty: Boolean(processedBlobRef.current) });
+  }, [onStatusChange, slideId, state]);
+
+  const deleteSaved = async () => {
+    if (!existing || !window.confirm("Удалить сохранённую озвучку?")) return;
+    setState("deleting");
+    setError(null);
+    try {
+      await fetchJson<{ ok: true }>(`/api/admin/cat-questions/${questionId}/narration`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slideId, locale: "ru" }),
+      });
+      setState(processedBlobRef.current ? "processed_unsaved" : "idle");
+      onDeleted();
+    } catch (deleteError) {
+      setState(processedBlobRef.current ? "processed_unsaved" : "idle");
+      setError(deleteError instanceof Error ? deleteError.message : "Не удалось удалить озвучку.");
     }
   };
 
@@ -228,8 +261,9 @@ function SlideNarrationRecorder({
   return (
     <div className="cat-narration-recorder">
       <div className="cat-narration-recorder__status">
-        <strong>{existing ? `RU: ${(existing.durationMs / 1000).toFixed(1)} сек.` : "RU: нет записи"}</strong>
+        <strong>{existing ? `RU saved: ${(existing.durationMs / 1000).toFixed(1)} сек.` : "RU: нет сохранённой записи"}</strong>
         {existing && <small>SHA {existing.sha256.slice(0, 12)}…</small>}
+        {processedBlobRef.current && <small className="cat-narration-unsaved">Новая processed-версия ещё не сохранена</small>}
       </div>
       <div className="books-actions books-actions--compact">
         {state === "recording" ? (
@@ -238,7 +272,7 @@ function SlideNarrationRecorder({
             <button type="button" className="books-button books-button--ghost" onClick={cancelRecording}>Отменить</button>
           </>
         ) : (
-          <button type="button" className="books-button books-button--secondary" disabled={["requesting", "processing", "saving"].includes(state)} onClick={() => void startRecording()}>
+          <button type="button" className="books-button books-button--secondary" disabled={["requesting", "processing", "saving", "deleting"].includes(state)} onClick={() => void startRecording()}>
             {state === "requesting" ? "Открываем микрофон…" : existing || rawBlobRef.current ? "Перезаписать" : "Записать"}
           </button>
         )}
@@ -250,34 +284,47 @@ function SlideNarrationRecorder({
         <>
           <div className="cat-voice-effects" aria-label="Обработка голоса">
             {(["enhance", "louder", "child"] as const).map((key) => (
-              <button key={key} type="button" className={`books-button ${settings[key] ? "books-button--primary" : "books-button--ghost"}`} disabled={state === "processing" || state === "saving"} onClick={() => void toggleEffect(key)}>
+              <button key={key} type="button" className={`books-button ${settings[key] ? "books-button--primary" : "books-button--ghost"}`} disabled={state === "processing" || state === "saving" || state === "deleting"} onClick={() => void toggleEffect(key)}>
                 {settings[key] ? "✓ " : ""}{key === "enhance" ? "Улучшить" : key === "louder" ? "Громче" : "Детский голос"}
               </button>
             ))}
           </div>
           <div className="books-actions books-actions--compact">
-            <button type="button" className="books-button books-button--primary" disabled={state !== "ready"} onClick={() => void save()}>{state === "saving" ? "Сохранение…" : "Сохранить final audio"}</button>
+            <button type="button" className="books-button books-button--primary" disabled={state === "processing" || state === "saving" || state === "deleting"} onClick={() => void save()}>{state === "saving" ? "Сохранение…" : "Сохранить final audio"}</button>
             {durationMs && <span className="books-field__help">Processed: {(durationMs / 1000).toFixed(1)} сек.</span>}
           </div>
         </>
       )}
+      {existing && <button type="button" className="books-button books-button--danger" disabled={state === "saving" || state === "deleting"} onClick={() => void deleteSaved()}>{state === "deleting" ? "Удаление…" : "Удалить saved narration"}</button>}
       {error && <div className="books-alert books-alert--error">{error}</div>}
     </div>
   );
-}
+});
 
 export function ProductionWorkspace({ questionId }: { questionId: string }) {
   const [manifest, setManifest] = useState<CatQuestionProductionManifest | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [productionImport, setProductionImport] = useState("");
+  const [batchSaving, setBatchSaving] = useState(false);
+  const [batchMessage, setBatchMessage] = useState<string | null>(null);
+  const [recorderStatuses, setRecorderStatuses] = useState<Record<string, RecorderSummary>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const recorderRefs = useRef(new Map<string, RecorderHandle>());
   const endpoint = `/api/admin/cat-questions/${questionId}/production`;
 
   const load = useCallback(async () => {
     const value = await fetchJson<CatQuestionProductionManifest>(endpoint);
     setManifest(value);
   }, [endpoint]);
+
+  const handleRecorderStatus = useCallback((slideId: string, summary: RecorderSummary) => {
+    setRecorderStatuses((current) => current[slideId]?.state === summary.state && current[slideId]?.dirty === summary.dirty
+      ? current
+      : { ...current, [slideId]: summary });
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -312,6 +359,61 @@ export function ProductionWorkspace({ questionId }: { questionId: string }) {
     catch (copyError) { setError(copyError instanceof Error ? copyError.message : "Не удалось скопировать brief."); }
   };
 
+  const copyProductionJson = async () => {
+    setError(null); setMessage(null);
+    try { await copyText(JSON.stringify(manifest, null, 2)); setMessage("Production JSON скопирован."); }
+    catch (copyError) { setError(copyError instanceof Error ? copyError.message : "Не удалось скопировать JSON."); }
+  };
+
+  const importProductionBrief = async () => {
+    setImporting(true); setError(null); setMessage(null);
+    try {
+      let brief: unknown;
+      try { brief = JSON.parse(productionImport); }
+      catch { throw new Error("Production Brief содержит malformed JSON. Проверьте кавычки и запятые."); }
+      const updated = await fetchJson<CatQuestionProductionManifest>(endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ brief }),
+      });
+      setManifest(updated);
+      setProductionImport("");
+      setMessage("Production Brief импортирован. Отсутствующие поля сохранены без изменений.");
+    } catch (importError) {
+      setError(importError instanceof Error ? importError.message : "Не удалось импортировать Production Brief.");
+    } finally { setImporting(false); }
+  };
+
+  const saveAllRecordings = async () => {
+    setBatchSaving(true); setBatchMessage(null); setError(null);
+    const result = await saveDirtyNarrations(manifest.slides.map((slide) => ({
+      slideId: slide.id,
+      dirty: Boolean(recorderStatuses[slide.id]?.dirty),
+      save: () => recorderRefs.current.get(slide.id)?.saveIfDirty() ?? Promise.resolve(false),
+    })));
+    setBatchSaving(false);
+    if (result.attempted === 0) setBatchMessage("Нет новых processed-записей для сохранения.");
+    else if (result.failed.length === 0) setBatchMessage(`${result.saved.length} recordings saved.`);
+    else setBatchMessage(`${result.saved.length} saved, ${result.failed.length} failed. Повторите Save All для failed/dirty.`);
+  };
+
+  const updateNarrationAsset = (slideId: string, asset?: NarrationAsset) => {
+    setManifest((current) => {
+      if (!current) return current;
+      const slides = current.slides.map((item) => {
+        if (item.id !== slideId) return item;
+        const narrationAssets = { ...item.narrationAssets };
+        if (asset) narrationAssets.ru = asset;
+        else delete narrationAssets.ru;
+        return { ...item, narrationAssets };
+      });
+      return { ...current, slides, readiness: calculateNarrationReadiness(slides, current.locales) };
+    });
+  };
+
+  const dirtyCount = Object.values(recorderStatuses).filter((status) => status.dirty).length;
+  const failedCount = Object.values(recorderStatuses).filter((status) => status.state === "failed").length;
+
   return (
     <>
       <section className="books-panel">
@@ -325,31 +427,40 @@ export function ProductionWorkspace({ questionId }: { questionId: string }) {
             ["mood", "Mood"], ["pacing", "Pacing"], ["musicDirection", "Music direction"], ["continuityIdea", "Continuity idea"], ["productionNotes", "Заметки Production Director"],
           ] as const).map(([key, label]) => <label className="books-field" key={key}><span className="books-field__label">{label}</span><textarea className="books-input books-input--textarea books-input--small-textarea" value={manifest.direction[key] ?? ""} onChange={(event) => updateQuestionDirection(key, event.target.value)} /></label>)}
         </div>
-        <div className="books-actions"><button type="button" className="books-button books-button--primary" disabled={saving} onClick={() => void saveDirections()}>{saving ? "Сохранение…" : "Сохранить production direction"}</button><button type="button" className="books-button books-button--secondary" onClick={() => void copyBrief()}>Copy Production Brief</button></div>
+        <div className="books-actions"><button type="button" className="books-button books-button--primary" disabled={saving} onClick={() => void saveDirections()}>{saving ? "Сохранение…" : "Сохранить production direction"}</button><button type="button" className="books-button books-button--secondary" onClick={() => void copyBrief()}>Copy Production Brief</button><button type="button" className="books-button books-button--ghost" onClick={() => void copyProductionJson()}>Copy Production JSON</button></div>
+        <details className="cat-production-import">
+          <summary>Import Production Brief</summary>
+          <p className="books-section-help">Отдельный JSON для режиссуры. Он не изменяет question JSON или локализованные тексты. Можно импортировать только нужные поля.</p>
+          <textarea className="books-input books-input--textarea cat-production-import__textarea" value={productionImport} onChange={(event) => setProductionImport(event.target.value)} placeholder={'{"production":{"video_concept":"..."},"slides":[{"slide_number":1,"visual_idea":"..."}]}'} />
+          <div className="books-actions"><button type="button" className="books-button books-button--secondary" disabled={importing || !productionImport.trim()} onClick={() => void importProductionBrief()}>{importing ? "Импорт…" : "Import Production Brief"}</button></div>
+        </details>
         {message && <div className="books-alert books-alert--success">{message}</div>}
         {error && <div className="books-alert books-alert--error">{error}</div>}
       </section>
 
       <section className="books-panel">
         <div className="books-section-head"><div><h2 className="books-panel__title">Озвучка и режиссура по слайдам</h2><p className="books-section-help">Raw take живёт только в памяти вкладки до успешного сохранения final WAV.</p></div></div>
+        <div className="cat-narration-batch" role="status">
+          <strong>RU Narration: {ru.recorded} / {ru.total} saved</strong>
+          <span>{dirtyCount} unsaved{failedCount ? ` · ${failedCount} failed` : ""}</span>
+          <button type="button" className="books-button books-button--primary" disabled={batchSaving || dirtyCount === 0} onClick={() => void saveAllRecordings()}>{batchSaving ? "Сохраняем…" : failedCount ? "Retry failed / Save All" : "Save All Recordings"}</button>
+        </div>
+        {batchMessage && <div className={failedCount ? "books-alert books-alert--error" : "books-alert books-alert--success"}>{batchMessage}</div>}
         <div className="cat-production-scenes">
           {manifest.slides.map((slide) => (
             <article className="cat-production-scene" key={slide.id}>
               <div><strong>Слайд {slide.order}</strong><p>{slide.narrationText.ru}</p><small>{slide.id}</small></div>
               <SlideNarrationRecorder
+                ref={(handle) => { if (handle) recorderRefs.current.set(slide.id, handle); else recorderRefs.current.delete(slide.id); }}
                 questionId={questionId}
                 slideId={slide.id}
                 existing={slide.narrationAssets.ru}
                 onSaved={(asset) => {
-                  setManifest((current) => {
-                    if (!current) return current;
-                    const slides = current.slides.map((item) => item.id === slide.id
-                      ? { ...item, narrationAssets: { ...item.narrationAssets, ru: asset } }
-                      : item);
-                    return { ...current, slides, readiness: calculateNarrationReadiness(slides, current.locales) };
-                  });
+                  updateNarrationAsset(slide.id, asset);
                   setMessage(`Озвучка слайда ${slide.order} сохранена.`);
                 }}
+                onDeleted={() => { updateNarrationAsset(slide.id); setMessage(`Озвучка слайда ${slide.order} удалена.`); }}
+                onStatusChange={handleRecorderStatus}
               />
               <details className="cat-scene-direction"><summary>Scene direction (необязательно)</summary><div className="books-grid books-grid--2">
                 {([
