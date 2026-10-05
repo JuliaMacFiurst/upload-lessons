@@ -526,7 +526,7 @@ test("publishing language keys: publishing RU does not erase existing EN/HE expo
   assert.equal(afterEnPublish.exported_image_urls["he-01"], "https://r2/he-01.webp");
 });
 
-test("parseBedtimeStoryJson preserves strict 3-language and prompt contract for imported JSON", () => {
+test("parseBedtimeStoryJson preserves strict title and slideshow prompt contracts", () => {
   const validJson = JSON.stringify({
     slug: "strict-moon-train",
     title: {
@@ -561,12 +561,12 @@ test("parseBedtimeStoryJson preserves strict 3-language and prompt contract for 
   });
   assert.throws(() => parseBedtimeStoryJson(missingEnTitle), /English text is required/);
 
-  // Missing Hebrew in slide text must be rejected
+  // A slideshow slide needs localized text, but any supported language is sufficient.
   const missingHeSlide = JSON.stringify({
     title: { en: "Title", ru: "Заголовок", he: "כותרת" },
     slides: [{ slide_number: 1, text: { en: "A", ru: "Б" }, illustration_prompt: "prompt" }],
   });
-  assert.throws(() => parseBedtimeStoryJson(missingHeSlide), /Hebrew text is required/);
+  assert.equal(parseBedtimeStoryJson(missingHeSlide).slides[0].text.en, "A");
 
   // Missing illustration_prompt on slide must be rejected for imported JSON
   const missingPrompt = JSON.stringify({
@@ -713,6 +713,14 @@ test("Library video JSON import and schema regressions", () => {
   assert.equal(parsedDummy.content_type, "video");
   assert.deepEqual(parsedDummy.slides, []);
 
+  const directVideoPayload = bedtimeStoryPayloadSchema.parse({
+    slug: "video-direct-save",
+    content_type: "video",
+    title: { en: "Direct Video" },
+    slides: [{ slide_number: 1, text: { en: "", ru: "", he: "" } }],
+  });
+  assert.deepEqual(directVideoPayload.slides, []);
+
   // 4. imported video gets content_type = "video" in payload and schema
   assert.equal(parsedVideo.content_type, "video");
   const validatedPayload = bedtimeStoryPayloadSchema.parse(parsedVideo);
@@ -757,7 +765,19 @@ test("Library video JSON import and schema regressions", () => {
       },
     ],
   });
-  assert.throws(() => parseBedtimeStoryJson(slideshowMissingText), /English text is required/);
+  assert.throws(() => parseBedtimeStoryJson(slideshowMissingText), /At least one language text is required/);
+  assert.throws(() => bedtimeStoryPayloadSchema.parse({
+    slug: "slideshow-schema-empty",
+    title: { en: "Empty schema slideshow" },
+    slides: [],
+  }), /Slideshow content must contain at least 1 slide/);
+
+  const oneLanguageSlideshow = parseBedtimeStoryJson(JSON.stringify({
+    slug: "slideshow-one-language",
+    title: { en: "One Language", ru: "Один язык", he: "שפה אחת" },
+    slides: [{ slide_number: 1, text: { ru: "Настоящий текст" }, illustration_prompt: "moon" }],
+  }));
+  assert.equal(oneLanguageSlideshow.slides[0].text.ru, "Настоящий текст");
 
   // 8. Updating existing video story preserves slides: [] and updates without slides.0.text error
   const existingVideoStory: BedtimeStoryRecord = {

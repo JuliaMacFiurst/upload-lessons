@@ -2,8 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { bedtimeStoryPayloadSchema } from "../lib/bedtime-stories/types.ts";
-import { getBedtimePreviewPages } from "../lib/bedtime-stories/preview.ts";
-import { createBedtimeStory, loadBedtimeStory, saveBedtimeStorySlideImage, updateBedtimeStory } from "../lib/server/bedtime-stories-admin.ts";
+import { buildLibrarySlidesSavePatch, normalizeLibraryEditorStory } from "../lib/bedtime-stories/admin-flow.ts";
+import { createBedtimeStory, loadBedtimeStory, parseBedtimeStoryJson, saveBedtimeStorySlideImage, updateBedtimeStory } from "../lib/server/bedtime-stories-admin.ts";
 import { bedtimeSlideMediaPath, decodeBedtimeImage, validateBedtimeImage } from "../lib/server/bedtime-media.ts";
 
 const id = "c585c654-79c1-45fb-a716-6be8f3ca9df8";
@@ -102,6 +102,32 @@ test("source illustration uploads update shared canonical image, preserving fini
   // Test loading again
   const reloaded = await loadBedtimeStory(client, id);
   assert.equal(reloaded.slides[0].image_url, "https://example.test/ru/newest.webp");
+});
+
+test("VIDEO import -> editor state -> Save never validates a placeholder slideshow", async () => {
+  const { client } = database();
+  const imported = parseBedtimeStoryJson(JSON.stringify({
+    slug: "video-workflow",
+    content_type: "video",
+    title: { en: "Video", ru: "Видео", he: "וידאו" },
+    slides: [{ slide_number: 1, text: { en: "", ru: "", he: "" } }],
+  }));
+
+  const created = await createBedtimeStory(client, imported);
+  const editorStory = normalizeLibraryEditorStory(created);
+  assert.deepEqual(editorStory.slides, []);
+
+  const savePatch = buildLibrarySlidesSavePatch(editorStory, false, "", "");
+  assert.deepEqual(savePatch.slides, []);
+  assert.equal(savePatch.replaceSlides, true);
+
+  const saved = await updateBedtimeStory(client, created.id, {
+    content_type: editorStory.content_type,
+    slides: savePatch.slides,
+    replaceSlides: savePatch.replaceSlides,
+  });
+  assert.equal(saved.content_type, "video");
+  assert.deepEqual(saved.slides, []);
 });
 
 test("localized upload paths are isolated and never reuse the same object", () => {

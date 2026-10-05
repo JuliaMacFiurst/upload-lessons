@@ -79,7 +79,7 @@ export const bedtimeStoryAssetSchema = z.object({
   created_at: z.string().trim().min(1),
 });
 
-export const bedtimeStoryPayloadSchema = z.object({
+const bedtimeStoryPayloadObjectSchema = z.object({
   slug: z
     .string()
     .trim()
@@ -115,11 +115,44 @@ export const bedtimeStoryPayloadSchema = z.object({
   is_published: z.boolean().default(false),
 });
 
-export const bedtimeStoryRecordSchema = bedtimeStoryPayloadSchema.extend({
+type LibraryItemWithSlides = z.infer<typeof bedtimeStoryPayloadObjectSchema>;
+
+function normalizeSlidesByContentType(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  if (record.content_type !== "video") return value;
+  return { ...record, slides: [] };
+}
+
+function requireSlideshowSlides(payload: LibraryItemWithSlides, context: z.RefinementCtx) {
+  if (payload.content_type === "slideshow" && payload.slides.length === 0) {
+    context.addIssue({
+      code: z.ZodIssueCode.too_small,
+      minimum: 1,
+      type: "array",
+      inclusive: true,
+      exact: false,
+      path: ["slides"],
+      message: "Slideshow content must contain at least 1 slide.",
+    });
+  }
+}
+
+export const bedtimeStoryPayloadSchema = z.preprocess(
+  normalizeSlidesByContentType,
+  bedtimeStoryPayloadObjectSchema.superRefine(requireSlideshowSlides),
+);
+
+const bedtimeStoryRecordObjectSchema = bedtimeStoryPayloadObjectSchema.extend({
   id: z.string().uuid(),
   created_at: z.string().nullable().optional(),
   updated_at: z.string().nullable().optional(),
 });
+
+export const bedtimeStoryRecordSchema = z.preprocess(
+  normalizeSlidesByContentType,
+  bedtimeStoryRecordObjectSchema.superRefine(requireSlideshowSlides),
+);
 
 export type BedtimeStoryStatus = z.infer<typeof bedtimeStoryStatusSchema>;
 export type BedtimeStorySlide = z.infer<typeof bedtimeStorySlideSchema>;

@@ -7,12 +7,15 @@ import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../components/AdminLogout";
 import { AdminTabs } from "../../components/AdminTabs";
 import { BedtimeStoryPreviewModal } from "../../components/admin/bedtime/BedtimeStoryPreviewModal";
+import {
+  buildLibrarySlidesSavePatch,
+  normalizeLibraryEditorStory,
+} from "../../lib/bedtime-stories/admin-flow.ts";
 import type {
   BedtimeStoryLanguage,
   BedtimeStoryListItem,
   BedtimeStoryPatch,
   BedtimeStoryRecord,
-  BedtimeStorySlidePatch,
   BedtimeStoryStatus,
   LibraryCategorySlug,
 } from "../../lib/bedtime-stories/types.ts";
@@ -371,9 +374,10 @@ export default function BedtimeStoriesAdminPage() {
     setSuccess(null);
     try {
       const data = await fetchJson<{ story: BedtimeStoryRecord }>(`/api/admin/bedtime-stories/${storyId}`);
-      setActiveStory(data.story);
-      setSavedSnapshot(JSON.stringify(data.story));
-      setIncludePage2(data.story.slides.length >= 2);
+      const editorStory = normalizeLibraryEditorStory(data.story);
+      setActiveStory(editorStory);
+      setSavedSnapshot(JSON.stringify(editorStory));
+      setIncludePage2(editorStory.slides.length >= 2);
       if (scroll && editorRef.current) {
         editorRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
       }
@@ -404,9 +408,10 @@ export default function BedtimeStoriesAdminPage() {
       });
       setJsonImportValue("");
       setJsonPanelOpen(false);
-      setActiveStory(data.story);
-      setSavedSnapshot(JSON.stringify(data.story));
-      setIncludePage2(data.story.slides.length >= 2);
+      const editorStory = normalizeLibraryEditorStory(data.story);
+      setActiveStory(editorStory);
+      setSavedSnapshot(JSON.stringify(editorStory));
+      setIncludePage2(editorStory.slides.length >= 2);
       setSuccess(`Story imported from JSON: ${data.story.title.ru || data.story.title.en || data.story.slug}`);
       await loadStories();
       void router.push({ pathname: "/admin/bedtime-stories", query: { storyId: data.story.id } }, undefined, { shallow: true });
@@ -590,54 +595,7 @@ export default function BedtimeStoriesAdminPage() {
       const ruPage1 = getSlideImageUrl(activeStory, 1, "ru");
       const ruPage2 = getSlideImageUrl(activeStory, 2, "ru");
       const isVideo = activeStory.content_type === "video";
-
-      const slidesPayload: BedtimeStorySlidePatch[] = isVideo
-        ? []
-        : [
-            {
-              slide_number: 1,
-              illustration_prompt: activeStory.slides[0]?.illustration_prompt ?? "",
-              stamp_prompt: activeStory.slides[0]?.stamp_prompt ?? "",
-              marker_prompt: activeStory.slides[0]?.marker_prompt ?? "",
-              image_url: ruPage1 || activeStory.slides[0]?.image_url || "",
-              layers: activeStory.slides[0]?.layers ?? [],
-              text: activeStory.slides[0]?.text || { ru: "", en: "", he: "" },
-            },
-          ];
-
-      if (!isVideo && includePage2) {
-        slidesPayload.push({
-          slide_number: 2,
-          illustration_prompt: activeStory.slides[1]?.illustration_prompt ?? "",
-          stamp_prompt: activeStory.slides[1]?.stamp_prompt ?? "",
-          marker_prompt: activeStory.slides[1]?.marker_prompt ?? "",
-          image_url: ruPage2 || activeStory.slides[1]?.image_url || "",
-          layers: activeStory.slides[1]?.layers ?? [],
-          text: activeStory.slides[1]?.text || { ru: "", en: "", he: "" },
-        });
-      }
-
-      // If existing story had > 2 slides, preserve slides 3..N
-      if (!isVideo && activeStory.slides.length > 2) {
-        for (let i = 2; i < activeStory.slides.length; i++) {
-          const s = activeStory.slides[i];
-          slidesPayload.push({
-            slide_number: s.slide_number,
-            text: s.text,
-            illustration_prompt: s.illustration_prompt,
-            stamp_prompt: s.stamp_prompt,
-            marker_prompt: s.marker_prompt,
-            image_url: s.image_url,
-            layers: s.layers,
-          });
-        }
-      }
-
-      // If the author deliberately removed Page 2 on a 2-page story:
-      const deleteSlideNumbers: number[] = [];
-      if (!isVideo && !includePage2 && activeStory.slides.some((s) => s.slide_number === 2)) {
-        deleteSlideNumbers.push(2);
-      }
+      const slidePatch = buildLibrarySlidesSavePatch(activeStory, includePage2, ruPage1, ruPage2);
 
       const patch: BedtimeStoryPatch = {
         title,
@@ -649,15 +607,15 @@ export default function BedtimeStoriesAdminPage() {
         status: targetStatus,
         is_published: targetStatus === "draft" || targetStatus === "archived" ? false : activeStory.is_published,
         publish_date: targetStatus === "draft" || targetStatus === "archived" ? null : activeStory.publish_date,
-        slides: slidesPayload,
-        replaceSlides: isVideo ? true : false,
+        slides: slidePatch.slides,
+        replaceSlides: slidePatch.replaceSlides,
         cover_image_url: isVideo
           ? (activeStory.media.posterUrl || activeStory.cover_image_url || null)
           : (ruPage1 || activeStory.cover_image_url || null),
         emotional_theme: activeStory.emotional_theme,
         exported_image_urls: activeStory.exported_image_urls,
         replaceExportedImageUrls: true,
-        ...(deleteSlideNumbers.length > 0 ? { deleteSlideNumbers } : {}),
+        ...(slidePatch.deleteSlideNumbers.length > 0 ? { deleteSlideNumbers: slidePatch.deleteSlideNumbers } : {}),
       };
 
       let updatedRecord: BedtimeStoryRecord;

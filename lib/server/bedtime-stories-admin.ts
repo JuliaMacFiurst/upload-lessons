@@ -5,6 +5,7 @@ import {
   bedtimeStoryRecordSchema,
   libraryCategorySlugSchema,
   libraryContentTypeSchema,
+  localizedTextSchema,
   strictLocalizedTextSchema,
   type BedtimeStoryAsset,
   type BedtimeStoryLanguage,
@@ -208,13 +209,15 @@ export function parseBedtimeStoryJson(value: string): BedtimeStoryPayload {
   const normalizedSlides = isSlideshow
     ? slidesInput.map((slide, index) => {
         const normalized = normalizeSlide(slide, index);
-        strictLocalizedTextSchema.parse(normalized.text);
+        localizedTextSchema.parse(normalized.text);
         if (!normalized.illustration_prompt || !normalized.illustration_prompt.trim()) {
           throw new Error(`Slide ${index + 1}: illustration_prompt is required for imported JSON.`);
         }
         return normalized;
       })
-    : slidesInput
+    : contentType === "video"
+      ? []
+      : slidesInput
         .map((slide, index) => normalizeSlide(slide, index))
         .filter((s) => Boolean(s.text.en || s.text.ru || s.text.he));
   const slug = getString(record, ["slug"]) ?? slugifyStoryTitle(title.en || "bedtime-story");
