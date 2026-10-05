@@ -242,6 +242,7 @@ function languageAvailability(story: BedtimeStoryListItem) {
 }
 
 function slidesCountBadge(story: BedtimeStoryListItem) {
+  if (story.content_type === "video") return "Video";
   const count = story.slides?.length || 0;
   if (count === 1) return "1 page";
   if (count === 2) return "2 pages";
@@ -588,20 +589,23 @@ export default function BedtimeStoriesAdminPage() {
 
       const ruPage1 = getSlideImageUrl(activeStory, 1, "ru");
       const ruPage2 = getSlideImageUrl(activeStory, 2, "ru");
+      const isVideo = activeStory.content_type === "video";
 
-      const slidesPayload: BedtimeStorySlidePatch[] = [
-        {
-          slide_number: 1,
-          illustration_prompt: activeStory.slides[0]?.illustration_prompt ?? "",
-          stamp_prompt: activeStory.slides[0]?.stamp_prompt ?? "",
-          marker_prompt: activeStory.slides[0]?.marker_prompt ?? "",
-          image_url: ruPage1 || activeStory.slides[0]?.image_url || "",
-          layers: activeStory.slides[0]?.layers ?? [],
-          text: activeStory.slides[0]?.text || { ru: "", en: "", he: "" },
-        },
-      ];
+      const slidesPayload: BedtimeStorySlidePatch[] = isVideo
+        ? []
+        : [
+            {
+              slide_number: 1,
+              illustration_prompt: activeStory.slides[0]?.illustration_prompt ?? "",
+              stamp_prompt: activeStory.slides[0]?.stamp_prompt ?? "",
+              marker_prompt: activeStory.slides[0]?.marker_prompt ?? "",
+              image_url: ruPage1 || activeStory.slides[0]?.image_url || "",
+              layers: activeStory.slides[0]?.layers ?? [],
+              text: activeStory.slides[0]?.text || { ru: "", en: "", he: "" },
+            },
+          ];
 
-      if (includePage2) {
+      if (!isVideo && includePage2) {
         slidesPayload.push({
           slide_number: 2,
           illustration_prompt: activeStory.slides[1]?.illustration_prompt ?? "",
@@ -614,7 +618,7 @@ export default function BedtimeStoriesAdminPage() {
       }
 
       // If existing story had > 2 slides, preserve slides 3..N
-      if (activeStory.slides.length > 2) {
+      if (!isVideo && activeStory.slides.length > 2) {
         for (let i = 2; i < activeStory.slides.length; i++) {
           const s = activeStory.slides[i];
           slidesPayload.push({
@@ -631,7 +635,7 @@ export default function BedtimeStoriesAdminPage() {
 
       // If the author deliberately removed Page 2 on a 2-page story:
       const deleteSlideNumbers: number[] = [];
-      if (!includePage2 && activeStory.slides.some((s) => s.slide_number === 2)) {
+      if (!isVideo && !includePage2 && activeStory.slides.some((s) => s.slide_number === 2)) {
         deleteSlideNumbers.push(2);
       }
 
@@ -646,7 +650,10 @@ export default function BedtimeStoriesAdminPage() {
         is_published: targetStatus === "draft" || targetStatus === "archived" ? false : activeStory.is_published,
         publish_date: targetStatus === "draft" || targetStatus === "archived" ? null : activeStory.publish_date,
         slides: slidesPayload,
-        cover_image_url: ruPage1 || activeStory.cover_image_url || null,
+        replaceSlides: isVideo ? true : false,
+        cover_image_url: isVideo
+          ? (activeStory.media.posterUrl || activeStory.cover_image_url || null)
+          : (ruPage1 || activeStory.cover_image_url || null),
         emotional_theme: activeStory.emotional_theme,
         exported_image_urls: activeStory.exported_image_urls,
         replaceExportedImageUrls: true,
@@ -1014,11 +1021,15 @@ export default function BedtimeStoriesAdminPage() {
             <select
               className="books-input"
               value={activeStory.content_type}
-              onChange={(e) => setActiveStory((prev) => ({
-                ...prev,
-                content_type: e.target.value as BedtimeStoryRecord["content_type"],
-                category_slugs: e.target.value === "slideshow" && prev.category_slugs.length === 0 ? ["stories"] : prev.category_slugs,
-              }))}
+              onChange={(e) => {
+                const nextContentType = e.target.value as BedtimeStoryRecord["content_type"];
+                setActiveStory((prev) => ({
+                  ...prev,
+                  content_type: nextContentType,
+                  category_slugs: nextContentType === "slideshow" && prev.category_slugs.length === 0 ? ["stories"] : prev.category_slugs,
+                  slides: nextContentType === "video" ? [] : (prev.slides.length > 0 ? prev.slides : createEmptyDraft().slides),
+                }));
+              }}
             >
               <option value="slideshow">Slideshow</option>
               <option value="video">Video</option>

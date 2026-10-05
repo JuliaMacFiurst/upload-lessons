@@ -100,7 +100,8 @@ export const bedtimeStoryPayloadSchema = z.object({
   full_json: z.record(z.string(), z.unknown()).default({}),
   slides: z
     .array(bedtimeStorySlideSchema)
-    .max(10, "Instagram carousel supports up to 10 slides."),
+    .max(10, "Instagram carousel supports up to 10 slides.")
+    .default([]),
   images: z.record(z.string(), z.string()).default({}),
   cover_image_url: nullableUrlSchema,
   instagram_caption: optionalLocalizedTextSchema.default({ en: "", ru: "", he: "" }),

@@ -657,3 +657,144 @@ test("multi-language image isolation: updating images for one language preserves
   assert.equal(mergedDelete.exported_image_urls["en-02"], undefined);
   assert.equal(mergedDelete.exported_image_urls["he-02"], undefined);
 });
+
+test("Library video JSON import and schema regressions", () => {
+  // 1. video + slides: [] → PASS
+  const videoWithEmptySlidesJson = JSON.stringify({
+    slug: "moving-paper-desert",
+    status: "draft",
+    content_type: "video",
+    title: {
+      en: "Make a Moving Paper Desert",
+      ru: "Сделай движущуюся бумажную пустыню",
+      he: "יוצרים מדבר נייר שזז",
+    },
+    emotional_theme: {
+      en: "A tiny paper desert where a simple hidden mechanism makes the sun move.",
+      ru: "Маленькая бумажная пустыня, в которой простой скрытый механизм заставляет солнце двигаться.",
+      he: "מדבר נייר קטן שבו מנגנון נסתר ופשוט גורם לשמש לזוז.",
+    },
+    collection_tags: ["crafts", "science", "paper craft", "moving paper", "desert"],
+    visual_tags: ["paper desert", "layered dunes", "moving sun", "paper slider", "hands-on craft"],
+    instagram_caption: {
+      en: "Make a tiny paper desert that actually moves. Cut three wavy dune layers, hide a simple paper slider behind them, add a sun and pull. ☀️🏜️ Then see if you can make the dune sing.",
+      ru: "Сделай маленькую бумажную пустыню, которая действительно движется. Вырежи три волнистых слоя дюн, спрячь за ними простой бумажный слайдер, добавь солнце и потяни. ☀️🏜️ А потом попробуй заставить дюну петь.",
+      he: "יוצרים מדבר נייר קטן שבאמת זז. גוזרים שלוש שכבות גליות של דיונות, מחביאים מאחוריהן סליידר פשוט מנייר, מוסיפים שמש ומושכים. ☀️🏜️ ואז נסו לגרום לדיונה לשיר.",
+    },
+    hashtags: ["#papercraft", "#kidscrafts", "#craftideas", "#stemactivities", "#creativelearning", "#laplapla"],
+    slides: [],
+  });
+
+  const parsedVideo = parseBedtimeStoryJson(videoWithEmptySlidesJson);
+  assert.equal(parsedVideo.content_type, "video");
+  assert.equal(parsedVideo.slug, "moving-paper-desert");
+  assert.deepEqual(parsedVideo.slides, []);
+  assert.deepEqual(parsedVideo.category_slugs, ["crafts", "science"]);
+  assert.equal(parsedVideo.title.ru, "Сделай движущуюся бумажную пустыню");
+
+  // 2. video without slides field → PASS
+  const videoWithoutSlidesJson = JSON.stringify({
+    slug: "video-no-slides",
+    content_type: "video",
+    title: { en: "No Slides Video", ru: "Видео без слайдов", he: "וידאו ללא שקופיות" },
+  });
+  const parsedWithoutSlides = parseBedtimeStoryJson(videoWithoutSlidesJson);
+  assert.equal(parsedWithoutSlides.content_type, "video");
+  assert.deepEqual(parsedWithoutSlides.slides, []);
+
+  // 3. video does NOT get slides.0.text error
+  const videoWithDummySlideJson = JSON.stringify({
+    slug: "video-dummy-slide",
+    content_type: "video",
+    title: { en: "Dummy Slide Video", ru: "Видео с фиктивным слайдом", he: "וידאו" },
+    slides: [{}],
+  });
+  const parsedDummy = parseBedtimeStoryJson(videoWithDummySlideJson);
+  assert.equal(parsedDummy.content_type, "video");
+  assert.deepEqual(parsedDummy.slides, []);
+
+  // 4. imported video gets content_type = "video" in payload and schema
+  assert.equal(parsedVideo.content_type, "video");
+  const validatedPayload = bedtimeStoryPayloadSchema.parse(parsedVideo);
+  assert.equal(validatedPayload.content_type, "video");
+  assert.deepEqual(validatedPayload.slides, []);
+
+  // 5. old JSON without content_type defaults to "slideshow"
+  const oldJson = JSON.stringify({
+    slug: "classic-story",
+    title: { en: "Classic Story", ru: "Классическая история", he: "סיפור קלאסי" },
+    slides: [
+      {
+        slide_number: 1,
+        text: { en: "A quiet night.", ru: "Тихая ночь.", he: "לילה שקט." },
+        illustration_prompt: "soft moonlit landscape",
+      },
+    ],
+  });
+  const parsedOld = parseBedtimeStoryJson(oldJson);
+  assert.equal(parsedOld.content_type, "slideshow");
+  assert.equal(parsedOld.slides.length, 1);
+
+  // 6. slideshow with valid slides → PASS
+  assert.equal(parsedOld.slides[0].text.ru, "Тихая ночь.");
+
+  // 7. slideshow with missing / empty slides → throws previous error
+  const slideshowEmptySlides = JSON.stringify({
+    slug: "slideshow-empty",
+    title: { en: "Empty Slideshow", ru: "Пустое слайдшоу", he: "מצגת ריקה" },
+    slides: [],
+  });
+  assert.throws(() => parseBedtimeStoryJson(slideshowEmptySlides), /Bedtime story must contain at least 1 slide/);
+
+  const slideshowMissingText = JSON.stringify({
+    slug: "slideshow-missing-text",
+    title: { en: "Missing Text", ru: "Без текста", he: "חסר טקסט" },
+    slides: [
+      {
+        slide_number: 1,
+        text: { en: "", ru: "", he: "" },
+        illustration_prompt: "moon",
+      },
+    ],
+  });
+  assert.throws(() => parseBedtimeStoryJson(slideshowMissingText), /English text is required/);
+
+  // 8. Updating existing video story preserves slides: [] and updates without slides.0.text error
+  const existingVideoStory: BedtimeStoryRecord = {
+    id: "f3c830a1-4321-4def-9876-0123456789ab",
+    slug: "moving-paper-desert",
+    status: "draft",
+    title: { en: "Make a Moving Paper Desert", ru: "Сделай движущуюся бумажную пустыню", he: "יוצרים מדבר נייר שזז" },
+    description: { en: "Desert craft", ru: "Поделка пустыня", he: "יצירת מדבר" },
+    content_type: "video",
+    media: { url: "", posterUrl: "", mimeType: "" },
+    category_slugs: ["crafts", "science"],
+    emotional_theme: { en: "A tiny desert", ru: "Маленькая пустыня", he: "מדבר קטן" },
+    full_json: {},
+    slides: [],
+    images: {},
+    cover_image_url: null,
+    instagram_caption: { en: "", ru: "", he: "" },
+    instagram_hashtags: [],
+    collection_tags: ["crafts", "science"],
+    visual_tags: [],
+    stamp_assets: [],
+    marker_assets: [],
+    exported_image_urls: {},
+    publish_date: null,
+    is_published: false,
+    created_at: null,
+    updated_at: null,
+  };
+
+  const videoPatch: BedtimeStoryPatch = {
+    slides: [],
+    replaceSlides: true,
+    status: "draft",
+  };
+  const mergedVideo = mergeBedtimeStoryPatch(existingVideoStory, videoPatch);
+  assert.equal(mergedVideo.content_type, "video");
+  assert.deepEqual(mergedVideo.slides, []);
+  const parsedMergedVideo = bedtimeStoryPayloadSchema.parse(mergedVideo);
+  assert.deepEqual(parsedMergedVideo.slides, []);
+});

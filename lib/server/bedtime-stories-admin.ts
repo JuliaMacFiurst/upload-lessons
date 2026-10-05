@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   bedtimeStoryPayloadSchema,
   bedtimeStoryRecordSchema,
+  libraryCategorySlugSchema,
+  libraryContentTypeSchema,
   strictLocalizedTextSchema,
   type BedtimeStoryAsset,
   type BedtimeStoryLanguage,
@@ -12,6 +14,8 @@ import {
   type BedtimeStoryRecord,
   type BedtimeStorySlide,
   type BedtimeStorySlidePatch,
+  type LibraryCategorySlug,
+  type LibraryContentType,
 } from "../bedtime-stories/types.ts";
 import { withBedtimeStoryIllustrationTechnicalSuffix } from "../bedtime-stories/illustration-prompt.ts";
 import { deletePublicR2Object, listAllPublicR2ObjectKeys, parsePublicR2ObjectKey, publicR2ObjectUrl } from "./r2-storage.ts";
@@ -191,18 +195,28 @@ export function parseBedtimeStoryJson(value: string): BedtimeStoryPayload {
   const rawTitle = localizedText(record.title, true);
   const title = strictLocalizedTextSchema.parse(rawTitle);
 
+  const rawContentType = getString(record, ["content_type", "contentType"]);
+  const contentType: LibraryContentType = libraryContentTypeSchema.safeParse(rawContentType).success
+    ? (rawContentType as LibraryContentType)
+    : "slideshow";
+  const isSlideshow = contentType === "slideshow";
+
   const slidesInput = Array.isArray(record.slides) ? record.slides : [];
-  if (slidesInput.length === 0) {
+  if (isSlideshow && slidesInput.length === 0) {
     throw new Error("Bedtime story must contain at least 1 slide.");
   }
-  const normalizedSlides = slidesInput.map((slide, index) => {
-    const normalized = normalizeSlide(slide, index);
-    strictLocalizedTextSchema.parse(normalized.text);
-    if (!normalized.illustration_prompt || !normalized.illustration_prompt.trim()) {
-      throw new Error(`Slide ${index + 1}: illustration_prompt is required for imported JSON.`);
-    }
-    return normalized;
-  });
+  const normalizedSlides = isSlideshow
+    ? slidesInput.map((slide, index) => {
+        const normalized = normalizeSlide(slide, index);
+        strictLocalizedTextSchema.parse(normalized.text);
+        if (!normalized.illustration_prompt || !normalized.illustration_prompt.trim()) {
+          throw new Error(`Slide ${index + 1}: illustration_prompt is required for imported JSON.`);
+        }
+        return normalized;
+      })
+    : slidesInput
+        .map((slide, index) => normalizeSlide(slide, index))
+        .filter((s) => Boolean(s.text.en || s.text.ru || s.text.he));
   const slug = getString(record, ["slug"]) ?? slugifyStoryTitle(title.en || "bedtime-story");
   const images: Record<string, string> = {};
   normalizedSlides.forEach((slide) => {
@@ -211,16 +225,22 @@ export function parseBedtimeStoryJson(value: string): BedtimeStoryPayload {
     }
   });
 
+  const explicitCategories = getStringArray(record, ["category_slugs", "categorySlugs", "categories"]);
+  const derivedCategories = explicitCategories.length
+    ? explicitCategories
+    : getStringArray(record, ["collection_tags", "collectionTags"]).filter((slug): slug is LibraryCategorySlug =>
+        libraryCategorySlugSchema.safeParse(slug).success,
+      );
+  const category_slugs = derivedCategories.length ? derivedCategories : ["stories"];
+
   return bedtimeStoryPayloadSchema.parse({
     slug,
     status: getString(record, ["status"]) ?? "draft",
     title: localizedText(record.title, true),
-    description: localizedText(record.description, false),
-    content_type: getString(record, ["content_type", "contentType"]) ?? "slideshow",
+    description: localizedText(record.description ?? record.emotional_theme ?? record.theme, false),
+    content_type: contentType,
     media: record.media && typeof record.media === "object" && !Array.isArray(record.media) ? record.media : {},
-    category_slugs: getStringArray(record, ["category_slugs", "categorySlugs"]).length
-      ? getStringArray(record, ["category_slugs", "categorySlugs"])
-      : ["stories"],
+    category_slugs,
     emotional_theme: localizedText(record.emotional_theme ?? record.theme, false),
     full_json: record,
     slides: normalizedSlides,
@@ -449,36 +469,41 @@ export function mergeBedtimeStoryPatch(
   }
 
   let slides: BedtimeStorySlide[];
-  if (patch.replaceSlides && Array.isArray(patch.slides) && patch.slides.length > 0) {
-    // Explicit replacement: patch.slides defines the full set of slides.
-    const existingByNumber = new Map<number, BedtimeStorySlide>();
-    baseSlides.forEach((s) => existingByNumber.set(s.slide_number, s));
+  if (patch.replaceSlides && Array.isArray(patch.slides)) {
+    if (patch.slides.length === 0) {
+      slides = [];
+    } else {
+      const existingByNumber = new Map<number, BedtimeStorySlide>();
+      baseSlides.forEach((s) => existingByNumber.set(s.slide_number, s));
 
-    slides = patch.slides.map((s, idx) => {
-      const slideNum = s.slide_number ?? idx + 1;
-      const ex = existingByNumber.get(slideNum);
-      return {
-        slide_number: slideNum,
-        text: { en: "", ru: "", he: "", ...(ex?.text ?? {}), ...(s.text ?? {}) },
-        illustration_prompt: s.illustration_prompt !== undefined
-          ? s.illustration_prompt
-          : (ex?.illustration_prompt ?? ""),
-        stamp_prompt: s.stamp_prompt !== undefined
-          ? s.stamp_prompt
-          : (ex?.stamp_prompt ?? ""),
-        marker_prompt: s.marker_prompt !== undefined
-          ? s.marker_prompt
-          : (ex?.marker_prompt ?? ""),
-        image_url: s.image_url !== undefined
-          ? s.image_url
-          : (ex?.image_url ?? ""),
-        layers: s.layers && s.layers.length > 0
-          ? s.layers
-          : (ex?.layers ?? []),
-      };
-    });
+      slides = patch.slides.map((s, idx) => {
+        const slideNum = s.slide_number ?? idx + 1;
+        const ex = existingByNumber.get(slideNum);
+        return {
+          slide_number: slideNum,
+          text: { en: "", ru: "", he: "", ...(ex?.text ?? {}), ...(s.text ?? {}) },
+          illustration_prompt: s.illustration_prompt !== undefined
+            ? s.illustration_prompt
+            : (ex?.illustration_prompt ?? ""),
+          stamp_prompt: s.stamp_prompt !== undefined
+            ? s.stamp_prompt
+            : (ex?.stamp_prompt ?? ""),
+          marker_prompt: s.marker_prompt !== undefined
+            ? s.marker_prompt
+            : (ex?.marker_prompt ?? ""),
+          image_url: s.image_url !== undefined
+            ? s.image_url
+            : (ex?.image_url ?? ""),
+          layers: s.layers && s.layers.length > 0
+            ? s.layers
+            : (ex?.layers ?? []),
+        };
+      });
+    }
   } else if (!patch.slides || !Array.isArray(patch.slides) || patch.slides.length === 0) {
-    slides = baseSlides;
+    slides = content_type === "video" && Array.isArray(patch.slides) && patch.slides.length === 0
+      ? []
+      : baseSlides;
   } else {
     // Non-destructive slide merging:
     // Update matching slides, keep all untouched existing slides (especially 2..10).
