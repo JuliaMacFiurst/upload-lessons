@@ -4,12 +4,14 @@ import {
   deleteBedtimeStory,
   handleBedtimeStoryValidationError,
   loadBedtimeStory,
+  publishBedtimeStory,
   updateBedtimeStory,
 } from "../../../../lib/server/bedtime-stories-admin";
 import type { BedtimeStoryPatch } from "../../../../lib/bedtime-stories/types";
 
 type SaveBody = {
   story?: BedtimeStoryPatch;
+  action?: "publish";
 };
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -58,7 +60,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: "Missing bedtime story payload." });
     }
 
-    const story = await updateBedtimeStory(supabase, storyId, body.story);
+    const story = body.action === "publish"
+      ? await publishBedtimeStory(supabase, storyId, body.story)
+      : await updateBedtimeStory(supabase, storyId, body.story);
     return res.status(200).json({ ok: true, story });
   } catch (error) {
     const normalized = handleBedtimeStoryValidationError(error);

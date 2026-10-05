@@ -18,6 +18,12 @@ import {
   type LibraryCategorySlug,
   type LibraryContentType,
 } from "../bedtime-stories/types.ts";
+import {
+  canonicalLibraryPublicationFields,
+  getLibraryPublicationStateError,
+  getLibraryPublishError,
+  isLibraryEditorialStatus,
+} from "../bedtime-stories/publication.ts";
 import { withBedtimeStoryIllustrationTechnicalSuffix } from "../bedtime-stories/illustration-prompt.ts";
 import { deletePublicR2Object, listAllPublicR2ObjectKeys, parsePublicR2ObjectKey, publicR2ObjectUrl } from "./r2-storage.ts";
 
@@ -25,6 +31,13 @@ const LANGUAGES: BedtimeStoryLanguage[] = ["en", "ru", "he"];
 const BEDTIME_STAMP_PREFIX = "bedtime_story/stamps/";
 const STAMP_IMAGE_EXTENSIONS = new Set(["apng", "avif", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
 const DEFAULT_STAMP_PROMPT = "Natural ink stamp impression on watercolor paper, slightly aged, softly blurred, transparent background, containing one recognizable detail from a specific story.";
+
+export class LibraryValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "LibraryValidationError";
+  }
+}
 
 export type BedtimeStampAssetRecord = {
   id: string;
@@ -130,19 +143,43 @@ function rowToRecord(row: unknown): BedtimeStoryRecord {
 
 function validateLibraryItem(payload: BedtimeStoryPayload) {
   if (payload.content_type === "slideshow" && payload.slides.length === 0) {
-    throw new Error("Slideshow content must contain at least 1 slide.");
+    throw new LibraryValidationError("Slideshow content must contain at least 1 slide.");
   }
   if ((payload.content_type === "video" || payload.content_type === "image") && !payload.media.url) {
-    if (payload.status !== "draft") throw new Error(`${payload.content_type} content requires uploaded media before publishing.`);
+    if (payload.status !== "draft") throw new LibraryValidationError(`${payload.content_type} content requires uploaded media before publishing.`);
   }
   if (payload.content_type === "video" && payload.media.url && payload.media.mimeType !== "video/mp4") {
-    throw new Error("Video media must be an MP4 file.");
+    throw new LibraryValidationError("Video media must be an MP4 file.");
   }
   if (payload.status !== "draft" && payload.status !== "archived") {
     for (const language of LANGUAGES) {
-      if (!payload.description[language]?.trim()) throw new Error(`Description is required in ${language.toUpperCase()} before publishing.`);
+      if (!payload.description[language]?.trim()) throw new LibraryValidationError(`Description is required in ${language.toUpperCase()} before publishing.`);
     }
   }
+  const publicationStateError = getLibraryPublicationStateError(payload);
+  if (publicationStateError) throw new LibraryValidationError(publicationStateError);
+  if (payload.status === "exported" || (payload.status === "published" && payload.is_published)) {
+    const publishError = getLibraryPublishError(payload);
+    if (publishError) throw new LibraryValidationError(publishError);
+  }
+}
+
+export function assertOrdinaryLibrarySaveAllowed(
+  existing: BedtimeStoryRecord,
+  patch: BedtimeStoryPatch,
+  merged: BedtimeStoryPayload,
+) {
+  if (patch.status && !isLibraryEditorialStatus(patch.status) && patch.status !== existing.status) {
+    throw new LibraryValidationError("Public Library statuses can only be set by Publish Library Item.");
+  }
+  if (patch.is_published === true && !existing.is_published) {
+    throw new LibraryValidationError("is_published can only be enabled by Publish Library Item.");
+  }
+  if (patch.publish_date && patch.publish_date !== existing.publish_date) {
+    throw new LibraryValidationError("publish_date can only be set by Publish Library Item.");
+  }
+  const publicationStateError = getLibraryPublicationStateError(merged);
+  if (publicationStateError) throw new LibraryValidationError(publicationStateError);
 }
 
 async function loadCategorySlugs(supabase: SupabaseClient, storyId: string) {
@@ -371,6 +408,9 @@ export async function loadBedtimeStory(supabase: SupabaseClient, storyId: string
 
 export async function createBedtimeStory(supabase: SupabaseClient, payload: BedtimeStoryPayload): Promise<BedtimeStoryRecord> {
   const parsed = bedtimeStoryPayloadSchema.parse(payload);
+  if (!isLibraryEditorialStatus(parsed.status)) {
+    throw new LibraryValidationError("New Library items must start as draft or archived. Use Publish Library Item to publish.");
+  }
   validateLibraryItem(parsed);
   await ensureUniqueSlug(supabase, parsed.slug);
   const { data, error } = await supabase
@@ -614,6 +654,7 @@ export async function updateBedtimeStory(
   const existing = await loadBedtimeStory(supabase, storyId);
   const merged = mergeBedtimeStoryPatch(existing, payload);
   const parsed = bedtimeStoryPayloadSchema.parse(merged);
+  assertOrdinaryLibrarySaveAllowed(existing, payload, parsed);
   validateLibraryItem(parsed);
   await ensureUniqueSlug(supabase, parsed.slug, storyId);
   const { error } = await supabase
@@ -628,6 +669,34 @@ export async function updateBedtimeStory(
 
   await syncCategorySlugs(supabase, storyId, parsed.category_slugs);
 
+  return loadBedtimeStory(supabase, storyId);
+}
+
+export async function publishBedtimeStory(
+  supabase: SupabaseClient,
+  storyId: string,
+  payload: BedtimeStoryPatch,
+  now = new Date(),
+): Promise<BedtimeStoryRecord> {
+  const existing = await loadBedtimeStory(supabase, storyId);
+  const prepared = mergeBedtimeStoryPatch(existing, payload);
+  const merged = mergeBedtimeStoryPatch(existing, {
+    ...payload,
+    ...canonicalLibraryPublicationFields(prepared, now),
+  });
+  const parsed = bedtimeStoryPayloadSchema.parse(merged);
+  const publishError = getLibraryPublishError(parsed);
+  if (publishError) throw new LibraryValidationError(publishError);
+  validateLibraryItem(parsed);
+  await ensureUniqueSlug(supabase, parsed.slug, storyId);
+
+  const { error } = await supabase
+    .from("bedtime_stories")
+    .update(dbPayload(parsed))
+    .eq("id", storyId);
+  if (error) throw new Error(`Failed to publish Library item: ${error.message}`);
+
+  await syncCategorySlugs(supabase, storyId, parsed.category_slugs);
   return loadBedtimeStory(supabase, storyId);
 }
 
@@ -856,6 +925,13 @@ export function handleBedtimeStoryValidationError(error: unknown) {
         error: error.issues[0]?.message ?? "Validation failed.",
         issues: error.issues,
       },
+    };
+  }
+
+  if (error instanceof LibraryValidationError) {
+    return {
+      status: 400,
+      body: { error: error.message },
     };
   }
 
