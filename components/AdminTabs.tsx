@@ -16,6 +16,7 @@ export function AdminTabs() {
     { href: "/admin/upload-video", label: "Видео" },
     { href: "/admin/translations", label: "Переводы" },
     { href: "/admin/analytics", label: "Analytics" },
+    { href: "/admin/commerce", label: "Commerce" },
     { href: "/admin/cat-questions", label: "Вопросы" },
     { href: "/admin/books", label: "Книги" },
     { href: "/admin/story-builder", label: "Истории" },
@@ -41,11 +42,12 @@ export function AdminTabs() {
             (tab.href === "/admin/story-submissions" && router.pathname.startsWith("/admin/story-submissions")) ||
             (tab.href === "/admin/quests" && router.pathname.startsWith("/admin/quests")) ||
             (tab.href === "/admin/analytics" && router.pathname.startsWith("/admin/analytics"));
+          const commerceActive = tab.href === "/admin/commerce" && router.pathname.startsWith("/admin/commerce");
 
           return (
             <Link key={tab.href} href={tab.href} legacyBehavior>
               <a
-                className={`admin-tabs__link ${isActive ? "admin-tabs__link--active" : ""}`}
+                className={`admin-tabs__link ${isActive || commerceActive ? "admin-tabs__link--active" : ""}`}
               >
                 {tab.label}
               </a>

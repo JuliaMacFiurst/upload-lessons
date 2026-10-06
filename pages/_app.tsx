@@ -8,6 +8,7 @@ import '../styles/admin-books.css';
 import '../styles/admin-story-submissions.css';
 import '../styles/admin-analytics.css';
 import '../styles/ai-drafts.css';
+import '../styles/admin-commerce.css';
 import { SessionContextProvider } from '@supabase/auth-helpers-react'
 import { createPagesBrowserClient } from '@supabase/auth-helpers-nextjs'
 import { useState } from 'react'

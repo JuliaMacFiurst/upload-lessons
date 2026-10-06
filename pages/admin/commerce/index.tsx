@@ -1,0 +1,36 @@
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/router";
+import { useSession } from "@supabase/auth-helpers-react";
+import { AdminLogout } from "../../../components/AdminLogout";
+import { AdminTabs } from "../../../components/AdminTabs";
+import type { CommerceListResponse } from "../../../lib/commerce-admin";
+
+const one = (value: string | string[] | undefined) => typeof value === "string" ? value : "";
+const money = (minor: number, currency: string) => new Intl.NumberFormat("he-IL", { style: "currency", currency }).format(minor / 100);
+const Status = ({ value }: { value: string }) => <span className={`commerce-status commerce-status--${["paid", "active", "ok", "live"].includes(value) ? "good" : ["failed", "needs_review", "revoked", "refunded"].includes(value) ? "bad" : "neutral"}`}>{value.replaceAll("_", " ")}</span>;
+
+export default function CommercePage() {
+  const router = useRouter(); const session = useSession();
+  const [data, setData] = useState<CommerceListResponse | null>(null); const [error, setError] = useState(""); const [search, setSearch] = useState("");
+  const query = useMemo(() => { const p = new URLSearchParams(); ["page", "status", "access", "priceSource", "reviewState", "environment", "search"].forEach((key) => { const value = one(router.query[key]); if (value) p.set(key, value); }); return p.toString(); }, [router.query]);
+  useEffect(() => setSearch(one(router.query.search)), [router.query.search]);
+  useEffect(() => { if (!session || !router.isReady) return; const controller = new AbortController(); setData(null); setError(""); fetch(`/api/admin/commerce/orders${query ? `?${query}` : ""}`, { credentials: "include", cache: "no-store", signal: controller.signal }).then(async (response) => { if (!response.ok) throw new Error(response.status === 403 ? "Нет доступа к Commerce." : `Не удалось загрузить заказы (${response.status}).`); return response.json() as Promise<CommerceListResponse>; }).then(setData).catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Ошибка загрузки"); }); return () => controller.abort(); }, [query, router.isReady, session]);
+  const filter = (key: string, value: string) => { const next = { ...router.query }; if (value) next[key] = value; else delete next[key]; if (key !== "page") delete next.page; void router.push({ pathname: router.pathname, query: next }); };
+  const submit = (event: FormEvent) => { event.preventDefault(); filter("search", search.trim()); };
+  if (!session) return <div className="commerce-page"><p className="commerce-notice">Admin session required. <Link href="/login?next=%2Fadmin%2Fcommerce">Войти</Link></p></div>;
+  if (!data) return <div className="commerce-page"><p className={`commerce-notice ${error ? "commerce-notice--error" : ""}`} role={error ? "alert" : undefined}>{error || "Проверяем admin access…"}</p></div>;
+  return <div className="commerce-page"><div className="admin-top-bar"><div className="admin-top-bar__row admin-top-bar__row--right"><AdminLogout /></div><div className="admin-top-bar__row"><AdminTabs /></div></div>
+    <header className="commerce-header"><div><h1>Commerce</h1><p>Заказы, оплаты и доступ к продуктам.</p></div><span className="commerce-readonly">Read only</span></header>
+    <><section className="commerce-counters"><article><b>{data.counters.paid}</b><span>Paid</span></article><article><b>{data.counters.pending}</b><span>Pending (no warning)</span></article><article><b>{data.counters.needsReview}</b><span>Needs review</span></article><article><b>{data.counters.livePaid}</b><span>Live paid</span></article><article><b>{data.counters.sandboxPaid}</b><span>Sandbox paid</span></article><article><b>{data.counters.unknownPaid}</b><span>Unknown paid</span></article></section>
+      <p className="commerce-notice">Revenue скрыта: список ограничен {data.boundedScanLimit} заказами. Sandbox и Unknown никогда не считаются Live revenue.</p>
+      <section className="commerce-filters"><form onSubmit={submit}><label htmlFor="commerce-search">Поиск</label><div className="commerce-search-control"><input id="commerce-search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Email или order reference"/><button type="submit">Найти</button></div></form>
+        <label>Статус<select value={one(router.query.status)} onChange={(e) => filter("status", e.target.value)}><option value="">Все</option><option value="paid">Paid</option><option value="pending_approval">Pending approval</option><option value="capture_pending">Capture pending</option><option value="failed">Failed</option></select></label>
+        <label>Доступ<select value={one(router.query.access)} onChange={(e) => filter("access", e.target.value)}><option value="">Все</option><option value="active">Active</option><option value="revoked">Revoked</option><option value="none">No access</option></select></label>
+        <label>Цена<select value={one(router.query.priceSource)} onChange={(e) => filter("priceSource", e.target.value)}><option value="">Все</option><option value="catalog">Catalog</option><option value="preorder">Preorder</option></select></label>
+        <label>Среда<select value={one(router.query.environment)} onChange={(e) => filter("environment", e.target.value)}><option value="">Все</option><option value="live">Live</option><option value="sandbox">Sandbox</option><option value="unknown">Unknown</option></select></label>
+        <label>Review<select value={one(router.query.reviewState)} onChange={(e) => filter("reviewState", e.target.value)}><option value="">Все</option><option value="ok">OK</option><option value="pending">Pending</option><option value="needs_review">Needs review</option></select></label></section>
+      {data.orders.length ? <div className="commerce-table-wrap"><table className="commerce-table"><thead><tr><th>Дата</th><th>Customer</th><th>Product</th><th>Amount</th><th>Payment</th><th>Provider</th><th>Price</th><th>Access</th><th>Review</th></tr></thead><tbody>{data.orders.map((order) => <tr key={order.id}><td><Link href={`/admin/commerce/orders/${order.id}`}>{new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(order.createdAt))}</Link></td><td><strong>{order.customer.name ?? "Name not collected"}</strong><span>{order.customer.email ?? "Email unavailable"}</span>{order.customer.emailSource === "current_auth_fallback" ? <small>Current Auth fallback</small> : null}</td><td>{order.item.productName}</td><td>{money(order.totalMinor, order.currency)}</td><td><Status value={order.status}/></td><td>PayPal <Status value={order.environment}/></td><td>{order.item.priceSource}</td><td>{order.entitlement ? <Status value={order.entitlement.status}/> : "No access"}</td><td><Status value={order.reviewState}/></td></tr>)}</tbody></table></div> : <p className="commerce-notice">Заказы не найдены.</p>}
+      <nav className="commerce-pagination"><button disabled={data.page <= 1} onClick={() => filter("page", String(data.page - 1))}>Назад</button><span>{data.page} / {data.totalPages}</span><button disabled={data.page >= data.totalPages} onClick={() => filter("page", String(data.page + 1))}>Дальше</button></nav></>
+  </div>;
+}

@@ -1,0 +1,30 @@
+import { useEffect, useState } from "react";
+import Link from "next/link";
+import { useRouter } from "next/router";
+import { useSession } from "@supabase/auth-helpers-react";
+import { AdminLogout } from "../../../../components/AdminLogout";
+import { AdminTabs } from "../../../../components/AdminTabs";
+import type { CommerceOrderDetail } from "../../../../lib/commerce-admin";
+const money = (minor: number, currency: string) => new Intl.NumberFormat("he-IL", { style: "currency", currency }).format(minor / 100);
+const date = (value: string | null) => value ? new Intl.DateTimeFormat("ru-RU", { dateStyle: "medium", timeStyle: "short" }).format(new Date(value)) : "—";
+const Field = ({ label, children }: { label: string; children: React.ReactNode }) => <div className="commerce-field"><dt>{label}</dt><dd>{children}</dd></div>;
+const Status = ({ value }: { value: string }) => <span className="commerce-status">{value.replaceAll("_", " ")}</span>;
+export default function CommerceOrderPage() {
+  const router = useRouter(); const session = useSession(); const id = typeof router.query.orderId === "string" ? router.query.orderId : null;
+  const [order, setOrder] = useState<CommerceOrderDetail | null>(null); const [error, setError] = useState("");
+  useEffect(() => { if (!session || !id) return; const controller = new AbortController(); fetch(`/api/admin/commerce/orders/${encodeURIComponent(id)}`, { credentials: "include", cache: "no-store", signal: controller.signal }).then(async (response) => { if (!response.ok) throw new Error(response.status === 404 ? "Заказ не найден." : "Не удалось загрузить заказ."); return response.json() as Promise<CommerceOrderDetail>; }).then(setOrder).catch((cause) => { if (!controller.signal.aborted) setError(cause instanceof Error ? cause.message : "Ошибка"); }); return () => controller.abort(); }, [id, session]);
+  if (!session) return <div className="commerce-page"><p className="commerce-notice">Admin session required. <Link href={`/login?next=${encodeURIComponent(id ? `/admin/commerce/orders/${id}` : "/admin/commerce")}`}>Войти</Link></p></div>;
+  if (!order) return <div className="commerce-page"><p role={error ? "alert" : undefined} className={`commerce-notice ${error ? "commerce-notice--error" : ""}`}>{error || "Проверяем admin access…"}</p></div>;
+  return <div className="commerce-page"><div className="admin-top-bar"><div className="admin-top-bar__row admin-top-bar__row--right"><AdminLogout/></div><div className="admin-top-bar__row"><AdminTabs/></div></div><Link href="/admin/commerce">← Все заказы</Link><main className="commerce-detail"><header className="commerce-header"><div><span>Order</span><h1>{order.item.productName}</h1></div><Status value={order.reviewState}/></header>
+    {order.reviewReasons.length ? <section className="commerce-warning"><h2>Review required</h2><ul>{order.reviewReasons.map((x) => <li key={x}>{x.replaceAll("_", " ")}</li>)}</ul></section> : null}
+    <section><h2>Customer</h2><dl><Field label="Name">{order.customer.name ?? "Name not collected"}</Field><Field label="Email">{order.customer.email ?? "Email unavailable"}{order.customer.emailSource === "current_auth_fallback" ? " (current Auth fallback; not snapshot)" : ""}</Field></dl></section>
+    <section><h2>Payment</h2><dl><Field label="Amount">{money(order.totalMinor, order.currency)}</Field><Field label="Status"><Status value={order.status}/></Field><Field label="Provider">PayPal</Field><Field label="Environment"><Status value={order.environment}/></Field><Field label="Created">{date(order.createdAt)}</Field><Field label="Paid">{date(order.paidAt)}</Field>{order.failureCode ? <Field label="Failure">{order.failureCode}</Field> : null}</dl></section>
+    <section><h2>Product</h2><dl><Field label="Product">{order.item.productName}</Field><Field label="Quantity">{order.item.quantity}</Field><Field label="Unit price">{money(order.item.unitPriceMinor, order.currency)}</Field><Field label="Line total">{money(order.item.lineTotalMinor, order.currency)}</Field><Field label="Price source">{order.item.priceSource}</Field>{order.item.offerCode ? <Field label="Offer">{order.item.offerCode}</Field> : null}</dl></section>
+    <section><h2>Access</h2>{order.entitlement ? <dl><Field label="Status"><Status value={order.entitlement.status}/></Field><Field label="Source">{order.entitlement.source}</Field><Field label="Granted">{date(order.entitlement.grantedAt)}</Field></dl> : <p>No entitlement linked.</p>}</section>
+    <section><h2>Preorder evidence</h2><p>{order.item.priceSource === "preorder" ? `Immutable preorder snapshot${order.item.offerCode ? `: ${order.item.offerCode}` : ""}.` : "Catalog price snapshot."}</p></section>
+    <section><h2>Provider / webhook events</h2>{order.events.length ? <ol className="commerce-events">{order.events.map((event) => <li key={event.id}><strong>{event.eventType}</strong> <Status value={event.status}/><span>Received {date(event.receivedAt)} · Processed {date(event.processedAt)}</span>{event.failureCode ? <span>Failure: {event.failureCode}</span> : null}</li>)}</ol> : <p>No matching events.</p>}</section>
+    <section><h2>Personalization</h2><p>{order.personalization.exists ? `Exists · locale ${order.personalization.locale ?? "unknown"} · updated ${date(order.personalization.updatedAt)}` : "Does not exist"}</p><small>Names and participants are intentionally hidden.</small></section>
+    <section><h2>Receipt</h2><p>Not tracked in LapLapLa yet. Official receipts will be issued through Takbull.</p></section>
+    <details><summary>Technical details</summary><dl><Field label="Order ID"><code>{order.id}</code></Field><Field label="Customer ID"><code>{order.customer.id}</code></Field><Field label="Provider order"><code>{order.providerOrderId ?? "—"}</code></Field><Field label="Provider capture"><code>{order.providerCaptureId ?? "—"}</code></Field><Field label="Item ID"><code>{order.item.id}</code></Field>{order.entitlement ? <Field label="Entitlement ID"><code>{order.entitlement.id}</code></Field> : null}</dl></details>
+  </main></div>;
+}
