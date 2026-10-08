@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { deriveReview, mapCommerceOrder, matchesCommerceFilters, normalizeCommerceFilters } from "../lib/server/commerce-admin.ts";
+import { deriveOperationalProblems, deriveReceiptState, deriveReview, mapCommerceOrder, matchesCommerceFilters, normalizeCommerceFilters } from "../lib/server/commerce-admin.ts";
 
 function row(overrides: Record<string, unknown> = {}) {
   return {
@@ -63,4 +63,36 @@ test("Commerce search resists global full-width button styles and explains pendi
   assert.match(styles, /\.commerce-search-control\s*\{[^}]*display:\s*flex;[^}]*min-width:\s*0;/);
   assert.match(styles, /\.commerce-filters input\s*\{[^}]*flex:\s*1 1 auto;/);
   assert.match(styles, /\.commerce-filters button\s*\{[^}]*width:\s*auto;[^}]*flex:\s*0 0 auto;/);
+});
+
+test("receipt eligibility remains truthful for Live, Sandbox, legacy, and unpaid orders", () => {
+  const live = mapCommerceOrder(row({ provider_environment: "live" }) as never, null); assert.ok(live);
+  const sandbox = mapCommerceOrder(row() as never, null); assert.ok(sandbox);
+  const legacy = mapCommerceOrder(row({ provider_environment: null }) as never, null); assert.ok(legacy);
+  assert.equal(deriveReceiptState(live, false), "expected_missing");
+  assert.equal(deriveReceiptState(sandbox, false), "not_eligible");
+  assert.equal(deriveReceiptState(legacy, false), "legacy_unknown");
+  assert.equal(deriveReceiptState({ ...live, status: "capture_pending" }, false), "not_paid");
+  assert.equal(deriveReceiptState(live, true), "issued");
+});
+
+test("operational problems distinguish healthy, missing, failed, and legacy states", () => {
+  const healthy = mapCommerceOrder(row({ provider_environment: "live" }) as never, null); assert.ok(healthy);
+  const ready = { original: { status: "ready" as const }, copy: { status: "ready" as const } };
+  assert.deepEqual(deriveOperationalProblems({ order: healthy, receiptState: "issued", artifacts: ready, notificationStatus: "sent", failedProviderEvents: false }), []);
+  assert.deepEqual(deriveOperationalProblems({ order: { ...healthy, entitlement: null }, receiptState: "expected_missing", artifacts: ready, notificationStatus: "failed", failedProviderEvents: true }).map((x) => x.code), ["paid_without_entitlement", "live_receipt_missing", "purchase_notification_failed", "provider_event_failed"]);
+  assert.deepEqual(deriveOperationalProblems({ order: healthy, receiptState: "issued", artifacts: { original: { status: "missing" }, copy: { status: "failed" } }, notificationStatus: "sent", failedProviderEvents: false }).map((x) => x.code), ["original_artifact_missing", "copy_artifact_failed"]);
+  const legacy = { ...healthy, environment: "unknown" as const };
+  const legacyProblems = deriveOperationalProblems({ order: legacy, receiptState: "legacy_unknown", artifacts: ready, notificationStatus: "not_registered", failedProviderEvents: false });
+  assert.deepEqual(legacyProblems, [{ code: "legacy_unknown_environment", label: "Legacy order: accounting automation is intentionally disabled", severity: "info" }]);
+});
+
+test("Commerce detail renders receipt operations without Takbull or mutation controls", async () => {
+  const ui = await readFile(new URL("../pages/admin/commerce/orders/[orderId].tsx", import.meta.url), "utf8");
+  assert.match(ui, /Customer original · מקור/);
+  assert.match(ui, /Business copy · העתק/);
+  assert.match(ui, /Operational problems/);
+  assert.match(ui, /Internal purchase notification/);
+  assert.doesNotMatch(ui, /Takbull/i);
+  assert.doesNotMatch(ui, /Mark paid|Issue receipt|Retry artifact|Retry notification/i);
 });
