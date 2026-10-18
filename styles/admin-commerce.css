@@ -39,7 +39,20 @@
 .commerce-artifacts article { display: grid; align-content: start; gap: 12px; padding: 14px; border: 1px solid #dce3eb; border-radius: 12px; background: #f9fafb; min-width: 0; }
 .commerce-artifacts article>div:first-child { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .commerce-artifacts h3 { margin: 0; font-size: 16px; }
+.commerce-original-delivery { margin-top: 18px; padding: 14px; border: 1px solid #dce3eb; border-radius: 12px; background: #f9fafb; }
+.commerce-original-delivery h3 { margin: 0 0 8px; font-size: 16px; }
+.commerce-original-delivery p { margin: 0 0 10px; color: #667085; }
 .commerce-download { display: inline-flex; width: fit-content; min-height: 40px; align-items: center; justify-content: center; padding: 8px 13px; border-radius: 9px; background: #172033; color: #fff; font-weight: 800; text-decoration: none; }
 .commerce-download--disabled { background: #e5e9ee; color: #667085; cursor: not-allowed; }
 @media(max-width:1000px){.commerce-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.commerce-filters form{grid-column:1/-1}}
 @media(max-width:640px){.commerce-page{padding:14px}.commerce-header{flex-direction:column}.commerce-filters{grid-template-columns:1fr}.commerce-filters form{grid-column:auto}.commerce-field{grid-template-columns:1fr}.commerce-field dd{margin-bottom:8px}.commerce-artifacts{grid-template-columns:1fr}}
+.commerce-refund-review { display: grid; gap: 0.75rem; min-width: 0; }
+.commerce-refund-modal { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 1rem; background: rgb(0 0 0 / 65%); }
+.commerce-refund-modal .commerce-refund-review { width: min(100%, 42rem); max-height: calc(100dvh - 2rem); overflow: auto; padding: 1.5rem; border-radius: 1rem; background: #fff; color: #1b1b1b; box-shadow: 0 1rem 3rem rgb(0 0 0 / 30%); }
+.commerce-refund-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; justify-content: flex-end; }
+.commerce-refund-review dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 0.75rem; }
+.commerce-refund-review dt { font-weight: 700; }
+.commerce-refund-review dd { margin: 0.2rem 0 0; overflow-wrap: anywhere; }
+.commerce-refund-review code { overflow-wrap: anywhere; }
+.commerce-refund-review input { display: block; max-width: 100%; width: 100%; margin-block: 0.4rem; }
+.commerce-refund-review button, .commerce-refund > button { width: auto; max-width: 100%; min-height: 2.75rem; }

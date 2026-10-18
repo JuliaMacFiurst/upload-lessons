@@ -1,7 +1,8 @@
 export type CommerceEnvironment = "unknown" | "sandbox" | "live";
-export type CommerceReviewState = "ok" | "pending" | "needs_review";
+export type CommerceReviewState = "ok" | "pending" | "needs_review" | "refunded";
 export type CommerceArtifactStatus = "missing" | "pending" | "processing" | "ready" | "failed";
 export type CommerceReceiptState = "issued" | "expected_missing" | "not_eligible" | "legacy_unknown" | "not_paid";
+export type CommerceOriginalDeliveryStatus = "missing" | "pending" | "sending" | "accepted" | "failed" | "uncertain";
 export type CommerceOperationalProblem = {
   code: string;
   label: string;
@@ -10,6 +11,8 @@ export type CommerceOperationalProblem = {
 export type CommerceOrder = {
   id: string; createdAt: string; updatedAt?: string; paidAt: string | null;
   status: "creating" | "pending_approval" | "capture_pending" | "paid" | "cancelled" | "failed";
+  paymentDisplayStatus: "creating" | "pending_approval" | "capture_pending" | "paid" | "cancelled" | "failed" | "refunded";
+  accessDisplayStatus: "active" | "inactive" | "revoked" | "refunded" | "expired" | "missing";
   provider: "paypal"; environment: CommerceEnvironment; totalMinor: number; currency: string;
   providerOrderId: string | null; providerCaptureId: string | null; failureCode: string | null;
   customer: { id: string; name: string | null; email: string | null; emailSource: "order_snapshot" | "current_auth_fallback" | "unavailable" };
@@ -45,6 +48,15 @@ export type CommerceOrderDetail = CommerceOrder & {
       failureCode: string | null;
       downloadAvailable: boolean;
     }>;
+    originalDelivery: {
+      status: CommerceOriginalDeliveryStatus;
+      attemptCount: number;
+      claimedAt: string | null;
+      acceptedAt: string | null;
+      updatedAt: string | null;
+      providerEmailId: string | null;
+      errorCode: string | null;
+    } | null;
   };
   purchaseNotification: {
     status: "not_registered" | "pending" | "processing" | "sent" | "failed";

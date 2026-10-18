@@ -38,6 +38,24 @@ test("paid missing entitlement and stale capture require review", () => {
   assert.deepEqual(deriveReview({ status: "paid", failureCode: null, createdAt: "2026-10-06", entitlement: null }), { reviewState: "needs_review", reviewReasons: ["paid_without_entitlement"] });
   assert.equal(deriveReview({ status: "capture_pending", failureCode: null, createdAt: "2026-10-06T10:00:00Z", entitlement: null, now: Date.parse("2026-10-06T12:00:00Z") }).reviewState, "needs_review");
 });
+test("completed refund is a refunded outcome, while incomplete revocation needs review", () => {
+  const refunded = row({ order_items: [{ ...row().order_items[0], product_entitlements: { ...row().order_items[0].product_entitlements, status: "refunded" } }] });
+  const evidence = { order_id: refunded.id, status: "completed", access_revoked_at: "2026-10-13T12:00:00Z" };
+  const complete = mapCommerceOrder(refunded as never, null, evidence);
+  assert.equal(complete?.paymentDisplayStatus, "refunded");
+  assert.equal(complete?.accessDisplayStatus, "refunded");
+  assert.equal(complete?.reviewState, "refunded");
+  assert.deepEqual(complete?.reviewReasons, []);
+  assert.equal(matchesCommerceFilters(complete!, normalizeCommerceFilters({ status: "refunded", access: "refunded" })), true);
+  assert.equal(matchesCommerceFilters(complete!, normalizeCommerceFilters({ status: "paid" })), false);
+  const repurchased = mapCommerceOrder(row({ order_items: [{ ...row().order_items[0], product_entitlements: { ...row().order_items[0].product_entitlements, granted_at: "2026-10-14T12:00:00Z" } }] }) as never, null, evidence);
+  assert.equal(repurchased?.reviewState, "refunded");
+  assert.equal(repurchased?.paymentDisplayStatus, "refunded");
+  assert.equal(repurchased?.accessDisplayStatus, "refunded");
+  assert.equal(mapCommerceOrder(row() as never, null, evidence)?.reviewState, "needs_review");
+  assert.equal(mapCommerceOrder(row() as never, null, { ...evidence, status: "provider_confirmed" })?.reviewState, "needs_review");
+  assert.equal(mapCommerceOrder(row() as never, null, { ...evidence, status: "failed" })?.reviewState, "needs_review");
+});
 test("filters search safe identifiers and distinguish environments", () => {
   const order = mapCommerceOrder(row() as never, null); assert.ok(order);
   const filters = normalizeCommerceFilters({ search: "paypal-capture", environment: "sandbox", access: "active" });
@@ -52,7 +70,8 @@ test("Commerce uses existing admin guard and sanitized provider/personalization 
   assert.match(api, /requireAdminSession\(req, res\)/);
   assert.doesNotMatch(detail, /raw_payload|payer_email|payer_name/);
   assert.match(ui, /Names and participants are intentionally hidden/);
-  assert.doesNotMatch(ui, /refund|revoke|retry capture/i);
+  assert.match(ui, /CommerceRefundPanel/);
+  assert.doesNotMatch(ui, /retry capture/i);
 });
 test("Commerce search resists global full-width button styles and explains pending counter", async () => {
   const page = await readFile(new URL("../pages/admin/commerce/index.tsx", import.meta.url), "utf8");
