@@ -37,7 +37,7 @@ type LoadedAnalyticsRows = {
   source: "analytics_events";
 };
 
-export type AnalyticsPeriodKey = "7d" | "14d";
+export type AnalyticsPeriodKey = "24h" | "7d" | "14d";
 
 export type AnalyticsMetricCard = {
   key: string;
@@ -189,11 +189,26 @@ export type AnalyticsAdminPayload = {
   exportSummary: string;
 };
 
+type CanonicalAnalyticsReport = {
+  version: 2;
+  period: { from: string; to: string; timezone: "UTC" };
+  audience: { unique_visitors: number; sessions: number; page_views: number; events: number; average_session_duration_seconds: number | null; bounce_rate: number | null };
+  engagement: { content_opened: number; content_completed: number; completion_rate: number | null };
+  studio: { opened: number; projects_created: number; successful_exports: number; failed_exports: number; successful_recordings: number; failed_recordings: number };
+  pages: Array<{ page: string; title: string; views: number; visitors: number }>;
+  content: Array<{ key: string; title: string; section: string; opens: number; completions: number; completion_rate: number | null }>;
+  sections: Record<string, number>;
+  languages: Record<string, number>;
+  event_counts: Record<string, number>;
+  data_quality: { status: "data ok" | "data incomplete"; truncated: boolean; events_without_session_id: number; events_without_user_id: number; events_without_event_id: number; missing_expected_events?: string[]; skipped_events_observable: false; note: string };
+};
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 const MAX_ROWS = 50000;
 const QUERY_PAGE_SIZE = 1000;
-const PERIOD_DAYS: Record<AnalyticsPeriodKey, number> = { "7d": 7, "14d": 14 };
+const PERIOD_DAYS: Record<AnalyticsPeriodKey, number> = { "24h": 1, "7d": 7, "14d": 14 };
 const PERIOD_LABELS: Record<AnalyticsPeriodKey, string> = {
+  "24h": "последние 24 часа",
   "7d": "последние 7 дней",
   "14d": "последние 14 дней",
 };
@@ -377,7 +392,7 @@ export function rowsInRange(rows: NormalizedEvent[], start: Date, end: Date) {
 }
 
 export function analyticsPeriodRanges(days: number, now: Date) {
-  const currentStart = addDays(startOfUtcDay(now), -(days - 1));
+  const currentStart = new Date(now.getTime() - days * DAY_MS);
   const currentEnd = new Date(now);
   return {
     currentStart,
@@ -446,10 +461,6 @@ function isStudioOpenSignal(row: NormalizedEvent) {
   return row.eventName === "studio_open" || isStudioPageView(row);
 }
 
-function isPageOrContentEvent(row: NormalizedEvent) {
-  return row.eventName === "page_view" || isContentOpen(row) || row.eventName === "content_start" || row.eventName === "content_progress" || isContentComplete(row);
-}
-
 function contentKey(row: NormalizedEvent) {
   return row.contentId || row.contentSlug || row.contentTitle || row.currentPage || `${row.section || "content"}:${row.originalEventName}`;
 }
@@ -494,76 +505,6 @@ function sessionDurationSeconds(sessionRows: NormalizedEvent[]) {
     return null;
   }
   return Math.round((last - first) / 1000);
-}
-
-function buildSessionStats(rows: NormalizedEvent[]) {
-  const sessions = Array.from(sessionGroups(rows).values());
-  const durations = sessions.map(sessionDurationSeconds).filter((value): value is number => value != null);
-  const bounced = sessions.filter((sessionRows) => {
-    const duration = sessionDurationSeconds(sessionRows);
-    const engagementEvents = sessionRows.filter(isPageOrContentEvent).length;
-    return engagementEvents <= 1 || (duration != null && duration < 10);
-  }).length;
-  return {
-    averageDuration: average(durations) || 0,
-    bounceRate: percent(bounced, sessions.length),
-  };
-}
-
-function returningUsers(rows: NormalizedEvent[]) {
-  const users = new Map<string, { days: Set<string>; sessions: Set<string> }>();
-  for (const row of rows) {
-    if (!row.userId) continue;
-    const current = users.get(row.userId) || { days: new Set<string>(), sessions: new Set<string>() };
-    current.days.add(row.createdAt.slice(0, 10));
-    if (row.sessionId) current.sessions.add(row.sessionId);
-    users.set(row.userId, current);
-  }
-  return Array.from(users.values()).filter((item) => item.days.size > 1 || item.sessions.size > 1).length;
-}
-
-function buildMetricCards(rows: NormalizedEvent[], previousRows: NormalizedEvent[]): AnalyticsMetricCard[] {
-  const completions = rows.filter(isContentComplete).length;
-  const opens = rows.filter(isContentOpen).length;
-  const previousCompletions = previousRows.filter(isContentComplete).length;
-  const previousOpens = previousRows.filter(isContentOpen).length;
-  const sessionStats = buildSessionStats(rows);
-  const previousSessionStats = buildSessionStats(previousRows);
-  const hasUserIds = rows.some((row) => row.userId);
-  const hasSessionIds = rows.some((row) => row.sessionId);
-  const hasCompletionEvents = rows.some(isContentComplete) || previousRows.some(isContentComplete);
-  const hasStudioOpen = rows.some((row) => row.eventName === "studio_open") || previousRows.some((row) => row.eventName === "studio_open");
-  const hasStudioOpenSignal = rows.some(isStudioOpenSignal) || previousRows.some(isStudioOpenSignal);
-  const hasExportEvents = rows.some(isSuccessfulStudioOutput) || previousRows.some(isSuccessfulStudioOutput);
-  const hasDurationSignals = rows.some((row) => row.durationSeconds != null) || hasSessionIds;
-  const successfulExports = rows.filter(isSuccessfulStudioOutput).length;
-  const previousSuccessfulExports = previousRows.filter(isSuccessfulStudioOutput).length;
-  const exportConfidence: AnalyticsMetricCard["confidence"] = hasExportEvents && hasStudioOpen && hasCompletionEvents ? "высокая" : hasExportEvents && hasStudioOpenSignal ? "средняя" : "низкая";
-  const values = [
-    ["visitors", "Посетители", uniqueCount(rows, "userId"), uniqueCount(previousRows, "userId"), undefined, "Сколько разных людей было за период.", "count distinct anonymous_user_id, fallback visitor_id", ["anonymous_user_id", "visitor_id"], hasUserIds ? "высокая" : "низкая", hasUserIds ? "Можно доверять: есть идентификатор пользователя." : "Низкая точность: нет anonymous_user_id/visitor_id."],
-    ["sessions", "Сессии", uniqueCount(rows, "sessionId"), uniqueCount(previousRows, "sessionId"), undefined, "Сколько визитов было за период.", "count distinct session_id", ["session_id"], hasSessionIds ? "высокая" : "низкая", hasSessionIds ? "Можно доверять: есть session_id." : "Низкая точность: session_id отсутствует."],
-    ["events", "События", rows.length, previousRows.length, undefined, "Все действия, которые пришли в аналитику.", "count(*)", ["analytics_events"], "высокая", "Можно доверять как техническому счётчику полученных строк."],
-    ["averageSessionDuration", "Средняя длительность сессии", sessionStats.averageDuration, previousSessionStats.averageDuration, " сек.", "Среднее время визита.", "content_exit.duration_seconds или разница первого/последнего события в session_id", ["content_exit", "session_id"], hasDurationSignals ? "средняя" : "низкая", hasDurationSignals ? "Точность средняя: часть длительности может быть вычислена по событиям." : "Нет данных для длительности.", hasDurationSignals ? undefined : "N/A"],
-    ["completionRate", "Completion rate", hasCompletionEvents ? percent(completions, opens) : 0, hasCompletionEvents ? percent(previousCompletions, previousOpens) : 0, "%", hasCompletionEvents ? "Доля открытий контента, которые закончились завершением." : "Недостаточно данных: события завершения не приходят.", "content_complete / content_open с legacy fallback", ["content_open", "content_complete", "story_opened", "story_completed"], hasCompletionEvents ? "средняя" : "низкая", hasCompletionEvents ? "Можно использовать, но только для разделов, где отправляется completion." : "Нельзя интерпретировать: completion data отсутствует.", hasCompletionEvents ? undefined : "N/A"],
-    ["returningUsers", "Возвращающиеся пользователи", returningUsers(rows), returningUsers(previousRows), undefined, "Пользователи с событиями в разные дни или несколькими сессиями.", "user_id with >1 day or >1 session", ["anonymous_user_id", "session_id"], hasUserIds && hasSessionIds ? "средняя" : "низкая", hasUserIds ? "Можно оценивать как приблизительный сигнал возврата." : "Низкая точность без user id."],
-    ["bounceRate", "Bounce rate", sessionStats.bounceRate, previousSessionStats.bounceRate, "%", "Доля коротких или одношаговых визитов.", "sessions with <=1 page/content event or duration < 10 sec", ["session_id", "page_view", "content_open", "content_exit"], hasSessionIds ? "средняя" : "низкая", hasSessionIds ? "Можно использовать как приблизительный сигнал." : "Нельзя точно считать без session_id."],
-    ["createdProjects", "Созданные проекты", rows.filter((row) => row.eventName === "studio_project_created").length, previousRows.filter((row) => row.eventName === "studio_project_created").length, undefined, "Сколько проектов создали в студии.", "studio_project_created + project_created", ["studio_project_created", "project_created"], "высокая", "Можно доверять, если событие отправляется во всех studio flows."],
-    ["successfulExports", "Успешные экспорты", successfulExports, previousSuccessfulExports, undefined, hasExportEvents ? "Сколько экспортов или записей успешно завершилось." : "Недостаточно данных: export/recording событий нет.", "studio_export_completed + studio_recording_completed", ["studio_export_completed", "studio_recording_completed"], exportConfidence, hasExportEvents ? (exportConfidence === "высокая" ? "Можно доверять: есть настоящий studio_open, completion и successful studio output events." : "Счётчик есть, но доверие не высокое без настоящего studio_open/completion контекста.") : "Нельзя делать выводы об экспорте без export/recording events.", hasExportEvents ? undefined : "N/A"],
-  ] as const;
-
-  return values.map(([key, label, value, previous, suffix, explanation, formula, events, confidence, reliability, valueText]) => ({
-    key,
-    label,
-    value,
-    valueText,
-    suffix,
-    changePercent: percentChange(value, previous),
-    explanation,
-    formula,
-    events: [...events],
-    confidence,
-    reliability,
-  }));
 }
 
 function buildGrowth(rows: NormalizedEvent[], start: Date, days: number) {
@@ -668,41 +609,6 @@ function buildFunnel(rows: NormalizedEvent[], key: string, title: string, explan
       return step;
     }),
   };
-}
-
-function buildFunnels(rows: NormalizedEvent[]) {
-  const hasRecipeSteps = rows.some((row) => row.eventName === "recipe_steps_viewed");
-  const isRecipeContent = (row: NormalizedEvent) => row.section === "recipes" || row.originalEventName === "recipe_opened" || normalizePage(row.currentPage).includes("recipe");
-  const hasRecipeComplete = rows.some((row) => row.eventName === "content_complete" && isRecipeContent(row));
-  const recipeSteps: Array<[string, (row: NormalizedEvent) => boolean]> = [
-    ["Recipe opened", (row) => row.eventName === "content_open" && isRecipeContent(row)],
-  ];
-  if (hasRecipeSteps) {
-    recipeSteps.push(["Steps viewed", (row) => row.eventName === "recipe_steps_viewed"]);
-  }
-  if (hasRecipeComplete) {
-    recipeSteps.push(["Recipe completed", (row) => row.eventName === "content_complete" && isRecipeContent(row)]);
-  }
-
-  return [
-    buildFunnel(rows, "main-content", "Главная -> раздел -> контент -> завершение", "Показывает общий путь от первого просмотра к завершению материала.", [
-      ["Главная", (row) => row.eventName === "page_view" && normalizePage(row.currentPage) === "/"],
-      ["Раздел", (row) => row.eventName === "page_view" && Boolean(row.section) && normalizePage(row.currentPage) !== "/"],
-      ["Контент открыт", isContentOpen],
-      ["Контент завершён", isContentComplete],
-    ], rows.some(isContentComplete) ? "средняя" : "низкая"),
-    buildFunnel(rows, "cats-studio", "Cats -> studio -> project created -> successful output", "Путь от cat-вовлечения к созданию проекта и успешному export/recording.", [
-      ["Cats opened", (row) => row.eventName === "cat_question_opened"],
-      ["Studio opened", isStudioOpenSignal],
-      ["Project created", (row) => row.eventName === "studio_project_created"],
-      ["Successful output", isSuccessfulStudioOutput],
-    ]),
-    buildFunnel(rows, "recipes", "Recipes -> steps viewed -> complete", "Реальная воронка рецептов. Steps и complete показываются только если эти события есть.", recipeSteps, hasRecipeSteps || hasRecipeComplete ? "средняя" : "низкая"),
-    buildFunnel(rows, "dog-lessons", "Dog lessons -> completed", "Показывает удержание в уроках с собакой.", [
-      ["Dog lesson opened", (row) => row.eventName === "dog_lesson_opened"],
-      ["Dog lesson completed", (row) => row.eventName === "dog_lesson_completed"],
-    ], rows.some((row) => row.eventName === "dog_lesson_completed") ? "средняя" : "низкая"),
-  ];
 }
 
 function buildLanguages(rows: NormalizedEvent[], previousRows: NormalizedEvent[]): AnalyticsLanguageRow[] {
@@ -969,8 +875,7 @@ function buildDataQuality(rows: NormalizedEvent[], allRows: NormalizedEvent[], g
     { key: "session_start", expectation: EVENT_EXPECTATIONS.session_start, affects: "качество session tracking", predicate: (row) => row.eventName === "session_start" },
     { key: "content_open", expectation: "Canonical content_open из normalized view. Specific события вроде cat_question_opened не суммируются, чтобы не было дублей.", affects: "Content, Funnels, completion denominator", predicate: isContentOpen },
     { key: "content_complete", expectation: "Canonical content_complete из normalized view.", affects: "Completion rate, Languages, Content conclusions", predicate: isContentComplete },
-    { key: "content_exit", expectation: EVENT_EXPECTATIONS.content_exit, affects: "exit rate, duration diagnostics, bounce hints", predicate: (row) => row.eventName === "content_exit" },
-    { key: "studio_open", expectation: `${EVENT_EXPECTATIONS.studio_open} Для старых данных допустим approximate signal: page_view на /studio.`, affects: "Studio funnels and conversion", predicate: isStudioOpenSignal },
+    { key: "studio_open", expectation: EVENT_EXPECTATIONS.studio_open, affects: "Studio opened count", predicate: (row) => row.eventName === "studio_open" },
     { key: "studio_export_started", expectation: EVENT_EXPECTATIONS.studio_export_started, affects: "export funnel start", predicate: (row) => row.eventName === "studio_export_started" },
     { key: "studio_export_completed", expectation: EVENT_EXPECTATIONS.studio_export_completed, affects: "successful export count", predicate: isStudioExportCompleted },
     { key: "studio_export_failed", expectation: EVENT_EXPECTATIONS.studio_export_failed, affects: "export failure diagnostics", predicate: (row) => row.eventName === "studio_export_failed" },
@@ -1110,31 +1015,32 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
   const dataIncomplete = payload.dataQuality.unavailableMetrics.length > 0 || payload.dataQuality.missingExpectedEvents.length > 0;
   const lines = [
     `status: ${dataIncomplete ? "data incomplete" : "data ok"}`,
-    `Период: ${payload.periodLabel} (${payload.periodStart.slice(0, 10)} - ${payload.periodEnd.slice(0, 10)})`,
+    `Период: ${payload.periodLabel} (${payload.periodStart} — ${payload.periodEnd}, UTC rolling window)`,
     "",
-    "Основные метрики:",
-    `- Посетители: ${metric("visitors")}`,
+    "Audience:",
+    `- Unique visitors: ${metric("visitors")}`,
     `- Сессии: ${metric("sessions")}`,
-    `- События: ${metric("events")}`,
+    `- Page views: ${metric("pageViews")}`,
+    "",
+    "Engagement:",
+    `- Content opened: ${payload.content.rows.reduce((sum, row) => sum + row.opens, 0)}`,
+    `- Content completed: ${payload.content.rows.reduce((sum, row) => sum + row.completions, 0)}`,
     `- Completion rate: ${metric("completionRate")}`,
-    `- Bounce rate: ${metric("bounceRate")}`,
-    `- Созданные проекты: ${metric("createdProjects")}`,
-    `- Успешные экспорты: ${metric("successfulExports")}`,
+    "",
+    "Studio:",
+    `- Studio opened: ${payload.studio.opened}`,
+    `- Projects created: ${metric("createdProjects")}`,
+    `- Successful exports: ${metric("successfulExports")}`,
+    `- Failed exports: ${payload.studio.exportFailed}`,
     "",
     "Лучшие страницы:",
     ...payload.pages.topPages.slice(0, 5).map((row) => `- ${row.page}: ${row.views} просмотров, ${row.visitors} посетителей`),
-    "",
-    "Худшие страницы:",
-    ...payload.pages.highExitPages.slice(0, 5).map((row) => `- ${row.page}: exit rate ${row.exitRate}%, exits ${row.exits}`),
     "",
     "Лучшие разделы и контент:",
     ...payload.content.highCompletion.slice(0, 5).map((row) => `- ${row.title}: opens ${row.opens}, completion ${row.completionStatus}`),
     "",
     "Слабые места:",
     ...payload.content.lowCompletion.slice(0, 5).map((row) => `- ${row.title}: opens ${row.opens}, completion ${row.completionStatus}`),
-    "",
-    "Воронки:",
-    ...payload.funnels.flatMap((funnel) => [`- ${funnel.title}`, ...funnel.steps.map((step) => `  ${step.step}: ${step.count}, conversion ${step.conversionPercent ?? "n/a"}%`)]),
     "",
     "Выводы:",
     ...payload.opportunities.map((item) => `- ${item.title}: ${item.description}`),
@@ -1149,7 +1055,7 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
     "Вопросы для анализа:",
     "- Какие страницы стоит улучшить первыми?",
     "- Какой контент лучше развивать в серию?",
-    "- Где воронка теряет больше всего пользователей?",
+    "- Какие cohort-связи нужны для следующей версии воронок?",
     "- Какие события нужно починить, чтобы метрики стали точнее?",
   ];
   return lines.join("\n");
@@ -1211,31 +1117,130 @@ async function loadRows(supabase: SupabaseClient, start: Date, end: Date): Promi
   };
 }
 
+async function loadCanonicalReport(supabase: SupabaseClient, period: AnalyticsPeriodKey, now: Date) {
+  const range = analyticsPeriodRanges(PERIOD_DAYS[period], now);
+  const { data, error } = await supabase.rpc("analytics_report_v2", {
+    p_from: range.currentStart.toISOString(),
+    p_to: range.currentEnd.toISOString(),
+  });
+  if (error) throw error;
+  return data as CanonicalAnalyticsReport;
+}
+
+function canonicalMetricCards(report: CanonicalAnalyticsReport): AnalyticsMetricCard[] {
+  const quality = report.data_quality.status === "data ok" ? "высокая" : "средняя";
+  const values: Array<Omit<AnalyticsMetricCard, "changePercent">> = [
+    { key: "visitors", label: "Уникальные посетители", value: report.audience.unique_visitors, explanation: "Anonymous browser visitors за rolling window.", formula: "count distinct anonymous_user_id", events: ["analytics_events"], confidence: quality, reliability: report.data_quality.status },
+    { key: "sessions", label: "Сессии", value: report.audience.sessions, explanation: "30-minute inactivity sessions.", formula: "count distinct session_id", events: ["session_id"], confidence: quality, reliability: report.data_quality.status },
+    { key: "pageViews", label: "Просмотры страниц", value: report.audience.page_views, explanation: "Реальные route visits.", formula: "count page_view", events: ["page_view"], confidence: "высокая", reliability: "Canonical Analytics v2 event." },
+    { key: "events", label: "События", value: report.audience.events, explanation: "Все сохранённые строки периода.", formula: "count(*)", events: ["analytics_events"], confidence: "высокая", reliability: "Не включает skipped/invalid delivery." },
+    { key: "averageSessionDuration", label: "Средняя длительность сессии", value: report.audience.average_session_duration_seconds || 0, valueText: report.audience.average_session_duration_seconds == null ? "N/A" : undefined, suffix: " сек.", explanation: "Разница первого и последнего события сессии.", formula: "avg(max(created_at)-min(created_at)) by session_id", events: ["session_id"], confidence: "средняя", reliability: "Однособытийные сессии дают 0 секунд." },
+    { key: "completionRate", label: "Completion rate", value: report.engagement.completion_rate || 0, valueText: report.engagement.completion_rate == null ? "N/A" : undefined, suffix: "%", explanation: "Доля уникальных session+content открытий с completion.", formula: "matched completed session-content attempts / opened session-content attempts", events: ["content_open", "content_complete"], confidence: quality, reliability: "Числитель является подмножеством denominator; >100% невозможно." },
+    { key: "bounceRate", label: "Bounce rate", value: report.audience.bounce_rate || 0, valueText: report.audience.bounce_rate == null ? "N/A" : undefined, suffix: "%", explanation: "Сессии с одной page view и без meaningful interaction.", formula: "single-page non-interacting sessions / sessions with page views", events: ["page_view", "session_id"], confidence: quality, reliability: "Canonical Analytics v2 definition." },
+    { key: "createdProjects", label: "Созданные проекты", value: report.studio.projects_created, explanation: "Созданные Studio projects.", formula: "count studio_project_created", events: ["studio_project_created"], confidence: "высокая", reliability: "Event count." },
+    { key: "successfulExports", label: "Успешные экспорты", value: report.studio.successful_exports, explanation: "Завершённые exports, отдельно от recordings.", formula: "count studio_export_completed", events: ["studio_export_completed"], confidence: "высокая", reliability: "Event count." },
+  ];
+  return values.map((value) => ({ ...value, changePercent: null }));
+}
+
+function canonicalContentRows(report: CanonicalAnalyticsReport): AnalyticsContentRow[] {
+  return report.content.map((row) => ({
+    key: row.key,
+    title: row.title,
+    type: row.section,
+    opens: row.opens,
+    completions: row.completions,
+    progress: 0,
+    hasProgressData: false,
+    exits: 0,
+    shares: 0,
+    hasShareData: false,
+    errors: 0,
+    completionRate: row.completion_rate,
+    completionStatus: row.completion_rate == null ? "N/A" : `${row.completion_rate}%`,
+    growthPercent: null,
+  }));
+}
+
+function canonicalPages(report: CanonicalAnalyticsReport) {
+  const rows: AnalyticsPageRow[] = report.pages.map((row) => ({
+    page: row.page,
+    title: row.title,
+    views: row.views,
+    visitors: row.visitors,
+    exits: 0,
+    exitRate: 0,
+    averageDurationSeconds: null,
+    hasExplicitDuration: false,
+    durationStatus: "нет данных",
+    averageEvents: 0,
+  }));
+  return { topPages: rows.slice(0, 12), highExitPages: [], lowDurationPages: [], transitions: [] };
+}
+
 export function normalizeAnalyticsPeriod(value: unknown): AnalyticsPeriodKey {
-  return value === "14d" ? value : "7d";
+  return value === "24h" || value === "14d" ? value : "7d";
 }
 
 export async function buildAdminAnalytics(supabase: SupabaseClient, period: AnalyticsPeriodKey = "7d", now = new Date()): Promise<AnalyticsAdminPayload> {
   const todayStart = startOfUtcDay(now);
-  const availablePeriods: AnalyticsPeriodKey[] = ["7d", "14d"];
-  const effectivePeriod: AnalyticsPeriodKey = availablePeriods.includes(period) ? period : "14d";
+  const availablePeriods: AnalyticsPeriodKey[] = ["24h", "7d", "14d"];
+  const effectivePeriod: AnalyticsPeriodKey = availablePeriods.includes(period) ? period : "7d";
   const days = PERIOD_DAYS[effectivePeriod];
   const { currentStart: periodStart, currentEnd: periodEnd, previousStart, previousEnd } = analyticsPeriodRanges(days, now);
-  const loaded = await loadRows(supabase, previousStart, periodEnd);
+  const [loaded, report24h, report7d, report14d] = await Promise.all([
+    loadRows(supabase, previousStart, periodEnd),
+    loadCanonicalReport(supabase, "24h", now),
+    loadCanonicalReport(supabase, "7d", now),
+    loadCanonicalReport(supabase, "14d", now),
+  ]);
+  const reports: Record<AnalyticsPeriodKey, CanonicalAnalyticsReport> = { "24h": report24h, "7d": report7d, "14d": report14d };
+  const selectedReport = reports[effectivePeriod];
   const rows = loaded.rows;
   const currentRows = rowsInRange(rows, periodStart, periodEnd);
   const previousRows = rowsInRange(rows, previousStart, previousEnd);
   const todayRows = rowsInRange(currentRows, todayStart, periodEnd);
   const last12HoursRows = rowsInRange(currentRows, new Date(now.getTime() - 12 * 60 * 60 * 1000), periodEnd);
   const last24HoursRows = rowsInRange(currentRows, new Date(now.getTime() - 24 * 60 * 60 * 1000), periodEnd);
-  const contentRows = buildContentRows(currentRows, previousRows);
-  const languages = buildLanguages(currentRows, previousRows);
-  const pages = buildPages(currentRows);
-  const studio = buildStudio(currentRows);
+  const rawContentRows = buildContentRows(currentRows, previousRows);
+  const contentRows = canonicalContentRows(selectedReport).map((row) => {
+    const raw = rawContentRows.find((item) => item.key === row.key);
+    return raw ? { ...row, progress: raw.progress, hasProgressData: raw.hasProgressData, shares: raw.shares, hasShareData: raw.hasShareData, errors: raw.errors } : row;
+  });
+  const rawLanguages = buildLanguages(currentRows, previousRows);
+  const languages: AnalyticsLanguageRow[] = Object.entries(selectedReport.languages).map(([lang, events]) => ({
+    lang,
+    events,
+    opens: 0,
+    completions: 0,
+    exits: 0,
+    completionRate: null,
+    completionStatus: "N/A — требуется session-content breakdown",
+    growthPercent: rawLanguages.find((row) => row.lang === lang)?.growthPercent ?? null,
+  }));
+  const rawPages = buildPages(currentRows);
+  const pages = { ...canonicalPages(selectedReport), transitions: rawPages.transitions };
+  const rawStudio = buildStudio(currentRows);
+  const studio = {
+    ...rawStudio,
+    opened: selectedReport.studio.opened,
+    realOpened: selectedReport.studio.opened,
+    approximateOpened: 0,
+    openedIsApproximate: false,
+    projectsCreated: selectedReport.studio.projects_created,
+    exportCompleted: selectedReport.studio.successful_exports,
+    exportFailed: selectedReport.studio.failed_exports,
+    recordingCompleted: selectedReport.studio.successful_recordings,
+    recordingFailed: selectedReport.studio.failed_recordings,
+    successfulExports: selectedReport.studio.successful_exports,
+    breakpoints: [],
+    funnels: [],
+    funnelBlockedReason: "Conversion скрыта: шаги ещё не связаны в сопоставимую cohort/attempt модель.",
+  };
   const summaryWarnings = [
     {
       title: "30/90 дней скрыты",
-      description: "analytics_events очищается примерно через 15 дней. До реально заполняемой analytics_daily_summary доступны только 7 и 14 дней.",
+      description: "Raw analytics_events очищается примерно через 15 дней. 24h/7d/14d считаются из raw; daily summary сохраняет компактную долгосрочную динамику.",
       severity: "warning" as const,
     },
   ];
@@ -1266,14 +1271,9 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
     },
     availableDays: days,
     periods: {
-      "7d": (() => {
-        const range = analyticsPeriodRanges(7, now);
-        return buildMetricCards(rowsInRange(rows, range.currentStart, range.currentEnd), rowsInRange(rows, range.previousStart, range.previousEnd));
-      })(),
-      "14d": (() => {
-        const range = analyticsPeriodRanges(14, now);
-        return buildMetricCards(rowsInRange(rows, range.currentStart, range.currentEnd), rowsInRange(rows, range.previousStart, range.previousEnd));
-      })(),
+      "24h": canonicalMetricCards(report24h),
+      "7d": canonicalMetricCards(report7d),
+      "14d": canonicalMetricCards(report14d),
     },
     growth,
     content: {
@@ -1284,14 +1284,15 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
       lowCompletion: [...contentRows].filter((row) => row.opens >= 3 && row.completionRate != null).sort((a, b) => (a.completionRate ?? 101) - (b.completionRate ?? 101) || b.opens - a.opens).slice(0, 8),
       developFurther: [...contentRows].filter((row) => row.opens >= 3 && row.completionRate != null && row.completionRate >= 50).sort((a, b) => b.opens - a.opens).slice(0, 8),
     },
-    funnels: buildFunnels(currentRows),
+    funnels: [],
     languages,
     pages,
     studio,
-    opportunities: buildOpportunities(currentRows, contentRows, pages, languages, studio),
+    opportunities: buildOpportunities(currentRows, contentRows, pages, languages, studio)
+      .filter((item) => !/exit|conversion|воронк/i.test(`${item.title} ${item.description}`)),
     dataQuality: buildDataQuality(currentRows, rows, growth, formatDay(todayStart), summaryWarnings, studio),
     availablePeriods,
-    unavailablePeriodReasons: { "30d": "analytics_daily_summary пока не используется как источник правды.", "90d": "analytics_daily_summary пока не используется как источник правды." },
+    unavailablePeriodReasons: { "30d": "Нельзя суммировать daily unique visitors как 30-day uniques.", "90d": "Нельзя суммировать daily unique visitors как 90-day uniques." },
   };
 
   return {

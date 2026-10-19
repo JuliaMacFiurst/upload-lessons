@@ -35,6 +35,7 @@ const tabLabels: Array<{ key: AnalyticsTab; label: string }> = [
 ];
 
 const periodLabels: Record<AnalyticsPeriodKey, string> = {
+  "24h": "24 часа",
   "7d": "7 дней",
   "14d": "14 дней",
 };
@@ -425,6 +426,9 @@ function SimpleRows<T>({ rows, columns, empty }: { rows: T[]; columns: Array<{ l
 }
 
 function FunnelsTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  if (payload.funnels.length === 0) {
+    return <EmptyState text="Funnels временно скрыты: Phase 1 не связывает шаги в одну cohort/attempt цепочку, поэтому независимые event counts не выдаются за conversion." />;
+  }
   return (
     <div className="analytics-grid-1">
       {payload.funnels.map((funnel) => {
@@ -485,9 +489,6 @@ function PagePanel({ title, help, rows }: { title: string; help: string; rows: A
           { label: "Контент", render: (row) => row.title === row.page ? row.page : `${row.title} · ${row.page}` },
           { label: "Просмотры", render: (row) => row.views },
           { label: "Посетители", render: (row) => row.visitors },
-          { label: "Выходы", render: (row) => row.exits },
-          { label: "Exit rate", render: (row) => `${row.exitRate}%` },
-          { label: "Длительность", render: (row) => row.averageDurationSeconds == null ? "нет данных" : `${row.averageDurationSeconds} сек. · ${row.durationStatus}${row.hasExplicitDuration ? "" : " · вычислено по session_id"}` },
         ]}
       />
     </section>
@@ -497,9 +498,11 @@ function PagePanel({ title, help, rows }: { title: string; help: string; rows: A
 function PagesTab({ payload }: { payload: AnalyticsAdminPayload }) {
   return (
     <div className="analytics-grid-1">
-      <PagePanel title="Самые посещаемые страницы" help="Страницы с максимальным вниманием пользователей." rows={payload.pages.topPages} />
-      <PagePanel title="Страницы с высоким выходом" help="Где визит чаще заканчивается или приходит `content_exit`." rows={payload.pages.highExitPages} />
-      <PagePanel title="Низкая длительность" help="Страницы с коротким `duration_seconds`, если это поле приходит." rows={payload.pages.lowDurationPages} />
+      <PagePanel title="Самые посещаемые страницы" help="Страницы с максимальным числом canonical page_view." rows={payload.pages.topPages} />
+      <section className="analytics-panel">
+        <h2>Exit rate</h2>
+        <p className="analytics-help">Не показывается: прежняя формула смешивала content_exit и page_view и могла превышать 100%. Для Phase 1 используется session-level bounce rate.</p>
+      </section>
       <section className="analytics-panel">
         <h2>Переходы между страницами</h2>
         <p className="analytics-help">Считается по порядку событий внутри `session_id`.</p>
@@ -534,9 +537,9 @@ function StudioTab({ payload }: { payload: AnalyticsAdminPayload }) {
       <h2>Studio</h2>
       <p className="analytics-help">Путь студии показывает, где люди теряются: открытие, создание проекта, добавление медиа, экспорт и ошибки.</p>
       <div className="analytics-metric-grid analytics-metric-grid--compact">
-        <MetricCard card={studioCard({ key: "studio-open", label: "Открыли студию", value: payload.studio.opened, explanation: payload.studio.openedIsApproximate ? "Approximate: page_view на /studio, потому что исторически `studio_open` не собирался." : "Событие `studio_open`." }, ["studio_open", "page_view /studio"])} />
+        <MetricCard card={studioCard({ key: "studio-open", label: "Открыли студию", value: payload.studio.opened, explanation: "Фактический mount Studio: событие `studio_open`." }, ["studio_open"])} />
         <MetricCard card={studioCard({ key: "project-created", label: "Создали проект", value: payload.studio.projectsCreated, explanation: "`studio_project_created` и старый `project_created`." }, ["studio_project_created", "project_created"])} />
-        <MetricCard card={studioCard({ key: "export-completed", label: "Успешный output", value: payload.studio.successfulExports, explanation: "`studio_export_completed`, `studio_recording_completed` и старый `video_exported`." }, ["studio_export_completed", "studio_recording_completed", "video_exported"])} />
+        <MetricCard card={studioCard({ key: "export-completed", label: "Успешные экспорты", value: payload.studio.successfulExports, explanation: "`studio_export_completed` и legacy `video_exported`; recordings показаны отдельно." }, ["studio_export_completed", "video_exported"])} />
         <MetricCard card={studioCard({ key: "export-failed", label: "Export failed", value: payload.studio.exportFailed, explanation: "Ошибки экспорта из `studio_export_failed`." }, ["studio_export_failed"])} />
         <MetricCard card={studioCard({ key: "recording-started", label: "Recording started", value: payload.studio.recordingStarted, explanation: "Старт записи экрана/canvas." }, ["studio_recording_started"])} />
         <MetricCard card={studioCard({ key: "recording-completed", label: "Recording completed", value: payload.studio.recordingCompleted, explanation: "Успешное завершение записи." }, ["studio_recording_completed"])} />
