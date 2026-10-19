@@ -38,6 +38,96 @@ type LoadedAnalyticsRows = {
 };
 
 export type AnalyticsPeriodKey = "24h" | "7d" | "14d";
+export type CommerceAnalyticsEnvironment = "live" | "sandbox";
+export type CommerceAnalyticsUnavailableReason = "rpc_error" | "invalid_response" | "timeout";
+export type CommerceAnalyticsStatus =
+  | { state: "available" }
+  | { state: "unavailable"; reason: CommerceAnalyticsUnavailableReason };
+
+export type CommerceRevenueMetric = {
+  currency: string;
+  gross_minor: number;
+  refunded_minor: number;
+  net_minor: number;
+};
+
+export type CommerceSourceMetric = {
+  source: string;
+  utm_source: string | null;
+  utm_medium: string | null;
+  utm_campaign: string | null;
+  currency: string;
+  paid_orders: number;
+  gross_minor: number;
+};
+
+export type CommerceAnalyticsReportV1 = {
+  version: 1;
+  period: { from: string; to: string; timezone: "UTC"; interval: "[from,to)" };
+  environment: CommerceAnalyticsEnvironment;
+  traffic_scope: "all_production";
+  audience: {
+    visitors: number;
+    sessions: number;
+    shop_visitors: number;
+    product_viewers: number;
+    product_views: number;
+    interested_visitors: number;
+    interest_events: number;
+  };
+  commerce: {
+    checkout_starts: number;
+    paid_orders: number;
+    refunded_orders: number;
+    status_counts: Record<string, number>;
+    revenue: CommerceRevenueMetric[];
+  };
+  attribution: {
+    order_cohort_timestamp: "orders.created_at";
+    paid_source_timestamp: "orders.paid_at";
+    checkout_orders: number;
+    attributed_orders: number;
+    unattributed_orders: number;
+    coverage_percent: number | null;
+    causality_note: string;
+  };
+  sources: { first_touch: CommerceSourceMetric[]; session_touch: CommerceSourceMetric[] };
+  products: Array<{
+    product_id: string;
+    product_views: number;
+    product_viewers: number;
+    interest_events: number;
+    interested_visitors: number;
+    checkout_starts: number;
+    paid: Array<{ currency: string; paid_orders: number; gross_minor: number }>;
+  }>;
+  funnel: {
+    mode: "independent_counts";
+    conversion_percentages_available: false;
+    note: string;
+    entry_points: { product_hero: number; product_final: number; home_promo: number };
+  };
+  data_quality: {
+    status: "data ok" | "data incomplete";
+    raw_traffic_retention_days: 15;
+    traffic_may_be_truncated: boolean;
+    traffic_environment_segmented: false;
+    events_without_visitor_id: number;
+    events_without_session_id: number;
+    visitor_identity_conflict_events: number;
+    legacy_visitor_fallback_events: number;
+    legacy_null_attribution_orders: number;
+    invalid_attribution_orders: number;
+    unknown_environment_orders: number;
+    unknown_environment_paid_orders: number;
+    unknown_environment_paid_minor: Array<{ currency: string; paid_minor: number }>;
+    refund_order_environment_mismatch_count: number;
+    paid_orders_without_items: number;
+    paid_orders_with_item_total_mismatch: number;
+    paid_orders_with_item_currency_mismatch: number;
+    attribution_is_causal: false;
+  };
+};
 
 export type AnalyticsMetricCard = {
   key: string;
@@ -186,6 +276,8 @@ export type AnalyticsAdminPayload = {
   };
   availablePeriods: AnalyticsPeriodKey[];
   unavailablePeriodReasons: Partial<Record<"30d" | "90d", string>>;
+  commerceAnalytics: CommerceAnalyticsReportV1 | null;
+  commerceAnalyticsStatus: CommerceAnalyticsStatus;
   exportSummary: string;
 };
 
@@ -1012,7 +1104,38 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
   };
   const reliableMetrics = payload.periods[payload.period].filter((card) => card.confidence === "высокая").map((card) => card.label);
   const incompleteMetrics = payload.periods[payload.period].filter((card) => card.confidence !== "высокая").map((card) => `${card.label} (${card.confidence})`);
-  const dataIncomplete = payload.dataQuality.unavailableMetrics.length > 0 || payload.dataQuality.missingExpectedEvents.length > 0;
+  const commerce = payload.commerceAnalytics;
+  const dataIncomplete = payload.dataQuality.unavailableMetrics.length > 0 || payload.dataQuality.missingExpectedEvents.length > 0 || commerce?.data_quality.status === "data incomplete" || payload.commerceAnalyticsStatus.state === "unavailable";
+  const money = (minor: number, currency: string) => `${minor} ${currency} minor units`;
+  const commerceQualityLines = commerce ? [
+    `- Commerce data quality: ${commerce.data_quality.status}`,
+    `- Raw traffic retention: ${commerce.data_quality.raw_traffic_retention_days} days`,
+    ...(commerce.data_quality.traffic_may_be_truncated ? ["- traffic_may_be_truncated: true"] : []),
+    ...([
+      "events_without_visitor_id", "events_without_session_id", "visitor_identity_conflict_events", "legacy_visitor_fallback_events",
+      "legacy_null_attribution_orders", "invalid_attribution_orders", "unknown_environment_orders", "unknown_environment_paid_orders",
+      "refund_order_environment_mismatch_count", "paid_orders_without_items", "paid_orders_with_item_total_mismatch", "paid_orders_with_item_currency_mismatch",
+    ] as const).flatMap((key) => commerce.data_quality[key] > 0 ? [`- ${key}: ${commerce.data_quality[key]}`] : []),
+    ...commerce.data_quality.unknown_environment_paid_minor
+      .filter((row) => row.paid_minor !== 0)
+      .map((row) => `- unknown_environment_paid_minor (${row.currency}): ${money(row.paid_minor, row.currency)}`),
+  ] : [`- Commerce analytics unavailable: ${payload.commerceAnalyticsStatus.state === "unavailable" ? payload.commerceAnalyticsStatus.reason : "unknown"}`];
+  const commerceLines = commerce ? [
+    `Commerce / ${commerce.environment}:`,
+    "- Traffic scope: all production (not segmented by payment environment)",
+    `- Shop visitors: ${commerce.audience.shop_visitors}`,
+    `- Product viewers: ${commerce.audience.product_viewers}`,
+    `- Interested visitors: ${commerce.audience.interested_visitors}`,
+    `- Checkout starts: ${commerce.commerce.checkout_starts}`,
+    `- Paid orders: ${commerce.commerce.paid_orders}`,
+    `- Refunded orders: ${commerce.commerce.refunded_orders}`,
+    `- Attribution coverage: ${commerce.attribution.coverage_percent == null ? "N/A" : `${commerce.attribution.coverage_percent}%`}`,
+    ...commerce.commerce.revenue.map((row) => `- ${row.currency}: gross ${money(row.gross_minor, row.currency)}, refunds ${money(row.refunded_minor, row.currency)}, net ${money(row.net_minor, row.currency)}`),
+    ...commerce.sources.first_touch.map((row) => `- First touch ${row.source} / ${row.utm_source || "no UTM"}: ${row.paid_orders} paid, gross ${money(row.gross_minor, row.currency)}`),
+    ...commerce.sources.session_touch.map((row) => `- Session touch ${row.source} / ${row.utm_source || "no UTM"}: ${row.paid_orders} paid, gross ${money(row.gross_minor, row.currency)}`),
+    ...commerceQualityLines,
+    "- Funnel: independent counts; conversion percentages unavailable",
+  ] : ["Commerce:", ...commerceQualityLines, "- Financial metrics are omitted; no zero values were fabricated."];
   const lines = [
     `status: ${dataIncomplete ? "data incomplete" : "data ok"}`,
     `Период: ${payload.periodLabel} (${payload.periodStart} — ${payload.periodEnd}, UTC rolling window)`,
@@ -1032,6 +1155,8 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
     `- Projects created: ${metric("createdProjects")}`,
     `- Successful exports: ${metric("successfulExports")}`,
     `- Failed exports: ${payload.studio.exportFailed}`,
+    "",
+    ...commerceLines,
     "",
     "Лучшие страницы:",
     ...payload.pages.topPages.slice(0, 5).map((row) => `- ${row.page}: ${row.views} просмотров, ${row.visitors} посетителей`),
@@ -1178,21 +1303,280 @@ function canonicalPages(report: CanonicalAnalyticsReport) {
   return { topPages: rows.slice(0, 12), highExitPages: [], lowDurationPages: [], transitions: [] };
 }
 
+function requireRecord(value: unknown, path: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`Invalid commerce analytics field: ${path}`);
+  return value as Record<string, unknown>;
+}
+
+function requireString(value: unknown, path: string, nullable = false): string | null {
+  if (nullable && value === null) return null;
+  if (typeof value !== "string" || value.length === 0) throw new Error(`Invalid commerce analytics field: ${path}`);
+  return value;
+}
+
+function requireBoolean(value: unknown, path: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`Invalid commerce analytics field: ${path}`);
+  return value;
+}
+
+function requireInteger(value: unknown, path: string, allowNegative = false): number {
+  if (!Number.isSafeInteger(value) || (!allowNegative && (value as number) < 0)) throw new Error(`Invalid commerce analytics field: ${path}`);
+  return value as number;
+}
+
+function requireNumber(value: unknown, path: string, nullable = false): number | null {
+  if (nullable && value === null) return null;
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`Invalid commerce analytics field: ${path}`);
+  return value;
+}
+
+function requireCurrency(value: unknown, path: string): string {
+  const currency = requireString(value, path);
+  if (!/^[A-Z]{3}$/.test(currency as string)) throw new Error(`Invalid commerce analytics field: ${path}`);
+  return currency as string;
+}
+
+function requireArray(value: unknown, path: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`Invalid commerce analytics field: ${path}`);
+  return value;
+}
+
+function parseRevenue(value: unknown, path: string): CommerceRevenueMetric {
+  const row = requireRecord(value, path);
+  const parsed = {
+    currency: requireCurrency(row.currency, `${path}.currency`),
+    gross_minor: requireInteger(row.gross_minor, `${path}.gross_minor`),
+    refunded_minor: requireInteger(row.refunded_minor, `${path}.refunded_minor`),
+    net_minor: requireInteger(row.net_minor, `${path}.net_minor`, true),
+  };
+  if (parsed.net_minor !== parsed.gross_minor - parsed.refunded_minor) throw new Error(`Invalid commerce analytics field: ${path}.net_minor`);
+  return parsed;
+}
+
+function parseSource(value: unknown, path: string): CommerceSourceMetric {
+  const row = requireRecord(value, path);
+  return {
+    source: requireString(row.source, `${path}.source`) as string,
+    utm_source: requireString(row.utm_source, `${path}.utm_source`, true),
+    utm_medium: requireString(row.utm_medium, `${path}.utm_medium`, true),
+    utm_campaign: requireString(row.utm_campaign, `${path}.utm_campaign`, true),
+    currency: requireCurrency(row.currency, `${path}.currency`),
+    paid_orders: requireInteger(row.paid_orders, `${path}.paid_orders`),
+    gross_minor: requireInteger(row.gross_minor, `${path}.gross_minor`),
+  };
+}
+
+export function parseCommerceAnalyticsReportV1(value: unknown): CommerceAnalyticsReportV1 {
+  const report = requireRecord(value, "report");
+  if (report.version !== 1) throw new Error("Unsupported commerce analytics report version");
+  if (report.environment !== "live" && report.environment !== "sandbox") throw new Error("Invalid commerce analytics environment");
+  if (report.traffic_scope !== "all_production") throw new Error("Invalid commerce analytics traffic scope");
+
+  const period = requireRecord(report.period, "period");
+  const from = requireString(period.from, "period.from") as string;
+  const to = requireString(period.to, "period.to") as string;
+  if (!Number.isFinite(Date.parse(from)) || !Number.isFinite(Date.parse(to)) || Date.parse(from) >= Date.parse(to) || period.timezone !== "UTC" || period.interval !== "[from,to)") {
+    throw new Error("Invalid commerce analytics period");
+  }
+
+  const audienceRaw = requireRecord(report.audience, "audience");
+  const audience = Object.fromEntries([
+    "visitors", "sessions", "shop_visitors", "product_viewers", "product_views", "interested_visitors", "interest_events",
+  ].map((key) => [key, requireInteger(audienceRaw[key], `audience.${key}`)])) as CommerceAnalyticsReportV1["audience"];
+
+  const commerceRaw = requireRecord(report.commerce, "commerce");
+  const statusCountsRaw = requireRecord(commerceRaw.status_counts, "commerce.status_counts");
+  const status_counts = Object.fromEntries(Object.entries(statusCountsRaw).map(([key, count]) => {
+    if (!key) throw new Error("Invalid commerce analytics status key");
+    return [key, requireInteger(count, `commerce.status_counts.${key}`)];
+  }));
+  const commerce: CommerceAnalyticsReportV1["commerce"] = {
+    checkout_starts: requireInteger(commerceRaw.checkout_starts, "commerce.checkout_starts"),
+    paid_orders: requireInteger(commerceRaw.paid_orders, "commerce.paid_orders"),
+    refunded_orders: requireInteger(commerceRaw.refunded_orders, "commerce.refunded_orders"),
+    status_counts,
+    revenue: requireArray(commerceRaw.revenue, "commerce.revenue").map((row, index) => parseRevenue(row, `commerce.revenue[${index}]`)),
+  };
+
+  const attributionRaw = requireRecord(report.attribution, "attribution");
+  if (attributionRaw.order_cohort_timestamp !== "orders.created_at" || attributionRaw.paid_source_timestamp !== "orders.paid_at") throw new Error("Invalid commerce attribution timestamps");
+  const coverage = requireNumber(attributionRaw.coverage_percent, "attribution.coverage_percent", true);
+  if (coverage != null && (coverage < 0 || coverage > 100)) throw new Error("Invalid commerce attribution coverage");
+  const attribution: CommerceAnalyticsReportV1["attribution"] = {
+    order_cohort_timestamp: "orders.created_at",
+    paid_source_timestamp: "orders.paid_at",
+    checkout_orders: requireInteger(attributionRaw.checkout_orders, "attribution.checkout_orders"),
+    attributed_orders: requireInteger(attributionRaw.attributed_orders, "attribution.attributed_orders"),
+    unattributed_orders: requireInteger(attributionRaw.unattributed_orders, "attribution.unattributed_orders"),
+    coverage_percent: coverage,
+    causality_note: requireString(attributionRaw.causality_note, "attribution.causality_note") as string,
+  };
+
+  const sourcesRaw = requireRecord(report.sources, "sources");
+  const sources = {
+    first_touch: requireArray(sourcesRaw.first_touch, "sources.first_touch").map((row, index) => parseSource(row, `sources.first_touch[${index}]`)),
+    session_touch: requireArray(sourcesRaw.session_touch, "sources.session_touch").map((row, index) => parseSource(row, `sources.session_touch[${index}]`)),
+  };
+
+  const products = requireArray(report.products, "products").map((value, index) => {
+    const row = requireRecord(value, `products[${index}]`);
+    return {
+      product_id: requireString(row.product_id, `products[${index}].product_id`) as string,
+      product_views: requireInteger(row.product_views, `products[${index}].product_views`),
+      product_viewers: requireInteger(row.product_viewers, `products[${index}].product_viewers`),
+      interest_events: requireInteger(row.interest_events, `products[${index}].interest_events`),
+      interested_visitors: requireInteger(row.interested_visitors, `products[${index}].interested_visitors`),
+      checkout_starts: requireInteger(row.checkout_starts, `products[${index}].checkout_starts`),
+      paid: requireArray(row.paid, `products[${index}].paid`).map((paidValue, paidIndex) => {
+        const paid = requireRecord(paidValue, `products[${index}].paid[${paidIndex}]`);
+        return {
+          currency: requireCurrency(paid.currency, `products[${index}].paid[${paidIndex}].currency`),
+          paid_orders: requireInteger(paid.paid_orders, `products[${index}].paid[${paidIndex}].paid_orders`),
+          gross_minor: requireInteger(paid.gross_minor, `products[${index}].paid[${paidIndex}].gross_minor`),
+        };
+      }),
+    };
+  });
+
+  const funnelRaw = requireRecord(report.funnel, "funnel");
+  if (funnelRaw.mode !== "independent_counts" || funnelRaw.conversion_percentages_available !== false) throw new Error("Unsafe commerce funnel semantics");
+  const entryPoints = requireRecord(funnelRaw.entry_points, "funnel.entry_points");
+  const funnel: CommerceAnalyticsReportV1["funnel"] = {
+    mode: "independent_counts",
+    conversion_percentages_available: false,
+    note: requireString(funnelRaw.note, "funnel.note") as string,
+    entry_points: {
+      product_hero: requireInteger(entryPoints.product_hero, "funnel.entry_points.product_hero"),
+      product_final: requireInteger(entryPoints.product_final, "funnel.entry_points.product_final"),
+      home_promo: requireInteger(entryPoints.home_promo, "funnel.entry_points.home_promo"),
+    },
+  };
+
+  const qualityRaw = requireRecord(report.data_quality, "data_quality");
+  if (qualityRaw.status !== "data ok" && qualityRaw.status !== "data incomplete") throw new Error("Invalid commerce data-quality status");
+  if (qualityRaw.raw_traffic_retention_days !== 15 || qualityRaw.traffic_environment_segmented !== false || qualityRaw.attribution_is_causal !== false) throw new Error("Invalid commerce data-quality contract");
+  const qualityCountKeys = [
+    "events_without_visitor_id", "events_without_session_id", "visitor_identity_conflict_events", "legacy_visitor_fallback_events",
+    "legacy_null_attribution_orders", "invalid_attribution_orders", "unknown_environment_orders", "unknown_environment_paid_orders",
+    "refund_order_environment_mismatch_count", "paid_orders_without_items", "paid_orders_with_item_total_mismatch", "paid_orders_with_item_currency_mismatch",
+  ] as const;
+  const counts = Object.fromEntries(qualityCountKeys.map((key) => [key, requireInteger(qualityRaw[key], `data_quality.${key}`)])) as Pick<CommerceAnalyticsReportV1["data_quality"], typeof qualityCountKeys[number]>;
+  const data_quality: CommerceAnalyticsReportV1["data_quality"] = {
+    status: qualityRaw.status,
+    raw_traffic_retention_days: 15,
+    traffic_may_be_truncated: requireBoolean(qualityRaw.traffic_may_be_truncated, "data_quality.traffic_may_be_truncated"),
+    traffic_environment_segmented: false,
+    ...counts,
+    unknown_environment_paid_minor: requireArray(qualityRaw.unknown_environment_paid_minor, "data_quality.unknown_environment_paid_minor").map((value, index) => {
+      const row = requireRecord(value, `data_quality.unknown_environment_paid_minor[${index}]`);
+      return { currency: requireCurrency(row.currency, `data_quality.unknown_environment_paid_minor[${index}].currency`), paid_minor: requireInteger(row.paid_minor, `data_quality.unknown_environment_paid_minor[${index}].paid_minor`) };
+    }),
+    attribution_is_causal: false,
+  };
+
+  return { version: 1, period: { from, to, timezone: "UTC", interval: "[from,to)" }, environment: report.environment, traffic_scope: "all_production", audience, commerce, attribution, sources, products, funnel, data_quality };
+}
+
 export function normalizeAnalyticsPeriod(value: unknown): AnalyticsPeriodKey {
   return value === "24h" || value === "14d" ? value : "7d";
 }
 
-export async function buildAdminAnalytics(supabase: SupabaseClient, period: AnalyticsPeriodKey = "7d", now = new Date()): Promise<AnalyticsAdminPayload> {
+export function parseAnalyticsPeriod(value: unknown): AnalyticsPeriodKey | null {
+  if (value === undefined) return "7d";
+  return value === "24h" || value === "7d" || value === "14d" ? value : null;
+}
+
+export function parseCommerceAnalyticsEnvironment(value: unknown): CommerceAnalyticsEnvironment | null {
+  if (value === undefined) return "live";
+  return value === "live" || value === "sandbox" ? value : null;
+}
+
+async function loadCommerceAnalyticsReport(supabase: SupabaseClient, period: AnalyticsPeriodKey, now: Date, environment: CommerceAnalyticsEnvironment) {
+  const range = analyticsPeriodRanges(PERIOD_DAYS[period], now);
+  let response: { data: unknown; error: unknown };
+  try {
+    response = await supabase.rpc("commerce_analytics_report_v1", {
+      p_from: range.currentStart.toISOString(),
+      p_to: range.currentEnd.toISOString(),
+      p_environment: environment,
+    });
+  } catch {
+    throw new CommerceAnalyticsLoadError("rpc_error");
+  }
+  if (response.error) throw new CommerceAnalyticsLoadError("rpc_error");
+  try {
+    const report = parseCommerceAnalyticsReportV1(response.data);
+    if (report.environment !== environment || Date.parse(report.period.from) !== range.currentStart.getTime() || Date.parse(report.period.to) !== range.currentEnd.getTime()) {
+      throw new Error("Mismatched report scope");
+    }
+    return report;
+  } catch {
+    throw new CommerceAnalyticsLoadError("invalid_response");
+  }
+}
+
+const DEFAULT_COMMERCE_TIMEOUT_MS = 8_000;
+
+class CommerceAnalyticsLoadError extends Error {
+  readonly reason: CommerceAnalyticsUnavailableReason;
+
+  constructor(reason: CommerceAnalyticsUnavailableReason) {
+    super(`Commerce analytics unavailable: ${reason}`);
+    this.name = "CommerceAnalyticsLoadError";
+    this.reason = reason;
+  }
+}
+
+async function loadCommerceAnalyticsSafely(
+  supabase: SupabaseClient,
+  period: AnalyticsPeriodKey,
+  now: Date,
+  environment: CommerceAnalyticsEnvironment,
+  timeoutMs: number,
+): Promise<{ report: CommerceAnalyticsReportV1 | null; status: CommerceAnalyticsStatus }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new CommerceAnalyticsLoadError("timeout")), timeoutMs);
+  });
+  try {
+    const report = await Promise.race([
+      loadCommerceAnalyticsReport(supabase, period, now, environment).catch((error) => {
+        if (error instanceof CommerceAnalyticsLoadError) throw error;
+        const message = error instanceof Error ? error.message : "";
+        const reason: CommerceAnalyticsUnavailableReason = /Invalid commerce|mismatched report scope|Unsafe commerce/i.test(message) ? "invalid_response" : "rpc_error";
+        throw new CommerceAnalyticsLoadError(reason);
+      }),
+      timeout,
+    ]);
+    return { report, status: { state: "available" } };
+  } catch (error) {
+    return {
+      report: null,
+      status: { state: "unavailable", reason: error instanceof CommerceAnalyticsLoadError ? error.reason : "rpc_error" },
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export async function buildAdminAnalytics(
+  supabase: SupabaseClient,
+  period: AnalyticsPeriodKey = "7d",
+  now = new Date(),
+  environment: CommerceAnalyticsEnvironment = "live",
+  options: { commerceTimeoutMs?: number } = {},
+): Promise<AnalyticsAdminPayload> {
   const todayStart = startOfUtcDay(now);
   const availablePeriods: AnalyticsPeriodKey[] = ["24h", "7d", "14d"];
   const effectivePeriod: AnalyticsPeriodKey = availablePeriods.includes(period) ? period : "7d";
   const days = PERIOD_DAYS[effectivePeriod];
   const { currentStart: periodStart, currentEnd: periodEnd, previousStart, previousEnd } = analyticsPeriodRanges(days, now);
-  const [loaded, report24h, report7d, report14d] = await Promise.all([
+  const [loaded, report24h, report7d, report14d, commerceResult] = await Promise.all([
     loadRows(supabase, previousStart, periodEnd),
     loadCanonicalReport(supabase, "24h", now),
     loadCanonicalReport(supabase, "7d", now),
     loadCanonicalReport(supabase, "14d", now),
+    loadCommerceAnalyticsSafely(supabase, effectivePeriod, now, environment, options.commerceTimeoutMs ?? DEFAULT_COMMERCE_TIMEOUT_MS),
   ]);
   const reports: Record<AnalyticsPeriodKey, CanonicalAnalyticsReport> = { "24h": report24h, "7d": report7d, "14d": report14d };
   const selectedReport = reports[effectivePeriod];
@@ -1293,6 +1677,8 @@ export async function buildAdminAnalytics(supabase: SupabaseClient, period: Anal
     dataQuality: buildDataQuality(currentRows, rows, growth, formatDay(todayStart), summaryWarnings, studio),
     availablePeriods,
     unavailablePeriodReasons: { "30d": "Нельзя суммировать daily unique visitors как 30-day uniques.", "90d": "Нельзя суммировать daily unique visitors как 90-day uniques." },
+    commerceAnalytics: commerceResult.report,
+    commerceAnalyticsStatus: commerceResult.status,
   };
 
   return {

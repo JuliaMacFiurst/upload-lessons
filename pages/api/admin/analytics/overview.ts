@@ -1,6 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from "next";
 import { randomUUID } from "node:crypto";
-import { buildAdminAnalytics, normalizeAnalyticsPeriod } from "../../../../lib/server/admin-analytics";
+import { buildAdminAnalytics, parseAnalyticsPeriod, parseCommerceAnalyticsEnvironment } from "../../../../lib/server/admin-analytics";
 import { AdminSessionError, requireAdminSession } from "../../../../lib/server/admin-session";
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
@@ -25,8 +25,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     });
   }
 
+  const period = parseAnalyticsPeriod(req.query.period);
+  const environment = parseCommerceAnalyticsEnvironment(req.query.environment);
+  if (!period || !environment) {
+    return res.status(400).json({ error: "Invalid analytics period or environment", requestId });
+  }
+
   try {
-    const data = await buildAdminAnalytics(supabase, normalizeAnalyticsPeriod(req.query.period));
+    const data = await buildAdminAnalytics(supabase, period, new Date(), environment);
     return res.status(200).json(data);
   } catch (error) {
     console.error("[admin-analytics] query failed", {

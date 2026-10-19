@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 import { createClientComponentClient } from "@supabase/auth-helpers-nextjs";
 import { AdminLogout } from "../../components/AdminLogout";
@@ -10,6 +10,7 @@ import {
   TESTING_REMINDER_TEXT,
   TESTING_REMINDER_VISITOR_THRESHOLD,
 } from "../../lib/admin-analytics-reminder";
+import { buildAnalyticsCsv, createLatestRequestCoordinator } from "../../lib/admin-analytics-client";
 import type {
   AnalyticsAdminPayload,
   AnalyticsContentRow,
@@ -17,9 +18,11 @@ import type {
   AnalyticsPageRow,
   AnalyticsPeriodKey,
   AnalyticsQualityIssue,
+  CommerceAnalyticsEnvironment,
+  CommerceAnalyticsReportV1,
 } from "../../lib/server/admin-analytics";
 
-type AnalyticsTab = "overview" | "content" | "funnels" | "languages" | "pages" | "studio" | "opportunities" | "quality" | "export";
+type AnalyticsTab = "overview" | "content" | "funnels" | "languages" | "pages" | "studio" | "acquisition" | "commerce" | "opportunities" | "quality" | "export";
 type SortKey = keyof AnalyticsContentRow;
 
 const tabLabels: Array<{ key: AnalyticsTab; label: string }> = [
@@ -29,6 +32,8 @@ const tabLabels: Array<{ key: AnalyticsTab; label: string }> = [
   { key: "languages", label: "Languages" },
   { key: "pages", label: "Pages" },
   { key: "studio", label: "Studio" },
+  { key: "acquisition", label: "Acquisition" },
+  { key: "commerce", label: "Commerce Analytics" },
   { key: "opportunities", label: "Что делать" },
   { key: "quality", label: "Data Quality" },
   { key: "export", label: "Export" },
@@ -46,8 +51,8 @@ const metricColors = {
   events: "#f97316",
 };
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { credentials: "include", cache: "no-store" });
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, { credentials: "include", cache: "no-store", signal });
   const data = (await response.json()) as T & { error?: string; requestId?: string };
   if (!response.ok) {
     const requestSuffix = data.requestId ? ` (ID: ${data.requestId})` : "";
@@ -86,11 +91,6 @@ function numberText(value: number, suffix = "") {
   return `${new Intl.NumberFormat("ru-RU").format(value)}${suffix}`;
 }
 
-function tableToCsv(headers: string[], rows: Array<Array<string | number | null>>) {
-  const escape = (value: string | number | null) => `"${(value == null ? "" : String(value)).replace(/"/g, '""')}"`;
-  return [headers, ...rows].map((row) => row.map(escape).join(",")).join("\n");
-}
-
 function downloadFile(filename: string, content: string, type: string) {
   const blob = new Blob([content], { type });
   const url = URL.createObjectURL(blob);
@@ -101,26 +101,24 @@ function downloadFile(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
-function buildCsv(payload: AnalyticsAdminPayload, tab: AnalyticsTab) {
-  if (tab === "content") {
-    return tableToCsv(
-      ["title", "type", "opens", "completions", "progress", "exits", "shares", "errors", "completion_rate", "growth_percent"],
-      payload.content.rows.map((row) => [row.title, row.type, row.opens, row.completions, row.progress, row.exits, row.shares, row.errors, row.completionStatus, row.growthPercent]),
-    );
+function formatMinorUnits(value: number, currency: string) {
+  try {
+    const options = new Intl.NumberFormat("en", { style: "currency", currency }).resolvedOptions();
+    const divisor = 10 ** (options.maximumFractionDigits ?? 2);
+    return new Intl.NumberFormat("ru-RU", { style: "currency", currency }).format(value / divisor);
+  } catch {
+    return `${value} ${currency} minor units`;
   }
-  if (tab === "languages") {
-    return tableToCsv(["lang", "events", "opens", "completions", "exits", "completion_rate"], payload.languages.map((row) => [row.lang, row.events, row.opens, row.completions, row.exits, row.completionStatus]));
-  }
-  if (tab === "pages") {
-    return tableToCsv(["title", "page", "views", "visitors", "exits", "exit_rate", "avg_duration", "duration_status", "avg_events"], payload.pages.topPages.map((row) => [row.title, row.page, row.views, row.visitors, row.exits, row.exitRate, row.averageDurationSeconds, row.durationStatus, row.averageEvents]));
-  }
-  if (tab === "funnels") {
-    return tableToCsv(["funnel", "step", "count", "conversion_percent", "note"], payload.funnels.flatMap((funnel) => funnel.steps.map((step) => [funnel.title, step.step, step.count, step.conversionPercent, step.note])));
-  }
-  if (tab === "studio") {
-    return tableToCsv(["step", "count", "conversion_percent", "note"], payload.studio.breakpoints.map((step) => [step.step, step.count, step.conversionPercent, step.note]));
-  }
-  return tableToCsv(["date", "visitors", "sessions", "events"], payload.growth.map((row) => [row.date, row.visitors, row.sessions, row.events]));
+}
+
+function CountCards({ rows }: { rows: Array<{ label: string; value: number | string; help: string }> }) {
+  return <div className="analytics-metric-grid analytics-metric-grid--compact">{rows.map((row) => (
+    <article key={row.label} className="analytics-metric">
+      <div className="analytics-metric__label">{row.label}</div>
+      <div className="analytics-metric__value">{typeof row.value === "number" ? numberText(row.value) : row.value}</div>
+      <p>{row.help}</p>
+    </article>
+  ))}</div>;
 }
 
 function EmptyState({ text }: { text: string }) {
@@ -139,7 +137,7 @@ function PeriodButtons({ period, setPeriod, availablePeriods }: { period: Analyt
   );
 }
 
-function ExportButtons({ payload, tab }: { payload: AnalyticsAdminPayload; tab: AnalyticsTab }) {
+function ExportButtons({ payload, tab, disabled }: { payload: AnalyticsAdminPayload; tab: AnalyticsTab; disabled: boolean }) {
   const [status, setStatus] = useState("");
   const copyText = tab === "export" ? payload.exportSummary : payload.exportSummary;
 
@@ -148,6 +146,7 @@ function ExportButtons({ payload, tab }: { payload: AnalyticsAdminPayload; tab: 
       <button
         className="analytics-button analytics-button--primary"
         type="button"
+        disabled={disabled}
         onClick={async () => {
           await copyTextToClipboard(copyText);
           setStatus("Скопировано");
@@ -155,10 +154,10 @@ function ExportButtons({ payload, tab }: { payload: AnalyticsAdminPayload; tab: 
       >
         ChatGPT
       </button>
-      <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-analytics-${payload.period}.json`, JSON.stringify(payload, null, 2), "application/json")}>
+      <button className="analytics-button" type="button" disabled={disabled} onClick={() => downloadFile(`laplapla-analytics-${payload.period}.json`, JSON.stringify(payload, null, 2), "application/json")}>
         JSON
       </button>
-      <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-${tab}-${payload.period}.csv`, buildCsv(payload, tab), "text/csv;charset=utf-8")}>
+      <button className="analytics-button" type="button" disabled={disabled} onClick={() => downloadFile(`laplapla-${tab}-${payload.period}.csv`, buildAnalyticsCsv(payload, tab), "text/csv;charset=utf-8")}>
         CSV
       </button>
       {status ? <span className="analytics-copy-status">{status}</span> : null}
@@ -592,6 +591,168 @@ function StudioTab({ payload }: { payload: AnalyticsAdminPayload }) {
   );
 }
 
+function CommerceQuality({ report }: { report: CommerceAnalyticsReportV1 }) {
+  const quality = report.data_quality;
+  const warnings = [
+    ["Traffic may be truncated", quality.traffic_may_be_truncated ? 1 : 0, `Raw traffic retention: ${quality.raw_traffic_retention_days} days.`],
+    ["Events without visitor ID", quality.events_without_visitor_id, "Unique visitor counts may be incomplete."],
+    ["Events without session ID", quality.events_without_session_id, "Session counts may be incomplete."],
+    ["Visitor identity conflicts", quality.visitor_identity_conflict_events, "Legacy/current visitor namespaces conflict in these events."],
+    ["Legacy visitor fallback", quality.legacy_visitor_fallback_events, "Rows counted through the legacy visitor field."],
+    ["Legacy null attribution", quality.legacy_null_attribution_orders, "Orders remain explicitly Unknown."],
+    ["Invalid attribution", quality.invalid_attribution_orders, "Malformed snapshots are not treated as attributed."],
+    ["Unknown-environment orders", quality.unknown_environment_orders, "Not assigned to Live or Sandbox totals."],
+    ["Unknown-environment paid orders", quality.unknown_environment_paid_orders, "Not assigned to Live or Sandbox revenue."],
+    ["Refund/order environment mismatch", quality.refund_order_environment_mismatch_count, "Financial environment attribution is incomplete."],
+    ["Paid orders without items", quality.paid_orders_without_items, "Product breakdown may be incomplete."],
+    ["Paid item total mismatch", quality.paid_orders_with_item_total_mismatch, "Product gross may not reconcile to order gross."],
+    ["Paid item currency mismatch", quality.paid_orders_with_item_currency_mismatch, "Product currency breakdown may be incomplete."],
+  ] as const;
+  const visible = warnings.filter(([, count]) => count > 0);
+  return (
+    <section className="analytics-panel">
+      <h2>Commerce data quality</h2>
+      {quality.status === "data incomplete" ? <div className="analytics-error" role="alert"><strong>Data incomplete.</strong> Проверьте предупреждения перед интерпретацией финансовых показателей.</div> : <p className="analytics-help">RPC сообщает: data ok.</p>}
+      {visible.length === 0 ? <EmptyState text="Commerce RPC не сообщил предупреждений для выбранного периода." /> : (
+        <SimpleRows rows={visible} empty="" columns={[
+          { label: "Проверка", render: (row) => row[0] },
+          { label: "Count", render: (row) => row[1] },
+          { label: "Контекст", render: (row) => row[2] },
+        ]} />
+      )}
+      {quality.unknown_environment_paid_minor.length > 0 ? (
+        <SimpleRows rows={quality.unknown_environment_paid_minor} empty="" columns={[
+          { label: "Unknown currency", render: (row) => row.currency },
+          { label: "Paid amount outside Live/Sandbox", render: (row) => formatMinorUnits(row.paid_minor, row.currency) },
+        ]} />
+      ) : null}
+    </section>
+  );
+}
+
+function SourceTable({ title, rows }: { title: string; rows: CommerceAnalyticsReportV1["sources"]["first_touch"] }) {
+  return (
+    <section className="analytics-panel">
+      <h2>{title}</h2>
+      <SimpleRows rows={rows} empty="Нет paid orders с данными этого touchpoint." columns={[
+        { label: "Source", render: (row) => row.source },
+        { label: "UTM source", render: (row) => row.utm_source || "—" },
+        { label: "UTM medium", render: (row) => row.utm_medium || "—" },
+        { label: "UTM campaign", render: (row) => row.utm_campaign || "—" },
+        { label: "Paid orders", render: (row) => row.paid_orders },
+        { label: "Gross", render: (row) => formatMinorUnits(row.gross_minor, row.currency) },
+        { label: "Currency", render: (row) => row.currency },
+      ]} />
+    </section>
+  );
+}
+
+function AcquisitionTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  const report = payload.commerceAnalytics as CommerceAnalyticsReportV1;
+  return (
+    <div className="analytics-grid-1">
+      <section className="analytics-panel">
+        <h2>Audience</h2>
+        <p className="analytics-help"><strong>Traffic = all production traffic.</strong> Переключатель Live/Sandbox влияет только на orders и paid attribution, но не на visitor/session metrics.</p>
+        <CountCards rows={[
+          { label: "Visitors", value: report.audience.visitors, help: "Unique production-site visitors." },
+          { label: "Sessions", value: report.audience.sessions, help: "30-minute production sessions." },
+          { label: "Shop visitors", value: report.audience.shop_visitors, help: "Unique visitors with shop_view." },
+          { label: "Product viewers", value: report.audience.product_viewers, help: "Unique visitors with product_view." },
+          { label: "Interested visitors", value: report.audience.interested_visitors, help: "Unique visitors with product_interest." },
+          { label: "Interest events", value: report.audience.interest_events, help: "CTA clicks leading directly to checkout." },
+        ]} />
+      </section>
+      <section className="analytics-panel">
+        <h2>Checkout attribution · {report.environment}</h2>
+        <CountCards rows={[
+          { label: "Checkout starts", value: report.attribution.checkout_orders, help: "Orders created in the period." },
+          { label: "Attributed orders", value: report.attribution.attributed_orders, help: "Orders with a valid Phase 2A snapshot." },
+          { label: "Unattributed orders", value: report.attribution.unattributed_orders, help: "Includes legacy/Unknown attribution." },
+          { label: "Coverage", value: report.attribution.coverage_percent == null ? "N/A" : `${report.attribution.coverage_percent}%`, help: "Attributed checkout orders / checkout orders." },
+        ]} />
+        <p className="analytics-help">Attribution — маркетинговый сигнал, а не доказательство причинности. Unknown показывается явно и не переименовывается в канал.</p>
+      </section>
+      <SourceTable title="First touch paid sources" rows={report.sources.first_touch} />
+      <SourceTable title="Session touch paid sources" rows={report.sources.session_touch} />
+      <CommerceQuality report={report} />
+    </div>
+  );
+}
+
+function CommerceAnalyticsTab({ payload }: { payload: AnalyticsAdminPayload }) {
+  const report = payload.commerceAnalytics as CommerceAnalyticsReportV1;
+  const funnelRows = [
+    ["Shop visitors", report.audience.shop_visitors],
+    ["Product viewers", report.audience.product_viewers],
+    ["Interested visitors", report.audience.interested_visitors],
+    ["Checkout starts", report.commerce.checkout_starts],
+    ["Paid orders", report.commerce.paid_orders],
+  ].map(([step, count]) => ({ step: String(step), count: Number(count) }));
+  return (
+    <div className="analytics-grid-1">
+      <section className="analytics-panel">
+        <h2>Commerce summary · {report.environment}</h2>
+        <CountCards rows={[
+          { label: "Checkout starts", value: report.commerce.checkout_starts, help: "Unique durable orders created in the period." },
+          { label: "Paid orders", value: report.commerce.paid_orders, help: "Confirmed purchases by paid_at." },
+          { label: "Refunded orders", value: report.commerce.refunded_orders, help: "Orders with completed refunds in the period." },
+          ...report.commerce.revenue.flatMap((row) => [
+            { label: `Gross · ${row.currency}`, value: formatMinorUnits(row.gross_minor, row.currency), help: "Confirmed paid order revenue." },
+            { label: `Refunded · ${row.currency}`, value: formatMinorUnits(row.refunded_minor, row.currency), help: "Completed refunds in this period." },
+            { label: `Net · ${row.currency}`, value: formatMinorUnits(row.net_minor, row.currency), help: "Gross minus completed refunds; may be negative." },
+          ]),
+        ]} />
+      </section>
+      <section className="analytics-panel">
+        <h2>Revenue by currency</h2>
+        <SimpleRows rows={report.commerce.revenue} empty="Нет paid orders или completed refunds за период." columns={[
+          { label: "Currency", render: (row) => row.currency },
+          { label: "Gross", render: (row) => formatMinorUnits(row.gross_minor, row.currency) },
+          { label: "Completed refunds", render: (row) => formatMinorUnits(row.refunded_minor, row.currency) },
+          { label: "Net", render: (row) => formatMinorUnits(row.net_minor, row.currency) },
+        ]} />
+        <p className="analytics-help">Net = gross paid in the window − completed refunds in the window. Отрицательное net допустимо; валюты не суммируются.</p>
+      </section>
+      <section className="analytics-panel">
+        <h2>Checkout status distribution</h2>
+        <SimpleRows rows={Object.entries(report.commerce.status_counts).map(([status, count]) => ({ status, count }))} empty="Нет orders за период." columns={[
+          { label: "Status", render: (row) => row.status },
+          { label: "Orders", render: (row) => row.count },
+        ]} />
+      </section>
+      <section className="analytics-panel">
+        <h2>Product performance</h2>
+        <SimpleRows rows={report.products} empty="Нет product/commerce данных за период." columns={[
+          { label: "Product", render: (row) => row.product_id },
+          { label: "Views", render: (row) => row.product_views },
+          { label: "Viewers", render: (row) => row.product_viewers },
+          { label: "Interest events", render: (row) => row.interest_events },
+          { label: "Interested visitors", render: (row) => row.interested_visitors },
+          { label: "Checkout starts", render: (row) => row.checkout_starts },
+          { label: "Paid / gross", render: (row) => row.paid.length === 0 ? "—" : row.paid.map((paid) => `${paid.paid_orders} · ${formatMinorUnits(paid.gross_minor, paid.currency)}`).join("; ") },
+        ]} />
+      </section>
+      <section className="analytics-panel">
+        <h2>Entry points</h2>
+        <SimpleRows rows={Object.entries(report.funnel.entry_points).map(([entry, count]) => ({ entry, count }))} empty="Нет product_interest событий." columns={[
+          { label: "Entry point", render: (row) => row.entry },
+          { label: "Interest events", render: (row) => row.count },
+        ]} />
+      </section>
+      <section className="analytics-panel">
+        <h2>Independent funnel counts</h2>
+        <p className="analytics-help"><strong>These are independent counts, not a linked conversion funnel.</strong> Step-to-step conversion percentages intentionally unavailable.</p>
+        <SimpleRows rows={funnelRows} empty="Нет данных за период." columns={[
+          { label: "Signal", render: (row) => row.step },
+          { label: "Count", render: (row) => row.count },
+        ]} />
+      </section>
+      <CommerceQuality report={report} />
+    </div>
+  );
+}
+
 function OpportunitiesTab({ payload }: { payload: AnalyticsAdminPayload }) {
   const technical = payload.opportunities.filter((item) => item.category === "technical");
   const product = payload.opportunities.filter((item) => item.category === "product");
@@ -610,7 +771,7 @@ function OpportunitiesTab({ payload }: { payload: AnalyticsAdminPayload }) {
   return (
     <section className="analytics-panel">
       <h2>Что делать дальше</h2>
-      <p className="analytics-help">Это rule-based блок без LLM. Он смотрит на открытия, completion, exits, export funnel и языки.</p>
+      <p className="analytics-help">Это rule-based блок без LLM. Он использует только canonical открытия, completion, Studio events и языки; недостоверные exit/funnel выводы скрыты.</p>
       <h3>Технические проблемы</h3>
       {technical.length === 0 ? <EmptyState text="Явных технических проблем в данных не найдено." /> : renderItems(technical)}
       <h3>Продуктовые наблюдения</h3>
@@ -643,8 +804,8 @@ function DataQualityTab({ payload }: { payload: AnalyticsAdminPayload }) {
     session_start: "Влияет на диагностику session tracking.",
     content_open: "Влияет на Content, Funnels и denominator для completion.",
     content_complete: "Completion rate, Languages и продуктовые выводы будут N/A.",
-    content_exit: "Влияет на exit rate, duration и bounce hints.",
-    studio_open: "Studio funnels используют canonical studio_open или approximate page_view на /studio для старых данных.",
+    content_exit: "Legacy duration signal; больше не используется как exit rate.",
+    studio_open: "Studio opened требует canonical studio_open при фактическом mount; CTA click считается отдельно.",
     studio_export_started: "Нельзя понять, сколько людей начали экспорт.",
     studio_export_completed: "Нельзя доверять счётчику успешных экспортов.",
     studio_export_failed: "Не видно ошибок экспорта.",
@@ -668,21 +829,21 @@ function DataQualityTab({ payload }: { payload: AnalyticsAdminPayload }) {
   );
 }
 
-function ExportTab({ payload }: { payload: AnalyticsAdminPayload }) {
+function ExportTab({ payload, disabled }: { payload: AnalyticsAdminPayload; disabled: boolean }) {
   const [status, setStatus] = useState("");
   return (
     <section className="analytics-panel">
       <h2>Export</h2>
       <p className="analytics-help">JSON содержит весь payload. CSV выгружается для активной вкладки. Текст для ChatGPT написан по-русски и готов для анализа без персональных данных.</p>
       <div className="analytics-control-row">
-        <button className="analytics-button analytics-button--primary" type="button" onClick={async () => {
+        <button className="analytics-button analytics-button--primary" type="button" disabled={disabled} onClick={async () => {
           await copyTextToClipboard(payload.exportSummary);
           setStatus("Текст скопирован");
         }}>
           Скопировать для ChatGPT
         </button>
-        <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-analytics-${payload.period}.json`, JSON.stringify(payload, null, 2), "application/json")}>JSON</button>
-        <button className="analytics-button" type="button" onClick={() => downloadFile(`laplapla-overview-${payload.period}.csv`, buildCsv(payload, "overview"), "text/csv;charset=utf-8")}>CSV overview</button>
+        <button className="analytics-button" type="button" disabled={disabled} onClick={() => downloadFile(`laplapla-analytics-${payload.period}.json`, JSON.stringify(payload, null, 2), "application/json")}>JSON</button>
+        <button className="analytics-button" type="button" disabled={disabled} onClick={() => downloadFile(`laplapla-overview-${payload.period}.csv`, buildAnalyticsCsv(payload, "overview"), "text/csv;charset=utf-8")}>CSV overview</button>
         {status ? <span className="analytics-copy-status">{status}</span> : null}
       </div>
       <pre className="analytics-export-text">{payload.exportSummary}</pre>
@@ -697,8 +858,11 @@ export default function AnalyticsAdminPage() {
   const [payload, setPayload] = useState<AnalyticsAdminPayload | null>(null);
   const [activeTab, setActiveTab] = useState<AnalyticsTab>("overview");
   const [period, setPeriod] = useState<AnalyticsPeriodKey>("7d");
+  const [environment, setEnvironment] = useState<CommerceAnalyticsEnvironment>("live");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [appliedFilters, setAppliedFilters] = useState<{ period: AnalyticsPeriodKey; environment: CommerceAnalyticsEnvironment } | null>(null);
+  const requestCoordinator = useRef(createLatestRequestCoordinator());
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
@@ -710,30 +874,33 @@ export default function AnalyticsAdminPage() {
     });
   }, [router, supabase]);
 
-  const loadAnalytics = useCallback(async (selectedPeriod: AnalyticsPeriodKey) => {
+  const loadAnalytics = useCallback(async (selectedPeriod: AnalyticsPeriodKey, selectedEnvironment: CommerceAnalyticsEnvironment) => {
+    const request = requestCoordinator.current.start();
     setLoading(true);
     setError(null);
     try {
-      setPayload(await fetchJson<AnalyticsAdminPayload>(`/api/admin/analytics/overview?period=${selectedPeriod}`));
+      const nextPayload = await fetchJson<AnalyticsAdminPayload>(`/api/admin/analytics/overview?period=${selectedPeriod}&environment=${selectedEnvironment}`, request.signal);
+      if (!requestCoordinator.current.isLatest(request.requestId)) return;
+      setPayload(nextPayload);
+      setAppliedFilters({ period: selectedPeriod, environment: selectedEnvironment });
     } catch (loadError) {
+      if (!requestCoordinator.current.isLatest(request.requestId)) return;
+      if (loadError instanceof DOMException && loadError.name === "AbortError") return;
       setPayload(null);
+      setAppliedFilters(null);
       setError(loadError instanceof Error ? loadError.message : "Не удалось загрузить аналитику.");
     } finally {
-      setLoading(false);
+      if (requestCoordinator.current.isLatest(request.requestId)) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     if (sessionChecked) {
-      void loadAnalytics(period);
+      void loadAnalytics(period, environment);
     }
-  }, [loadAnalytics, period, sessionChecked]);
+  }, [environment, loadAnalytics, period, sessionChecked]);
 
-  useEffect(() => {
-    if (payload && payload.period !== period) {
-      setPeriod(payload.period);
-    }
-  }, [payload, period]);
+  useEffect(() => () => requestCoordinator.current.cancel(), []);
 
   if (!sessionChecked) return null;
 
@@ -750,7 +917,7 @@ export default function AnalyticsAdminPage() {
             <h1>Analytics</h1>
             <p>Админский dashboard LapLapLa: продуктовые метрики, контент, воронки, качество данных и экспорт из Supabase `analytics_events`.</p>
           </div>
-          <button className="analytics-button" type="button" onClick={() => void loadAnalytics(period)} disabled={loading}>
+          <button className="analytics-button" type="button" onClick={() => void loadAnalytics(period, environment)} disabled={loading}>
             Обновить
           </button>
         </header>
@@ -758,7 +925,7 @@ export default function AnalyticsAdminPage() {
         {error ? (
           <div className="analytics-error" role="alert">
             <div>{error}</div>
-            <button className="analytics-button" type="button" onClick={() => void loadAnalytics(period)} disabled={loading}>
+            <button className="analytics-button" type="button" onClick={() => void loadAnalytics(period, environment)} disabled={loading}>
               Повторить загрузку
             </button>
           </div>
@@ -784,20 +951,38 @@ export default function AnalyticsAdminPage() {
                   ))}
                 </div>
                 <PeriodButtons period={period} setPeriod={setPeriod} availablePeriods={payload.availablePeriods} />
+                <div className="analytics-periods" aria-label="Commerce environment">
+                  {(["live", "sandbox"] as const).map((value) => (
+                    <button key={value} className={`analytics-chip ${environment === value ? "analytics-chip--active" : ""}`} type="button" onClick={() => setEnvironment(value)}>
+                      {value === "live" ? "Live" : "Sandbox"}
+                    </button>
+                  ))}
+                  <span className="analytics-help">Только commerce/orders; traffic остаётся all production.</span>
+                </div>
               </div>
-              <ExportButtons payload={payload} tab={activeTab} />
+              <ExportButtons
+                payload={payload}
+                tab={activeTab}
+                disabled={loading || !appliedFilters || appliedFilters.period !== period || appliedFilters.environment !== environment || ((activeTab === "acquisition" || activeTab === "commerce") && !payload.commerceAnalytics)}
+              />
             </div>
 
             {loading ? <div className="analytics-loading-line">Обновляю данные за {periodLabels[period]}...</div> : null}
-            {activeTab === "overview" ? <OverviewTab payload={payload} /> : null}
-            {activeTab === "content" ? <ContentTab payload={payload} /> : null}
-            {activeTab === "funnels" ? <FunnelsTab payload={payload} /> : null}
-            {activeTab === "languages" ? <LanguagesTab payload={payload} /> : null}
-            {activeTab === "pages" ? <PagesTab payload={payload} /> : null}
-            {activeTab === "studio" ? <StudioTab payload={payload} /> : null}
-            {activeTab === "opportunities" ? <OpportunitiesTab payload={payload} /> : null}
-            {activeTab === "quality" ? <DataQualityTab payload={payload} /> : null}
-            {activeTab === "export" ? <ExportTab payload={payload} /> : null}
+            {appliedFilters && appliedFilters.period === period && appliedFilters.environment === environment ? (
+              <>
+                {activeTab === "overview" ? <OverviewTab payload={payload} /> : null}
+                {activeTab === "content" ? <ContentTab payload={payload} /> : null}
+                {activeTab === "funnels" ? <FunnelsTab payload={payload} /> : null}
+                {activeTab === "languages" ? <LanguagesTab payload={payload} /> : null}
+                {activeTab === "pages" ? <PagesTab payload={payload} /> : null}
+                {activeTab === "studio" ? <StudioTab payload={payload} /> : null}
+                {activeTab === "acquisition" ? payload.commerceAnalytics ? <AcquisitionTab payload={payload} /> : <EmptyState text={`Commerce Analytics недоступна (${payload.commerceAnalyticsStatus.state === "unavailable" ? payload.commerceAnalyticsStatus.reason : "unknown"}). Phase 1 продолжает работать.`} /> : null}
+                {activeTab === "commerce" ? payload.commerceAnalytics ? <CommerceAnalyticsTab payload={payload} /> : <EmptyState text={`Commerce Analytics недоступна (${payload.commerceAnalyticsStatus.state === "unavailable" ? payload.commerceAnalyticsStatus.reason : "unknown"}). Финансовые значения не подменены нулями.`} /> : null}
+                {activeTab === "opportunities" ? <OpportunitiesTab payload={payload} /> : null}
+                {activeTab === "quality" ? <DataQualityTab payload={payload} /> : null}
+                {activeTab === "export" ? <ExportTab payload={payload} disabled={loading} /> : null}
+              </>
+            ) : <EmptyState text="Загружаю данные для выбранных фильтров. Предыдущий отчёт и его экспорты временно скрыты." />}
           </>
         ) : null}
       </main>
