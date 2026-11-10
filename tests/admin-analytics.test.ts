@@ -60,6 +60,7 @@ function commerceReport(from: string, to: string, environment: "live" | "sandbox
       session_touch: [{ source: "Unknown", utm_source: null, utm_medium: null, utm_campaign: null, currency: "ILS", paid_orders: 1, gross_minor: 4900 }],
     },
     products: [{ product_id: "sound-case-001", product_views: 3, product_viewers: 2, interest_events: 1, interested_visitors: 1, checkout_starts: 2, paid: [{ currency: "ILS", paid_orders: 1, gross_minor: 4900 }] }],
+    promotions: [{ product_id: "sound-case-001", impressions: 4, impression_visitors: 3, impression_sessions: 3, clicks: 2, click_visitors: 2, click_sessions: 2 }],
     funnel: { mode: "independent_counts", conversion_percentages_available: false, note: "Independent counts.", entry_points: { product_hero: 1, product_final: 0, home_promo: 0 } },
     data_quality: {
       status: "data incomplete", raw_traffic_retention_days: 15, traffic_may_be_truncated: false, traffic_environment_segmented: false,
@@ -369,6 +370,9 @@ test("commerce parser rejects malformed financial data instead of coercing to ze
   const malformed = structuredClone(valid) as ReturnType<typeof commerceReport>;
   (malformed.commerce.revenue[0] as unknown as { gross_minor: string }).gross_minor = "4900";
   assert.throws(() => parseCommerceAnalyticsReportV1(malformed), /commerce\.revenue\[0\]\.gross_minor/);
+  const malformedPromotion = structuredClone(valid) as ReturnType<typeof commerceReport>;
+  (malformedPromotion.promotions[0] as unknown as { clicks: string }).clicks = "2";
+  assert.throws(() => parseCommerceAnalyticsReportV1(malformedPromotion), /promotions\[0\]\.clicks/);
 });
 
 test("Phase 1 survives a Commerce RPC error without invented metrics or internal error text", async () => {
@@ -415,7 +419,10 @@ test("commerce contract preserves Unknown attribution, currency separation, and 
   assert.equal(report.data_quality.status, "data incomplete");
   assert.equal(report.funnel.mode, "independent_counts");
   assert.equal(report.funnel.conversion_percentages_available, false);
+  assert.equal(report.promotions[0].impression_visitors, 3);
+  assert.equal(report.promotions[0].click_sessions, 2);
   assert.match(payload.exportSummary, /Commerce \/ live:/);
+  assert.match(payload.exportSummary, /Banner sound-case-001: 4 impressions/);
   assert.match(payload.exportSummary, /net -4900 ILS minor units/);
   assert.doesNotMatch(payload.exportSummary, /provider[_ ]id|visitor-1|session-1/i);
 });
@@ -427,9 +434,11 @@ test("empty commerce report is accepted and remains an explicit zero state", () 
   empty.attribution = { ...empty.attribution, checkout_orders: 0, attributed_orders: 0, unattributed_orders: 0, coverage_percent: null };
   empty.sources = { first_touch: [], session_touch: [] };
   empty.products = [];
+  empty.promotions = [];
   const parsed = parseCommerceAnalyticsReportV1(empty);
   assert.equal(parsed.commerce.paid_orders, 0);
   assert.deepEqual(parsed.commerce.revenue, []);
+  assert.deepEqual(parsed.promotions, []);
 });
 
 test("commerce tabs and exports preserve independent-count and no-PII contracts", async () => {
@@ -438,6 +447,8 @@ test("commerce tabs and exports preserve independent-count and no-PII contracts"
   const api = await readFile(new URL("../pages/api/admin/analytics/overview.ts", import.meta.url), "utf8");
   assert.match(page, /Acquisition/);
   assert.match(page, /Commerce Analytics/);
+  assert.match(page, /Homepage banner by product/);
+  assert.match(page, /home_promo \(legacy checkout\)/);
   assert.match(page, /These are independent counts, not a linked conversion funnel/);
   assert.match(page, /traffic remains all production|traffic остаётся all production/i);
   assert.match(exports, /tab === "acquisition"/);
@@ -535,6 +546,8 @@ test("Commerce Copy and CSV include complete nonzero data-quality context and pr
     assert.match(acquisitionCsv, new RegExp(expected));
   }
   assert.match(commerceCsv, /"USD".*"net_minor","-123"/);
+  assert.match(commerceCsv, /"promotion:sound-case-001","","impressions","4"/);
+  assert.match(commerceCsv, /"promotion:sound-case-001","","click_sessions","2"/);
   assert.match(acquisitionCsv, /"YouTube, ""Launch""\nעברית"/);
   assert.match(acquisitionCsv, /"осень"/);
   assert.doesNotMatch(`${commerceCsv}\n${acquisitionCsv}`, /customer_email|provider_order_id|visitor-1|session-1/i);

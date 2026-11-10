@@ -101,6 +101,15 @@ export type CommerceAnalyticsReportV1 = {
     checkout_starts: number;
     paid: Array<{ currency: string; paid_orders: number; gross_minor: number }>;
   }>;
+  promotions: Array<{
+    product_id: string;
+    impressions: number;
+    impression_visitors: number;
+    impression_sessions: number;
+    clicks: number;
+    click_visitors: number;
+    click_sessions: number;
+  }>;
   funnel: {
     mode: "independent_counts";
     conversion_percentages_available: false;
@@ -1126,6 +1135,7 @@ function buildExportSummary(payload: Omit<AnalyticsAdminPayload, "exportSummary"
     `- Shop visitors: ${commerce.audience.shop_visitors}`,
     `- Product viewers: ${commerce.audience.product_viewers}`,
     `- Interested visitors: ${commerce.audience.interested_visitors}`,
+    ...commerce.promotions.map((row) => `- Banner ${row.product_id}: ${row.impressions} impressions (${row.impression_visitors} visitors, ${row.impression_sessions} sessions); ${row.clicks} clicks (${row.click_visitors} visitors, ${row.click_sessions} sessions)`),
     `- Checkout starts: ${commerce.commerce.checkout_starts}`,
     `- Paid orders: ${commerce.commerce.paid_orders}`,
     `- Refunded orders: ${commerce.commerce.refunded_orders}`,
@@ -1438,6 +1448,19 @@ export function parseCommerceAnalyticsReportV1(value: unknown): CommerceAnalytic
     };
   });
 
+  const promotions = requireArray(report.promotions, "promotions").map((value, index) => {
+    const row = requireRecord(value, `promotions[${index}]`);
+    return {
+      product_id: requireString(row.product_id, `promotions[${index}].product_id`) as string,
+      impressions: requireInteger(row.impressions, `promotions[${index}].impressions`),
+      impression_visitors: requireInteger(row.impression_visitors, `promotions[${index}].impression_visitors`),
+      impression_sessions: requireInteger(row.impression_sessions, `promotions[${index}].impression_sessions`),
+      clicks: requireInteger(row.clicks, `promotions[${index}].clicks`),
+      click_visitors: requireInteger(row.click_visitors, `promotions[${index}].click_visitors`),
+      click_sessions: requireInteger(row.click_sessions, `promotions[${index}].click_sessions`),
+    };
+  });
+
   const funnelRaw = requireRecord(report.funnel, "funnel");
   if (funnelRaw.mode !== "independent_counts" || funnelRaw.conversion_percentages_available !== false) throw new Error("Unsafe commerce funnel semantics");
   const entryPoints = requireRecord(funnelRaw.entry_points, "funnel.entry_points");
@@ -1474,7 +1497,7 @@ export function parseCommerceAnalyticsReportV1(value: unknown): CommerceAnalytic
     attribution_is_causal: false,
   };
 
-  return { version: 1, period: { from, to, timezone: "UTC", interval: "[from,to)" }, environment: report.environment, traffic_scope: "all_production", audience, commerce, attribution, sources, products, funnel, data_quality };
+  return { version: 1, period: { from, to, timezone: "UTC", interval: "[from,to)" }, environment: report.environment, traffic_scope: "all_production", audience, commerce, attribution, sources, products, promotions, funnel, data_quality };
 }
 
 export function normalizeAnalyticsPeriod(value: unknown): AnalyticsPeriodKey {

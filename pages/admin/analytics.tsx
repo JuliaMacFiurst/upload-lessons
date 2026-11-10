@@ -734,8 +734,22 @@ function CommerceAnalyticsTab({ payload }: { payload: AnalyticsAdminPayload }) {
         ]} />
       </section>
       <section className="analytics-panel">
+        <h2>Homepage banner by product</h2>
+        <p className="analytics-help">Production traffic in the selected period; these are independent counts. Payment environment filters apply to orders, not banner events.</p>
+        <SimpleRows rows={report.promotions} empty="Нет показов или нажатий баннера за период." columns={[
+          { label: "Product", render: (row) => row.product_id },
+          { label: "Impressions", render: (row) => row.impressions },
+          { label: "Visitors shown", render: (row) => row.impression_visitors },
+          { label: "Sessions shown", render: (row) => row.impression_sessions },
+          { label: "Clicks", render: (row) => row.clicks },
+          { label: "Visitors clicked", render: (row) => row.click_visitors },
+          { label: "Sessions clicked", render: (row) => row.click_sessions },
+        ]} />
+      </section>
+      <section className="analytics-panel">
         <h2>Entry points</h2>
-        <SimpleRows rows={Object.entries(report.funnel.entry_points).map(([entry, count]) => ({ entry, count }))} empty="Нет product_interest событий." columns={[
+        <p className="analytics-help">home_promo здесь означает только исторические нажатия баннера, которые сразу вели к checkout. Новые переходы к описанию товара показаны выше.</p>
+        <SimpleRows rows={Object.entries(report.funnel.entry_points).map(([entry, count]) => ({ entry: entry === "home_promo" ? "home_promo (legacy checkout)" : entry, count }))} empty="Нет product_interest событий." columns={[
           { label: "Entry point", render: (row) => row.entry },
           { label: "Interest events", render: (row) => row.count },
         ]} />

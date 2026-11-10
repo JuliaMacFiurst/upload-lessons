@@ -75,6 +75,11 @@ export function buildAnalyticsCsv(payload: AnalyticsAdminPayload, tab: Analytics
       rows.push([...context, `product:${product.product_id}`, null, "product_views", product.product_views]);
       product.paid.forEach((paid) => rows.push([...context, `product:${product.product_id}`, paid.currency, "gross_minor", paid.gross_minor]));
     });
+    report.promotions.forEach((promotion) => {
+      for (const metric of ["impressions", "impression_visitors", "impression_sessions", "clicks", "click_visitors", "click_sessions"] as const) {
+        rows.push([...context, `promotion:${promotion.product_id}`, null, metric, promotion[metric]]);
+      }
+    });
     commerceDataQualityEntries(report).forEach((entry) => rows.push([...context, "data_quality", entry.currency, entry.metric, entry.value]));
     return tableToCsv(["period_from", "period_to", "environment", "section", "currency", "metric", "value"], rows);
   }
